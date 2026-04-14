@@ -1,0 +1,23 @@
+模块导入成功:
+ConfigManager: <class 'LOF031_config_manager.ConfigManager'>
+DataProcessor: <class 'LOF032_data_processor.DataProcessor'>
+HtmlGenerator: <class 'LOF033_html_generator.HtmlGenerator'>
+使用新架构运行...
+开始检查历史数据...
+成功: 历史数据已是最新，不需要更新
+历史数据已是最新，不需要更新
+开始生成LOF基金套利报表...
+IB状态: 当前非美股夜盘时段
+获取到的期货数据: {'AG0': {'change_percent': -0.007817385866166354, 'price': 19186.5, 'settlement': 2.0, 'source': '新浪API', 'vwap': 0.0}, 'CL': {'change_percent': -2.9511505853855393, 'price': 96.156, 'source': '新浪API'}, 'ES': {'change_percent': 0.23523888628073894, 'price': 6939.035, 'source': '新浪API'}, 'GC': {'change_percent': 0.6936904811847111, 'price': 4800.471, 'source': '新浪API'}, 'NQ': {'change_percent': 0.5235382778397618, 'price': 25677.23, 'source': '新浪API'}, 'is_trading_time': True, 'timestamp': 1776172182}
+使用期货校准值: 黄金=10.9067, 原油=0.8227
+
+=== 生成HTML前的调试信息 ===
+汇率: 汇率: 6.8593
+IB夜盘价格: {}
+IB状态信息: 当前非美股夜盘时段
+黄金校准值: 10.9067
+原油校准值: 0.8227
+生成的主页行数: 27281
+生成的详情页面数: 1138853
+=============================
+监控报表生成成功: D:\Study\codexTest\CodexLOFarb\lof_monitor.html

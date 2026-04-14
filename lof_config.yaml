@@ -1,0 +1,550 @@
+currencies:
+- currency: GBP
+  symbol: USD
+- currency: CHF
+  symbol: USD
+- currency: JPY
+  symbol: USD
+funds:
+- code: '501018'
+  name: 南方原油
+  category: 原油
+  holdings:
+    equity_ratio: 68.0
+    cash_ratio: 32.0
+  holdings_portfolio: []
+  future_hedging:
+  - symbol: MCL
+    delivery_month: '2604'
+    weight: 100.0
+    beta: 0.85
+    currency: USD
+    exchange: SMART
+    name: 微原油期货
+  valuation_portfolio:
+  - symbol: USO-EU
+    weight: 47.0
+    anchor: EU
+  - symbol: USO
+    weight: 29.0
+    anchor: US
+  - symbol: USO-JP
+    weight: 24.0
+    anchor: US
+  trade_etf: USO
+  trade_future: MCL
+  position: 60.0
+- code: '160723'
+  name: 嘉实原油
+  category: 原油
+  holdings:
+    equity_ratio: 77.0
+    cash_ratio: 23.0
+  holdings_portfolio:
+  - symbol: USO
+    weight: 17.22
+    currency: USD
+    exchange: LSE
+    name: United States Oil  Fund LP
+  - symbol: BNO
+    weight: 14.74
+    currency: USD
+    exchange: LSE
+    name: United States Brent Oil Fund LP
+  - symbol: 1671.T
+    weight: 15.03
+    currency: JPY
+    exchange: TSEJ
+    name: Simplex WTI ETF
+  - symbol: 1699.T
+    weight: 14.29
+    currency: JPY
+    exchange: TSEJ
+    name: NEXT FUNDS NOMURA Crude Oil Long Index Linked Exchange Traded
+  - symbol: BRNT.L
+    weight: 14.89
+    currency: USD
+    exchange: LSE
+    name: WisdomTree Brent Crude Oil
+  - symbol: CRUD.L
+    weight: 16.92
+    currency: USD
+    exchange: LSE
+    name: WisdomTree WTI Crude Oil
+  - symbol: BRNB.L
+    weight: 0.25
+    currency: USD
+    exchange: LSE
+    name: WisdomTree Bloomberg Brent Crude Oil
+  future_hedging:
+  - symbol: MCL
+    delivery_month: '2604'
+    weight: 100.0
+    beta: 0.85
+    currency: USD
+    exchange: SMART
+    name: 微原油期货
+  valuation_portfolio:
+  - symbol: USO
+    weight: 48.0
+    anchor: US
+  - symbol: USO-EU
+    weight: 39.0
+    anchor: EU
+  - symbol: USO-JP
+    weight: 13.0
+    anchor: US
+  trade_etf: USO
+  trade_future: MCL
+  position: 47.0
+- code: '161129'
+  name: 易方达原油
+  category: 原油
+  holdings:
+    equity_ratio: 56.00000000000001
+    cash_ratio: 24.0
+  holdings_portfolio:
+  - symbol: CRUD.L
+    weight: 18.52
+    currency: USD
+    exchange: LSE
+    name: WisdomTree WTI Crude Oil
+  - symbol: BRNB.L
+    weight: 18.35
+    currency: USD
+    exchange: LSE
+    name: WisdomTree Brent Crude Oil
+  - symbol: DBO
+    weight: 17.57
+    currency: JPY
+    exchange: TSEJ
+    name: Investco DB OIL fund
+  - symbol: 1671.T
+    weight: 16.51
+    currency: JPY
+    exchange: TSEJ
+    name: Simplex WTI ETF
+  - symbol: 1699.T
+    weight: 16.11
+    currency: USD
+    exchange: LSE
+    name: NEXT FUNDS NOMURA Crude OilL
+  - symbol: 03175.HK
+    weight: 5.72
+    currency: USD
+    exchange: LSE
+    name: samsung SP GSCI crude OIL  future
+  future_hedging:
+  - symbol: MCL
+    delivery_month: '2604'
+    weight: 100.0
+    beta: 0.85
+    currency: USD
+    exchange: SMART
+    name: 微原油期货
+  valuation_portfolio:
+  - symbol: USO-EU
+    weight: 40.0
+    anchor: EU
+  - symbol: USO-JP
+    weight: 35.0
+    anchor: US
+  - symbol: USO
+    weight: 19.0
+    anchor: US
+  - symbol: USO-HK
+    weight: 6.0
+    anchor: US
+  trade_etf: USO
+  trade_future: MCL
+  position: 56.00000000000001
+- code: '161815'
+  name: 银华抗通胀主题
+  category: 黄金
+  trade_etf: GLD,USO
+  trade_future: ''
+  holdings:
+    equity_ratio: 73.0
+    cash_ratio: 27.0
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 75.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: USO
+    weight: 15.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: USO-EU
+    weight: 10.0
+    anchor: EU
+    name: ''
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging:
+  - symbol: GC
+    delivery_month: '2606'
+    weight: 75.0
+    currency: USD
+    exchange: SMART
+    name: 黄金
+  - symbol: CL
+    delivery_month: '2605'
+    weight: 25.0
+    currency: USD
+    exchange: SMART
+    name: 原油
+- code: '160719'
+  name: 嘉实黄金
+  category: 黄金
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  holdings_portfolio:
+  - symbol: GLD
+    weight: 19.02
+    currency: USD
+    exchange: LSE
+    name: SPDR黄金
+  - symbol: SGOL
+    weight: 18.99
+    currency: USD
+    exchange: LSE
+    name: abrdn黄金
+  - symbol: IAU
+    weight: 18.72
+    currency: USD
+    exchange: LSE
+    name: iShares黄金
+  - symbol: ZGLD
+    weight: 16.69
+    currency: CHF
+    exchange: SMART
+    name: Swisscanto
+  - symbol: AUUSI.sw
+    weight: 16.33
+    currency: USD
+    exchange: LSE
+    name: 瑞银黄金
+  - symbol: CSGLDC
+    weight: 10.26
+    currency: CHF
+    exchange: SMART
+    name: iShares瑞士
+  future_hedging:
+  - symbol: MGC
+    delivery_month: '2604'
+    weight: 100.0
+    beta: 1.0
+    currency: USD
+    exchange: SMART
+    name: ''
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 57.0
+    anchor: US
+  - symbol: GLD-EU
+    weight: 43.0
+    anchor: EU
+  trade_etf: GLD
+  trade_future: MGC
+  position: 96.63000000000001
+- code: '161116'
+  name: 易方达黄金主题
+  category: 黄金
+  holdings:
+    equity_ratio: 93.0
+    cash_ratio: 12.0
+  holdings_portfolio:
+  - symbol: GLD
+    weight: 20.09
+    currency: USD
+    exchange: LSE
+    name: SPDR
+  - symbol: SGOL
+    weight: 19.42
+    currency: USD
+    exchange: LSE
+    name: abrdn Physical
+  - symbol: UGL
+    weight: 19.07
+    currency: USD
+    exchange: LSE
+    name: 'Proshare Ultra2倍做多 '
+  - symbol: GLDM
+    weight: 14.73
+    currency: USD
+    exchange: LSE
+    name: SPDR Gold MiniShares Trust
+  - symbol: IAU
+    weight: 13.94
+    currency: USD
+    exchange: LSE
+    name: 'Ishare Gold Trust '
+  - symbol: AUUSI.sw
+    weight: 12.75
+    currency: CHF
+    exchange: SMART
+    name: 'UBS ETF '
+  future_hedging:
+  - symbol: MGC
+    delivery_month: '2604'
+    weight: 100.0
+    beta: 1.0
+    currency: USD
+    exchange: SMART
+    name: ''
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 87.0
+    anchor: US
+  - symbol: GLD-EU
+    weight: 13.0
+    anchor: EU
+  trade_etf: GLD
+  trade_future: MGC
+  position: 93.0
+- code: '164701'
+  name: 汇添富贵金属
+  category: 黄金
+  holdings:
+    equity_ratio: 98.0
+    cash_ratio: 0.0
+  holdings_portfolio:
+  - symbol: UGL
+    weight: 33.165
+    currency: USD
+    exchange: LSE
+    name: 'Proshare Ultra2倍做多 '
+  - symbol: GLDM
+    weight: 13.5876
+    currency: USD
+    exchange: LSE
+    name: 'SPDR miniShares Trust '
+  - symbol: IAUM
+    weight: 12.9256
+    currency: USD
+    exchange: LSE
+    name: ishares Gold Trust Micro
+  - symbol: GLD
+    weight: 10.0
+    currency: USD
+    exchange: LSE
+    name: 'SPDR '
+  - symbol: BAR
+    weight: 9.95
+    currency: USD
+    exchange: LSE
+    name: Granitrshares Trust
+  - symbol: AAAU
+    weight: 7.79
+    currency: USD
+    exchange: LSE
+    name: 高盛 physical Gold
+  - symbol: SGOL
+    weight: 6.45
+    currency: USD
+    exchange: LSE
+    name: abrdn Physical
+  - symbol: IAU
+    weight: 4.82
+    currency: USD
+    exchange: LSE
+    name: ishare Gold trust
+  - symbol: SLV
+    weight: 1.15
+    currency: USD
+    exchange: LSE
+    name: ishares Silver Trust
+  - symbol: SIVR
+    weight: 0.16
+    currency: USD
+    exchange: LSE
+    name: abrdn Physical silver
+  future_hedging:
+  - symbol: MGC
+    delivery_month: '2604'
+    weight: 100.0
+    beta: 1.0
+    currency: USD
+    exchange: SMART
+    name: ''
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 99.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: SLV
+    weight: 1.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  trade_etf: GLD
+  trade_future: MGC
+  position: 98.0
+- code: '165513'
+  name: 中信保诚
+  category: 黄金
+  holdings:
+    equity_ratio: 89.0
+    cash_ratio: 10.0
+  holdings_portfolio: []
+  future_hedging:
+  - symbol: MGC
+    delivery_month: ''
+    weight: 100.0
+    beta: 1.0
+    currency: USD
+    exchange: SMART
+    name: ''
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 86.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: GLD-EU
+    weight: 11.0
+    anchor: EU
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: GLD-JP
+    weight: 3.0
+    anchor: JP
+    name: ''
+    currency: USD
+    exchange: SMART
+  trade_etf: GLD
+  trade_future: MGC
+  position: 89.0
+- code: '162411'
+  name: 华宝油气
+  category: 纯ETF
+  trade_etf: XOP
+  trade_future: ''
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: XOP
+    weight: 100.0
+    anchor: US
+    name: 准确应该用净值，基本无溢价
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio:
+  - symbol: XOP
+    weight: 100.0
+    currency: USD
+    exchange: LSE
+    name: ''
+  future_hedging: []
+  position: 95.0
+- code: '161127'
+  name: 标普生物科技
+  category: 纯ETF
+  trade_etf: XBI
+  trade_future: ''
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: XBI
+    weight: 100.0
+    anchor: US
+    name: 准确应该用净值，基本无溢价
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging: []
+  position: 95.0
+- code: '161125'
+  name: 易方达标普500
+  category: 指数
+  trade_etf: SPY
+  trade_future: MES
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: SPY
+    weight: 100.0
+    anchor: US
+    name: 美股收盘
+    currency: USD
+    exchange: SMART
+  sina_index_url: https://stock.finance.sina.com.cn/usstock/quotes/.INX.html
+  holdings_portfolio: []
+  future_hedging:
+  - symbol: MES
+    delivery_month: '2604'
+    weight: 100.0
+    currency: USD
+    exchange: SMART
+    name: 表明普 500 指数微型期货（Micro E-mini S&P 500
+  position: 95.0
+- code: '161130'
+  name: 易方达纳斯达克100
+  category: 指数
+  trade_etf: QQQ
+  trade_future: MNQ
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: QQQ
+    weight: 100.0
+    anchor: US
+    name: 美股收盘
+    currency: USD
+    exchange: SMART
+  sina_index_url: https://stock.finance.sina.com.cn/usstock/quotes/.NDX.html
+  holdings_portfolio: []
+  future_hedging:
+  - symbol: MNQ
+    delivery_month: '2604'
+    weight: 100.0
+    currency: USD
+    exchange: SMART
+    name: 微型纳斯达克100指数期货
+  position: 95.0
+- code: '161226'
+  name: 国投瑞银白银期货
+  category: 其他
+  trade_etf: ''
+  trade_future: 沪银Ag
+  holdings:
+    equity_ratio: 100.0
+    cash_ratio: 0.0
+  valuation_portfolio: []
+  holdings_portfolio: []
+  future_hedging:
+  - symbol: 沪银Ag
+    delivery_month: '2604'
+    weight: 100.0
+    currency: USD
+    exchange: SMART
+    name: 上海期货交易所主连
+  position: 100.0
+last_update_date: '2026-04-07'
+future_gold_calibration: .nan
+future_oil_calibration: .nan
+last_calibration_date: '2026-04-07'
+last_futures_settlement_date: '2026-04-07'
+162411_calibration: 1286.870785
+161127_calibration: 505.047471
+161125_calibration: 16399.583345
+161130_calibration: 44691.210786

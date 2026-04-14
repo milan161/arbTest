@@ -1,0 +1,183 @@
+{
+  "chat_id": 992671436,
+  "reply_to_message_id": 6620,
+  "text": {
+    "SH501018": {
+      "netvalue": "1.6823",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "^USO-EU": {
+          "ratio": "47.000000",
+          "price": "123.19"
+        },
+        "USO": {
+          "ratio": "29.000000",
+          "price": "124.58"
+        },
+        "^USO-JP": {
+          "ratio": "24.000000",
+          "price": "115.63"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.68"
+    },
+    "SZ160723": {
+      "netvalue": "1.9359",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "^USO-EU": {
+          "ratio": "49.000000",
+          "price": "123.19"
+        },
+        "USO": {
+          "ratio": "42.000000",
+          "price": "124.58"
+        },
+        "^USO-JP": {
+          "ratio": "9.000000",
+          "price": "115.63"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.76"
+    },
+    "SZ161129": {
+      "netvalue": "1.6005",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "^USO-EU": {
+          "ratio": "40.000000",
+          "price": "123.19"
+        },
+        "^USO-JP": {
+          "ratio": "35.000000",
+          "price": "115.63"
+        },
+        "USO": {
+          "ratio": "19.000000",
+          "price": "124.58"
+        },
+        "^USO-HK": {
+          "ratio": "6.000000",
+          "price": "116.97"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.56"
+    },
+    "SZ160719": {
+      "netvalue": "2.146",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "57.000000",
+          "price": "434.53"
+        },
+        "^GLD-EU": {
+          "ratio": "43.000000",
+          "price": "436.38"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.95"
+    },
+    "SZ161116": {
+      "netvalue": "1.7745",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "87.000000",
+          "price": "434.53"
+        },
+        "^GLD-EU": {
+          "ratio": "13.000000",
+          "price": "436.38"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.93"
+    },
+    "SZ164701": {
+      "netvalue": "1.884",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "99.000000",
+          "price": "434.53"
+        },
+        "SLV": {
+          "ratio": "1.000000",
+          "price": "67.47"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.98"
+    },
+    "SZ165513": {
+      "netvalue": "1.1331",
+      "CNYholdings": "6.868",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "86.000000",
+          "price": "434.53"
+        },
+        "^GLD-EU": {
+          "ratio": "11.000000",
+          "price": "436.38"
+        },
+        "^GLD-JP": {
+          "ratio": "3.000000",
+          "price": "444.41"
+        }
+      },
+      "CNY": "6.8654",
+      "position": "0.89"
+    },
+    "SZ162411": {
+      "calibration": "1283.450938",
+      "netvalue": "0.8972",
+      "symbol_hedge": "XOP",
+      "hedge": "1351.000987",
+      "CNY": "6.8654",
+      "position": "0.95"
+    },
+    "SZ161127": {
+      "calibration": "505.313069",
+      "netvalue": "1.7748",
+      "symbol_hedge": "XBI",
+      "hedge": "531.908494",
+      "CNY": "6.8654",
+      "position": "0.95"
+    },
+    "SPY": {
+      "calibration": "10.036154",
+      "netvalue": "675.837585",
+      "position": "1",
+      "symbol_hedge": "^GSPC"
+    },
+    "SZ161125": {
+      "calibration": "16417.967071",
+      "netvalue": "2.8374",
+      "symbol_hedge": "SPY",
+      "hedge": "1721.981409",
+      "CNY": "6.8654",
+      "position": "0.95"
+    },
+    "QQQ": {
+      "calibration": "41.1078",
+      "netvalue": "605.80148",
+      "position": "1",
+      "symbol_hedge": "^NDX"
+    },
+    "SZ161130": {
+      "calibration": "44759.484822",
+      "netvalue": "3.8212",
+      "symbol_hedge": "QQQ",
+      "hedge": "1146.138864",
+      "CNY": "6.8654",
+      "position": "0.95"
+    }
+  },
+  "method": "sendMessage"
+}

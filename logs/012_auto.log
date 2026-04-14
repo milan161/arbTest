@@ -1,0 +1,193 @@
+INFO:readers.data_fetcher:从东财获取LOF基金 501018 历史净值数据
+INFO:readers.data_fetcher:成功获取到 20 条净值记录！
+INFO:readers.data_fetcher:从新浪获取LOF基金 501018 历史收盘价格数据
+INFO:readers.data_fetcher:新浪API获取 31 天的数据
+INFO:readers.data_fetcher:新浪API响应状态码: 200
+INFO:readers.data_fetcher:找到 31 条新浪历史交易记录
+INFO:readers.data_fetcher:处理今天(2026-04-14)的收盘价数据
+INFO:readers.data_fetcher:成功获取LOF基金 501018 历史收盘价格数据，共31条记录
+INFO:readers.data_fetcher:从东财获取LOF基金 160723 历史净值数据
+INFO:readers.data_fetcher:成功获取到 20 条净值记录！
+INFO:readers.data_fetcher:从新浪获取LOF基金 160723 历史收盘价格数据
+INFO:readers.data_fetcher:新浪API获取 31 天的数据
+INFO:readers.data_fetcher:新浪API响应状态码: 200
+INFO:readers.data_fetcher:找到 31 条新浪历史交易记录
+INFO:readers.data_fetcher:处理今天(2026-04-14)的收盘价数据
+INFO:readers.data_fetcher:成功获取LOF基金 160723 历史收盘价格数据，共31条记录
+INFO:readers.data_fetcher:从东财获取LOF基金 161129 历史净值数据
+INFO:readers.data_fetcher:成功获取到 20 条净值记录！
+INFO:readers.data_fetcher:从新浪获取LOF基金 161129 历史收盘价格数据
+INFO:readers.data_fetcher:新浪API获取 31 天的数据
+INFO:readers.data_fetcher:新浪API响应状态码: 200
+INFO:readers.data_fetcher:找到 31 条新浪历史交易记录
+INFO:readers.data_fetcher:处理今天(2026-04-14)的收盘价数据
+INFO:readers.data_fetcher:成功获取LOF基金 161129 历史收盘价格数据，共31条记录
+INFO:readers.data_fetcher:从东财获取LOF基金 161815 历史净值数据
+  [API] 读取最新API文件: Data_woodyAPI_20260414_1721.csv
+  [API] 成功加载本地API数据表，共14条记录
+  [API] 遍历API数据，按类型分组...
+  [API] 基金: SH501018, 类型: oil
+  [API] 基金: SZ160723, 类型: oil
+  [API] 基金: SZ161129, 类型: oil
+  [API] 基金: SZ161815, 类型: gold
+  [API] 基金: SZ160719, 类型: gold
+  [API] 基金: SZ161116, 类型: gold
+  [API] 基金: SZ164701, 类型: gold
+  [API] 基金: SZ165513, 类型: gold
+  [API] 基金: SZ162411, 类型: pure_etf
+  [API] 基金: SZ161127, 类型: pure_etf
+  [API] 基金: SPY, 类型: unknown
+  [API] 基金: SZ161125, 类型: index
+  [API] 基金: QQQ, 类型: unknown
+  [API] 基金: SZ161130, 类型: index
+  [API] 商品类基金: 8
+  [API] 纯ETF类基金: 2
+  [API] 指数类基金: 2
+从配置文件中获取到 13 个基金
+基金列表: ['501018', '160723', '161129', '161815', '160719', '161116', '164701', '165513', '162411', '161127', '161125', '161130', '161226']
+
+=== 开始更新basic文件 ===
+
+=== 更新basic文件 ===
+  [INFO] basic文件已有 2026-04-14 基础行(011已写入汇率)，继续往下执行ETF空洞检查...
+  [INFO] basic文件已有 2026-04-13 的黄金和原油校准值，跳过 Woody  网页爬取
+
+=== 从新浪获取数据 ===
+  [INFO] basic文件已有 2026-04-13 的期货结算价，跳过新浪爬取
+
+=== 获取Woody网页ETF数据补充 (区域变种锚点) ===
+  [INFO] basic文件已有 2026-04-14 的 ^GLD-JP 价格，跳过 Woody 网页爬 取
+  [INFO] basic文件已有 2026-04-14 的 ^USO-HK 价格，跳过 Woody 网页爬 取
+  [INFO] basic文件已有 2026-04-13 的 ^USO-EU 价格，跳过 Woody 网页爬 取
+  [INFO] basic文件已有 2026-04-13 的 ^GLD-EU 价格，跳过 Woody 网页爬 取
+  [INFO] basic文件已有 2026-04-13 的 USO 价格，跳过 Woody 网页爬 取
+  [INFO] basic文件已有 2026-04-14 的 ^USO-JP 价格，跳过 Woody 网页爬 取
+  [INFO] basic文件已有 2026-04-13 的 GLD 价格，跳过 Woody 网页爬 取
+
+=== 获取标准ETF与指数数据兜底(新浪) ===
+  [INFO] basic文件已有 2026-04-13 的 SPY，跳过新浪爬 取
+  [INFO] basic文件已有 2026-04-13 的 QQQ，跳过新浪爬 取
+  [INFO] basic文件已有 2026-04-13 的 SLV，跳过新浪爬 取
+  [INFO] basic文件已有 2026-04-13 的 XOP，跳过新浪爬 取
+  [INFO] basic文件已有 2026-04-13 的 XBI，跳过新浪爬 取
+  [INFO] basic文件已有 2026-04-13 的 .INX，跳过新浪爬 取
+  [INFO] basic文件已有 2026-04-13 的 .NDX，跳过新浪爬 取
+  [OK] 成功更新basic文件: D:\Study\codexTest\CodexLOFarb\data\GLD_USO_basic_data.csv
+
+=== 生成LOF基金 501018 历史数据文件 ===
+现有数据的最新日期: 2026-04-14
+[501018] 触发数据驱动更新，向新浪/东财提取从 2026-04-14 起的缺失历史收盘价和净值...
+获取数据，从 2026-04-14 到 2026-04-14
+=== 开始从东财获取LOF基金 501018 历史净值数据 ===
+[OK] 成功获取到 20 条净值记录！
+SUCCESS: 成功获取LOF基金 501018 历史数据，共32条记录
+           日期  LOF交易价格   LOF净值
+0  2026-04-14    2.266     NaN
+1  2026-04-13    2.366  1.7682
+2  2026-04-10    2.240  1.7092
+3  2026-04-09    2.392  1.7215
+4  2026-04-08    2.326  1.6823
+basic_df中的列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'PY校准', 'QQQ校准']
+basic_df是否包含黄金校准: True
+basic_df是否包含原油校准: True
+合并后的数据框列名: ['日期', '人民币中间价_x', '仓位', '收盘价', '净值', '变化比例', 'ETF静态估值', 'ETF静态估值误差', 'ETF静态溢价', '^USO-EU_x', '^USO-EU权重', 'USO_x', 'USO权重', '^USO-JP_x', '^USO-JP权重', '校准值', '对冲值', '期货结算价', '期货静态估值', '期货静态估值误差']...
+是否包含黄金校准_basic: True
+是否包含原油校准_basic: True
+过滤非交易日数据...
+已过滤 4 条非交易日数据
+[状态文件] 已更新基金 501018 的处理状态
+
+=== 生成LOF基金 160723 历史数据文件 ===
+现有数据的最新日期: 2026-04-14
+[160723] 触发数据驱动更新，向新浪/东财提取从 2026-04-14 起的缺失历史收盘价和净值...
+获取数据，从 2026-04-14 到 2026-04-14
+=== 开始从东财获取LOF基金 160723 历史净值数据 ===
+[OK] 成功获取到 20 条净值记录！
+SUCCESS: 成功获取LOF基金 160723 历史数据，共31条记录
+           日期  LOF交易价格   LOF净值
+0  2026-04-14    2.516     NaN
+1  2026-04-13    2.568  2.0176
+2  2026-04-10    2.399  1.9605
+3  2026-04-09    2.560  1.9658
+4  2026-04-08    2.516  1.9359
+basic_df中的列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'PY校准', 'QQQ校准']
+basic_df是否包含黄金校准: True
+basic_df是否包含原油校准: True
+合并后的数据框列名: ['日期', '人民币中间价_x', '仓位', '收盘价', '净值', '变化比例', 'ETF静态估值', 'ETF静态估值误差', 'ETF静态溢价', 'USO_x', 'USO权重', '^USO-EU_x', '^USO-EU权重', '^USO-JP_x', '^USO-JP权重', '校准值', '对冲值', '期货结算价', '期货静态估值', '期货静态估值误差']...
+是否包含黄金校准_basic: True
+是否包含原油校准_basic: True
+过滤非交易日数据...
+已过滤 4 条非交易日数据
+[状态文件] 已更新基金 160723 的处理状态
+
+=== 生成LOF基金 161129 历史数据文件 ===
+现有数据的最新日期: 2026-04-14
+[161129] 触发数据驱动更新，向新浪/东财提取从 2026-04-14 起的缺失历史收盘价和净值...
+获取数据，从 2026-04-14 到 2026-04-14
+=== 开始从东财获取LOF基金 161129 历史净值数据 ===
+[OK] 成功获取到 20 条净值记录！
+SUCCESS: 成功获取LOF基金 161129 历史数据，共31条记录
+           日期  LOF交易价格   LOF净值
+0  2026-04-14    2.173     NaN
+1  2026-04-13    2.286  1.6763
+2  2026-04-10    2.209  1.6212
+3  2026-04-09    2.312  1.6279
+4  2026-04-08    2.174  1.6005
+basic_df中的列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'PY校准', 'QQQ校准']
+basic_df是否包含黄金校准: True
+basic_df是否包含原油校准: True
+合并后的数据框列名: ['日期', '人民币中间价_x', '仓位', '收盘价', '净值', '变化比例', 'ETF静态估值', 'ETF静态估值误差', 'ETF静态溢价', '^USO-EU_x', '^USO-EU权重', '^USO-JP_x', '^USO-JP权重', 'USO_x', 'USO权重', '^USO-HK_x', '^USO-HK权重', '校准值', '对冲值', '期货结算价']...
+是否包含黄金校准_basic: True
+是否包含原油校准_basic: True
+过滤非交易日数据...
+已过滤 4 条非交易日数据
+[状态文件] 已更新基金 161129 的处理状态
+
+=== 生成LOF基金 161815 历史数据文件 ===
+现有数据的最新日期: 2026-04-14
+[161815] 触发数据驱动更新，向新浪/东财提取从 2026-04-14 起的缺失历史收盘价和净值...
+获取数据，从 2026-04-14 到 2026-04-14
+=== 开始从东财获取LOF基金 161815 历史净值数据 ===
+Traceback (most recent call last):
+  File "D:\Study\codexTest\CodexLOFarb\LOF012_generate_lof_data.py", line 1844, in <module>
+    lof_data = generator.generate_lof_history_data(fund_code)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Study\codexTest\CodexLOFarb\LOF012_generate_lof_data.py", line 1586, in generate_lof_history_data
+    lof_df = self.fetch_lof_history_data(fund_code, start_date, need_fetch_nav_data, need_fetch_price_data)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Study\codexTest\CodexLOFarb\LOF012_generate_lof_data.py", line 660, in fetch_lof_history_data
+    nav_dict = data_fetcher.fetch_lof_nav_data(fund_code)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Study\codexTest\CodexLOFarb\readers\data_fetcher.py", line 102, in fetch_lof_nav_data
+    nav_response = requests.get(nav_url, headers=nav_headers, timeout=10, verify=False)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\adapters.py", line 486, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 493, in _make_request
+    conn.request(
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connection.py", line 500, in request
+    self.endheaders()
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1298, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1058, in _send_output
+    self.send(msg)
+  File "C:\Users\milan\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1019, in send
+    self.sock.sendall(data)
+KeyboardInterrupt
+^C
