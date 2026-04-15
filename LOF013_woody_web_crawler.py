@@ -8,6 +8,7 @@ Woody网页爬虫模块，负责从Woody网站爬取数据作为API的备份
 
 import os
 import re
+import json
 import requests
 # 禁用urllib3的警告
 requests.packages.urllib3.disable_warnings()
@@ -28,9 +29,9 @@ class WoodyWebCrawler:
         self.last_crawl_date = None
     
     def _fund_market_prefix(self, symbol):
-        """根据基金代码判断市场前缀：50开头为SH，其它常见LOF为SZ"""
+        """根据基金代码判断市场前缀：5开头为SH，其它常见LOF为SZ"""
         s = str(symbol)
-        if s.startswith("50"):
+        if s.startswith("5"):
             return "sh"
         return "sz"
     
@@ -151,7 +152,7 @@ class WoodyWebCrawler:
             print(f"  爬取基金: {name} ({code})")
             
             # 构建Woody网页URL
-            prefix = "sh" if code.startswith('50') else "sz"
+            prefix = "sh" if code.startswith('5') else "sz"
             url = f"https://palmmicro.com/woody/res/{prefix}{code}cn.php"
             
             try:
@@ -243,7 +244,7 @@ class WoodyWebCrawler:
                         fund_data['symbol_hedge'] = symbol_hedge
                     
                     # 添加到备份数据
-                    fund_key = f"{'SH' if code.startswith('50') else 'SZ'}{code}"
+                    fund_key = f"{'SH' if code.startswith('5') else 'SZ'}{code}"
                     backup_data[fund_key] = fund_data
                     
                 else:
@@ -659,6 +660,44 @@ class WoodyWebCrawler:
         
         except Exception as e:
             print(f"  [ERROR] 请求失败: {e}")
+            return None
+
+    def fetch_sina_historical_data(self, symbol, max_records=30):
+        """从新浪财经爬取美股ETF的历史价格数据"""
+        # 符号需要小写，且去掉任何特殊前缀
+        clean_symbol = symbol.lower().replace('^', '')
+        print(f"\n=== 新浪爬取 {symbol} 的价格数据 ===")
+        url = f"https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getDailyK?symbol={clean_symbol}"
+        
+        try:
+            response = requests.get(url, headers=self.woody_headers, timeout=15, verify=False)
+            if response.status_code == 200:
+                text = response.text
+                if text == 'null' or not text:
+                    print(f"  [SINA_ERROR] {symbol} 查询无数据 (返回 null 或空)")
+                    return None
+                
+                data = json.loads(text)
+                
+                if not data:
+                    print(f"  [SINA_ERROR] {symbol} 返回空数据列表")
+                    return None
+
+                df = pd.DataFrame(data)
+                df = df[['d', 'c']]
+                df.rename(columns={'d': '日期', 'c': '价格'}, inplace=True)
+                df['价格'] = pd.to_numeric(df['价格'])
+                df = df.sort_values('日期', ascending=False).head(max_records)
+                
+                latest_date = df['日期'].iloc[0]
+                latest_price = df['价格'].iloc[0]
+                print(f"  [SINA_OK] 成功读取{symbol}数据，最新日期: {latest_date}，最新价格: {latest_price}")
+                return df
+            else:
+                print(f"  [SINA_ERROR] 请求失败，状态码: {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"  [SINA_ERROR] 请求失败: {e}")
             return None
     
     def get_lof_calibration_values(self, config):

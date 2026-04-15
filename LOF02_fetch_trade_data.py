@@ -570,7 +570,7 @@ class DataFetcher:
     
     def fetch_lof_data_sina(self, fund_code):
         try:
-            exchange_prefix = 'sh' if fund_code.startswith('50') else 'sz'
+            exchange_prefix = 'sh' if fund_code.startswith('5') else 'sz'
             sina_code = f"{exchange_prefix}{fund_code}"
             price_url = f"https://hq.sinajs.cn/list={sina_code}"
             price_response = requests.get(price_url, headers=self.sina_headers, timeout=5)
@@ -579,8 +579,11 @@ class DataFetcher:
                 match = re.search(r'"([^"]+)"', price_response.text)
                 if match:
                     parts = match.group(1).split(',')
-                    if len(parts) > 3 and parts[3] != '-' and parts[3] != '0':
-                        price = float(parts[3])
+                    if len(parts) > 7: # 确保有卖一价
+                        # 优先使用卖一价(parts[7])，如果为0则用最新成交价(parts[3])
+                        ask_price = float(parts[7])
+                        last_price = float(parts[3])
+                        price = ask_price if ask_price > 0 else last_price
             
             nav_url = f"http://api.fund.eastmoney.com/f10/lsjz?fundCode={fund_code}&pageIndex=1&pageSize=3"
             nav_headers = {'Referer': 'http://fundf10.eastmoney.com/'}
@@ -876,10 +879,10 @@ class LOFPriceReader:
         }
 
     def _get_tdx_code(self, code):
-        return f"{code}.SH" if code.startswith('50') else f"{code}.SZ"
+        return f"{code}.SH" if code.startswith('5') else f"{code}.SZ"
     
     def _get_qmt_code(self, code):
-        return f"{code}.SH" if code.startswith('50') else f"{code}.SZ"
+        return f"{code}.SH" if code.startswith('5') else f"{code}.SZ"
         
     def get_source_name(self):
         if self.use_qmt: return "银河QMT (Socket极速)"
@@ -901,17 +904,21 @@ class LOFPriceReader:
             if stock_code:
                 # 价格跳动后，顺手拉取完整快照更新内存字典
                 snap = tq.get_market_snapshot(stock_code=stock_code)
-                if isinstance(snap, dict) and 'Now' in snap:
-                    now_price = float(snap['Now'])
-                    if now_price > 0:
+                if isinstance(snap, dict):
+                    # 优先使用卖一价，如果卖一价为0（比如涨停），则使用最新成交价作为替代
+                    price_to_use = float(snap.get('Sell1', 0))
+                    if price_to_use == 0:
+                        price_to_use = float(snap.get('Now', 0))
+
+                    if price_to_use > 0:
                         code = stock_code.split('.')[0]
                         old_price = self.lof_prices.get(code, 0)
-                        self.lof_prices[code] = now_price
+                        self.lof_prices[code] = price_to_use
                         # WebSocket推送LOF价格更新
-                        if old_price != now_price:
+                        if old_price != price_to_use:
                             socketio.emit('lof_price_update', {
                                 'code': code,
-                                'price': now_price,
+                                'price': price_to_use,
                                 'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]
                             })
         except:
@@ -1032,11 +1039,15 @@ class LOFPriceReader:
                         try:
                             # 严格匹配您的测试脚本: 显式传入 field_list=[] 以获取完整快照
                             snap = tq.get_market_snapshot(stock_code=stock, field_list=[])
-                            if snap and 'Now' in snap:
-                                now_price = float(snap.get('Now', 0))
-                                if now_price > 0:
+                            if snap:
+                                # 优先使用卖一价，如果卖一价为0（比如涨停），则使用最新成交价作为替代
+                                price_to_use = float(snap.get('Sell1', 0))
+                                if price_to_use == 0:
+                                    price_to_use = float(snap.get('Now', 0))
+
+                                if price_to_use > 0:
                                     code = stock.split('.')[0]
-                                    self.lof_prices[code] = float(now_price)
+                                    self.lof_prices[code] = price_to_use
                                     if not hasattr(self, '_tdx_success_logged'):
                                         print(f"  ✅ [行情状态] 通达信接口首次获取 {code} 成功，链路畅通！")
                                         self._tdx_success_logged = True
@@ -1045,7 +1056,7 @@ class LOFPriceReader:
                     
                 else:
                     # ======== 模式三：新浪外网爬虫兜底 ========
-                    qs = [f"{'sh' if c.startswith('50') else 'sz'}{c}" for c in self.lof_codes]
+                    qs = [f"{'sh' if c.startswith('5') else 'sz'}{c}" for c in self.lof_codes]
                     for i in range(0, len(qs), 40):
                         res = requests.get(f"https://hq.sinajs.cn/list={','.join(qs[i:i+40])}", headers=self.headers, timeout=10)
                         res.encoding = 'gbk'
@@ -1054,9 +1065,12 @@ class LOFPriceReader:
                             if match:
                                 code = match.group(1)
                                 parts = match.group(2).split(',')
-                                if len(parts) > 3:
+                                if len(parts) > 7: # 确保有卖一价字段
                                     old_price = self.lof_prices.get(code, 0)
-                                    new_price = float(parts[3])
+                                    # 优先使用卖一价(parts[7])，如果卖一价为0（比如涨停），则使用最新成交价(parts[3])
+                                    ask_price = float(parts[7])
+                                    last_price = float(parts[3])
+                                    new_price = ask_price if ask_price > 0 else last_price
                                     self.lof_prices[code] = new_price
                                     # WebSocket推送LOF价格更新
                                     if old_price != new_price:

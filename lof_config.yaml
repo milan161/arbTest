@@ -457,6 +457,43 @@ funds:
   trade_etf: GLD
   trade_future: MGC
   position: 89.0
+- code: '513350'
+  name: 富国标普石油
+  category: 纯ETF
+  trade_etf: XOP
+  trade_future: ''
+  holdings:
+    equity_ratio: 100.0
+    cash_ratio: 0.0
+  valuation_portfolio:
+  - symbol: XOP
+    weight: 100.0
+    anchor: US
+    name: 人民币在岸价
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: sector
+- code: '159518'
+  name: 嘉实标普石油
+  category: 纯ETF
+  trade_etf: XOP
+  trade_future: ''
+  holdings:
+    equity_ratio: 100.0
+    cash_ratio: 0.0
+  valuation_portfolio:
+  - symbol: XOP
+    weight: 100.0
+    anchor: US
+    name: 人民币在岸价
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging: []
 - code: '162411'
   name: 华宝油气
   category: 纯ETF
@@ -481,6 +518,43 @@ funds:
     name: ''
   future_hedging: []
   position: 95.0
+- code: '162415'
+  name: 美国消费
+  category: 纯ETF
+  trade_etf: XLY
+  trade_future: ''
+  holdings:
+    equity_ratio: 94.0
+    cash_ratio: 6.0
+  valuation_portfolio:
+  - symbol: XLY
+    weight: 100.0
+    anchor: US
+    name: SPDR可选消费品ETF
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging: []
+- code: '159502'
+  name: 嘉实标普生物
+  category: 纯ETF
+  trade_etf: XBI
+  trade_future: ''
+  holdings:
+    equity_ratio: 100.0
+    cash_ratio: 0.0
+  valuation_portfolio:
+  - symbol: XBI
+    weight: 100.0
+    anchor: US
+    name: 人民币在岸价
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: sector
 - code: '161127'
   name: 标普生物科技
   category: 纯ETF

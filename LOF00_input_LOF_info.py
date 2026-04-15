@@ -179,6 +179,7 @@ HTML_TEMPLATE = """
 
         {% if fund %}
         <form action="/save" method="POST">
+            <input type="hidden" name="val_tab_type" id="val_tab_type" value="{{ active_val_tab }}">
             <div class="card">
                 <h3 style="margin-top:0; color:#2c3e50;">📂 基础档案: {{ fund.name }}</h3>
                 <div class="form-row">
@@ -209,10 +210,10 @@ HTML_TEMPLATE = """
 
             <div class="card">
                 <div class="nav-tabs">
-                    <div class="nav-tab {% if active_val_tab=='multi' %}active{% endif %}" onclick="switchTab(event, 'tab-multi')">🌍 跨区接力估值</div>
-                    <div class="nav-tab {% if active_val_tab=='sector' %}active{% endif %}" onclick="switchTab(event, 'tab-sector')">🎯 行业直通估值</div>
-                    <div class="nav-tab {% if active_val_tab=='index' %}active{% endif %}" onclick="switchTab(event, 'tab-index')">📊 宽基双轨拟合</div>
-                    <div class="nav-tab" onclick="switchTab(event, 'tab-future')">📈 期货估值</div>
+                    <div class="nav-tab {% if active_val_tab=='multi' %}active{% endif %}" onclick="switchTab(event, 'tab-multi')">🌍 黄金原油商品类</div>
+                    <div class="nav-tab {% if active_val_tab=='sector' %}active{% endif %}" onclick="switchTab(event, 'tab-sector')">🎯 纯ETF对冲</div>
+                    <div class="nav-tab {% if active_val_tab=='index' %}active{% endif %}" onclick="switchTab(event, 'tab-index')">📊 跟踪指数</div>
+                    <div class="nav-tab" onclick="switchTab(event, 'tab-future')">📈 用期货来估值</div>
                     <div class="nav-tab" onclick="switchTab(event, 'tab-holdings')">🗄️ 季报底仓归档</div>
                 </div>
 
@@ -378,6 +379,12 @@ HTML_TEMPLATE = """
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             e.target.classList.add('active');
             document.getElementById(id).classList.add('active');
+            
+            let tabType = 'multi';
+            if (id === 'tab-sector') tabType = 'sector';
+            else if (id === 'tab-index') tabType = 'index';
+            const tabInput = document.getElementById('val_tab_type');
+            if (tabInput) tabInput.value = tabType;
         }
         function addRow(tid) {
             const tb = document.querySelector('#'+tid+' tbody');
@@ -543,10 +550,13 @@ def edit(code):
     active_val_tab = 'multi'
     multi_port, sec_port, idx_port = [], [], []
     if fund:
-        cat = fund.get('category', '')
-        fcode = str(fund.get('code', ''))
-        if cat == '指数': active_val_tab = 'index'
-        elif fcode in ['162411', '161127']: active_val_tab = 'sector'
+        active_val_tab = fund.get('val_tab_type')
+        if not active_val_tab:
+            cat = fund.get('category', '')
+            fcode = str(fund.get('code', ''))
+            if cat == '指数': active_val_tab = 'index'
+            elif cat in ['纯ETF', '其他'] or fcode in ['162411', '161127']: active_val_tab = 'sector'
+            else: active_val_tab = 'multi'
         
         if active_val_tab == 'multi': multi_port = fund.get('valuation_portfolio', [])
         elif active_val_tab == 'sector': sec_port = fund.get('valuation_portfolio', [])
@@ -578,7 +588,8 @@ def new():
             'valuation_portfolio': [],
         'sina_index_url': '',
         'holdings_portfolio': [],
-        'future_hedging': []
+        'future_hedging': [],
+        'val_tab_type': 'multi'
     }
     current_date = datetime.now().strftime('%Y-%m-%d')
     return render_template_string(
@@ -596,6 +607,7 @@ def save():
     code = (request.form.get('code') or '').strip()
     trade_etf = (request.form.get('trade_etf') or '').strip().upper()
     trade_future = (request.form.get('trade_future') or '').strip()
+    val_tab_type = request.form.get('val_tab_type', 'multi')
     valuation, holdings = [], []
 
     def to_float(val, field_name, errors):
@@ -680,16 +692,14 @@ def save():
         "valuation_portfolio": valuation,
         "sina_index_url": sina_index_url,
         "holdings_portfolio": holdings,
-        "future_hedging": future_hedging
+        "future_hedging": future_hedging,
+        "val_tab_type": val_tab_type
     }
 
     if errors:
         current_date = datetime.now().strftime('%Y-%m-%d')
         # 保持用户出错前的视窗状态
-        active_val_tab = 'multi'
-        cat = new_fund.get('category', '')
-        if cat == '指数': active_val_tab = 'index'
-        elif code in ['162411', '161127']: active_val_tab = 'sector'
+        active_val_tab = val_tab_type
         
         return render_template_string(
             HTML_TEMPLATE, config=full_cfg, fund=new_fund, active_code=code,
@@ -710,10 +720,7 @@ def save():
     save_config(full_cfg)
 
     current_date = datetime.now().strftime('%Y-%m-%d')
-    active_val_tab = 'multi'
-    cat = new_fund.get('category', '')
-    if cat == '指数': active_val_tab = 'index'
-    elif code in ['162411', '161127']: active_val_tab = 'sector'
+    active_val_tab = val_tab_type
     
     return render_template_string(
         HTML_TEMPLATE, config=full_cfg, fund=new_fund, active_code=code,

@@ -104,9 +104,9 @@ class BasicDataGenerator:
         return api_data
 
     def _fund_market_prefix(self, symbol):
-        """根据基金代码判断市场前缀：50开头为SH，其它常见LOF为SZ"""
+        """根据基金代码判断市场前缀：5开头为SH，其它常见LOF为SZ"""
         s = str(symbol)
-        if s.startswith("50"):
+        if s.startswith("5"):
             return "sh"
         return "sz"
     
@@ -124,7 +124,7 @@ class BasicDataGenerator:
             fund_code = fund.get('code')
             if fund_code and fund_code != '161226':
                 # 添加市场前缀
-                prefix = "SH" if fund_code.startswith('50') else "SZ"
+                prefix = "SH" if fund_code.startswith('5') else "SZ"
                 symbols.append(f"{prefix}{fund_code}")
         
         return ",".join(symbols)
@@ -287,6 +287,11 @@ class BasicDataGenerator:
 
                     if isinstance(data, dict):
                         for symbol, fund_data in data.items():
+                            # 新增：拦截空列表等非字典数据，防止调用 .get() 时崩溃
+                            if not isinstance(fund_data, dict):
+                                print(f"[API] 警告: {symbol} 返回了异常数据(如空数组)，已跳过防崩溃")
+                                continue
+                                
                             # 智能获取 YAML 中配置的 type (分类)
                             fund_type = ""
                             code_6 = symbol[-6:] if len(symbol) >= 6 else ""
@@ -450,7 +455,7 @@ class BasicDataGenerator:
             for fund in config['funds']:
                 code = str(fund.get('code', ''))
                 if not code or code == '161226': continue
-                prefix = "SH" if code.startswith('50') else "SZ"
+                prefix = "SH" if code.startswith('5') else "SZ"
                 api_key = f"{prefix}{code}"
                 
                 if api_key in self.api_data:
@@ -598,6 +603,39 @@ class BasicDataGenerator:
         # 去重，确保每个日期只有一行
         combined_df = combined_df.drop_duplicates(subset=['日期'], keep='first')
         
+        # 🚀 核心修复：智能分流，从 Woody(GLD/USO) 和 Sina(其他ETF) 爬取历史价格
+        all_etfs = set()
+        for fund in config.get('funds', []):
+            for item in fund.get('valuation_portfolio', []):
+                all_etfs.add(item['symbol'])
+
+        print(f"\n=== 智能分流爬取所有ETF的历史价格数据 ({', '.join(all_etfs)}) ===")
+        for etf_symbol in all_etfs:
+            # 根据用户要求，GLD/USO 及其变种从 Woody 爬，其他从新浪爬
+            is_gld_or_uso = 'GLD' in etf_symbol or 'USO' in etf_symbol
+            
+            if is_gld_or_uso:
+                etf_history_df = self.woody_crawler.fetch_woody_historical_data(etf_symbol)
+            else:
+                etf_history_df = self.woody_crawler.fetch_sina_historical_data(etf_symbol)
+
+            if etf_history_df is not None and not etf_history_df.empty:
+                # 💡 核心修复：在用作列名前，先将符号标准化，确保与爬虫和列顺序定义一致
+                normalized_symbol = etf_symbol
+                if ('-JP' in normalized_symbol or '-EU' in normalized_symbol or '-HK' in normalized_symbol) and not normalized_symbol.startswith('^'):
+                    normalized_symbol = f"^{normalized_symbol}"
+                
+                etf_history_df = etf_history_df.rename(columns={'价格': normalized_symbol})
+                
+                # 使用merge合并数据，避免覆盖
+                combined_df = pd.merge(combined_df, etf_history_df, on='日期', how='left', suffixes=('', '_new'))
+                
+                # 如果生成了新列，则合并
+                if f'{normalized_symbol}_new' in combined_df.columns:
+                    combined_df[normalized_symbol] = combined_df[f'{normalized_symbol}_new'].combine_first(combined_df[normalized_symbol])
+                    # 删除临时列
+                    combined_df = combined_df.drop(columns=[f'{normalized_symbol}_new'])
+
         # 🚀 核心更新：直接读取 API 新增的 date 字段作为确切的基准日
         api_data_date = T_minus_1_str
         if self.api_data:

@@ -60,6 +60,53 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"获取汇率数据失败: {e}")
         return None
+
+    def fetch_cny_spot_rate(self):
+        """从新浪财经获取人民币在岸价（CNY）实时汇率"""
+        logger.info("从新浪财经获取人民币在岸价实时汇率")
+        
+        try:
+            # 新浪财经的在岸人民币汇率接口
+            url = "https://hq.sinajs.cn/list=fx_susdcny"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            response.encoding = 'gbk'  # 新浪接口必须用GBK编码
+            
+            if response.status_code == 200:
+                text = response.text.strip()
+                if 'hq_str_fx_susdcny' in text:
+                    # 解析新浪返回的数据格式
+                    values = text.split('"')[1].split(',')
+                    if len(values) >= 18:
+                        time = values[0]              # 更新时间
+                        spot_rate = float(values[1])   # 实时在岸价（第2个字段）
+                        high_rate = float(values[2])   # 最高价
+                        low_rate = float(values[3])    # 最低价
+                        volume = values[4]             # 成交量
+                        sell_rate = float(values[5])   # 卖出价
+                        buy_rate = float(values[7])    # 买入价
+                        currency_pair = values[9]      # 货币对
+                        date = values[17]              # 日期
+                        
+                        logger.info(f"人民币在岸价: {spot_rate} (更新时间: {time})")
+                        return {
+                            '日期': date,
+                            '时间': time,
+                            '人民币在岸价': spot_rate,
+                            '最高价': high_rate,
+                            '最低价': low_rate,
+                            '买入价': buy_rate,
+                            '卖出价': sell_rate,
+                            '成交量': volume,
+                            '货币对': currency_pair
+                        }
+            logger.error(f"获取人民币在岸价失败，状态码: {response.status_code}")
+        except Exception as e:
+            logger.error(f"获取人民币在岸价失败: {e}")
+        return None
     
     def fetch_lof_nav_data(self, fund_code, existing_data=None):
         """从东财获取LOF基金历史净值数据

@@ -2607,8 +2607,8 @@ def generate(futures_data=None, ib_data=None):
                 msgEl.textContent = '🚀 指令发送中...';
                 msgEl.style.color = '#f57c00';
                 
-                // 自动补全交易所后缀，50开头补SH，否则补SZ
-                var fullSymbol = code + (code.startsWith('50') ? '.SH' : '.SZ');
+                // 自动补全交易所后缀，5开头补SH，否则补SZ
+                var fullSymbol = code + (code.startsWith('5') ? '.SH' : '.SZ');
                 
                 fetch('http://localhost:5000/api/trade', {
                     method: 'POST',

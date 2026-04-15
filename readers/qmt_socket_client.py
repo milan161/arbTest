@@ -112,20 +112,24 @@ class QmtSocketClient:
         """处理接收到的消息"""
         if msg.startswith("TICK,"):
             parts = msg.split(',')
-            if len(parts) >= 4:
+            if len(parts) >= 5: # 假设TICK格式至少包含到卖一价 (TICK,code,last,bid,ask,...)
                 code_full = parts[1]
-                price = float(parts[2]) if parts[2] else 0
+                last_price = float(parts[2]) if parts[2] else 0
+                ask_price = float(parts[4]) if parts[4] else 0
                 code = code_full.split('.')[0] if '.' in code_full else code_full
                 
-                if price > 0:
+                # 优先使用卖一价，如果卖一价为0（比如涨停），则使用最新成交价作为替代
+                price_to_use = ask_price if ask_price > 0 else last_price
+
+                if price_to_use > 0:
                     with self.lock:
                         old_price = self.prices.get(code, 0)
-                        self.prices[code] = price
-                        if old_price != price:
-                            print(f"⚡ [QMT] {code} 价格更新: {price}")
+                        self.prices[code] = price_to_use
+                        if old_price != price_to_use:
+                            print(f"⚡ [QMT] {code} 价格更新: {price_to_use} (卖一: {ask_price}, 最新: {last_price})")
                             if self.on_price_update:
                                 try:
-                                    self.on_price_update(code, price)
+                                    self.on_price_update(code, price_to_use)
                                 except Exception as e:
                                     print(f"❌ [QMT] 回调执行失败: {e}")
         elif msg not in ["SUBSCRIBE_OK", "PONG", "OK"]:
