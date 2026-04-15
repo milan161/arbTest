@@ -1,13 +1,17 @@
-INFO:readers.data_fetcher:汇率数据日期: 2026-04-14 9:15
+INFO:readers.data_fetcher:汇率数据日期: 2026-04-15 9:15
 INFO:readers.data_fetcher:找到 25 条汇率记录
-INFO:readers.data_fetcher:美元/人民币: 6.8593
-[API] 成功导入API模块
-今天是: 2026-04-14
-当前时间: 21:08:36
-[API] 16:05之后已访问过API，今天不再重复访问，避免被封账户
+INFO:readers.data_fetcher:美元/人民币: 6.8582
+[API] API模块不可用，将使用爬虫获取数据: No module named 'telegram'
+今天是: 2026-04-15
+当前时间: 10:13:21
+[API] 9:15-14:35第一次运行，访问API获取数据
 
 === 第一步 从API获取数据  ===
-[API] 不访问API，使用最新的本地CSV文件: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260414_1721.csv
+[API] LOF代码列表: SH501018,SZ160723,SZ161129,SZ161815,SZ160719,SZ161116,SZ164701,SZ165513,SZ162411,SZ161127,SZ161125,SZ161130
+[API] 正在调用API获取数据...
+[API] API调用出错: name 'FetchPalmmicroData' is not defined
+[API] API调用失败，使用最新的本地数据
+[API] 使用最新的本地CSV文件: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260414_1721.csv
 [API] 从CSV文件成功读取数据: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260414_1721.csv
 [API] 共读取 14 条记录
 
@@ -19,11 +23,11 @@ INFO:readers.data_fetcher:美元/人民币: 6.8593
 ========================================
 
 === 从外汇管理局获取汇率数据 ===
-汇率数据日期: 2026-04-14
-人民币中间价: 6.8593
-今天是交易日，T日为: 2026-04-14
-T-1日为: 2026-04-13
-[汇率] 已添加/更新汇率数据: 2026-04-14 - 6.8593
+汇率数据日期: 2026-04-15
+人民币中间价: 6.8582
+今天是交易日，T日为: 2026-04-15
+T-1日为: 2026-04-14
+[汇率] 已添加/更新汇率数据: 2026-04-15 - 6.8582
 
 === 解析 API 数据的基准日期 ===
 ✅ 从 API 报文中成功提取到明确的基准日期: 2026-04-10
@@ -33,30 +37,30 @@ T-1日为: 2026-04-13
   [API] 162411 对冲值: 1351.542141 (精准写入基准日: 2026-04-13)
   [API] 161127 校准值: 505.060319 (精准写入基准日: 2026-04-10)
   [API] 161127 对冲值: 531.642441 (精准写入基准日: 2026-04-10)
-  [API] PY 校准值: 10.034697 (精准写入基准日: 2026-04-10)
+  [API] SPY 校准值: 10.034697 (精准写入基准日: 2026-04-10)
   [API] 161125 校准值: 16420.137988 (精准写入基准日: 2026-04-10)
   [API] 161125 对冲值: 1722.459161 (精准写入基准日: 2026-04-10)
   [API] QQQ 校准值: 41.107265 (精准写入基准日: 2026-04-10)
   [API] 161130 校准值: 44779.833318 (精准写入基准日: 2026-04-10)
   [API] 161130 对冲值: 1146.674843 (精准写入基准日: 2026-04-10)
 SUCCESS: 基础数据已保存到: D:\Study\codexTest\CodexLOFarb\data\GLD_USO_basic_data.csv
-SUCCESS: 共保存了 218 条记录
-基础数据列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'PY校准', 'QQQ校准']
+SUCCESS: 共保存了 219 条记录
+基础数据列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'SPY校准', 'QQQ校准']
 数据:
-             日期  人民币中间价     GLD  ...  ES_settle       PY校准      QQQ校准
-0    2026-04-14  6.8593     NaN  ...        NaN        NaN        NaN
-1    2026-04-13  6.8657  435.36  ...    6922.75        NaN        NaN
-2    2026-04-12     NaN     NaN  ...        NaN        NaN        NaN
-3    2026-04-10  6.8654  437.13  ...    6855.25  10.034697  41.107265
-4    2026-04-09  6.8649  437.91  ...    6863.25        NaN        NaN
+             日期  人民币中间价     GLD  ...  ES_settle      SPY校准      QQQ校准
+0    2026-04-15  6.8582     NaN  ...        NaN        NaN        NaN
+1    2026-04-14  6.8593     NaN  ...        NaN        NaN        NaN
+2    2026-04-13  6.8657  435.36  ...    6922.75        NaN        NaN
+3    2026-04-12     NaN     NaN  ...        NaN        NaN        NaN
+4    2026-04-10  6.8654  437.13  ...    6855.25  10.034697  41.107265
 ..          ...     ...     ...  ...        ...        ...        ...
-213  2025-06-10     NaN     NaN  ...        NaN        NaN        NaN
-214  2025-06-09     NaN     NaN  ...        NaN        NaN        NaN
-215  2025-06-06     NaN     NaN  ...        NaN        NaN        NaN
-216  2025-06-05     NaN     NaN  ...        NaN        NaN        NaN
-217  2025-06-04     NaN     NaN  ...        NaN        NaN        NaN
+214  2025-06-10     NaN     NaN  ...        NaN        NaN        NaN
+215  2025-06-09     NaN     NaN  ...        NaN        NaN        NaN
+216  2025-06-06     NaN     NaN  ...        NaN        NaN        NaN
+217  2025-06-05     NaN     NaN  ...        NaN        NaN        NaN
+218  2025-06-04     NaN     NaN  ...        NaN        NaN        NaN
 
-[218 rows x 32 columns]
+[219 rows x 32 columns]
 
 === 基础数据CSV文件已生成 ===
 基础数据包含历史汇率、GLD/USO及其区域变种的锚点数据，已保存为 GLD_USO_basic_data.csv

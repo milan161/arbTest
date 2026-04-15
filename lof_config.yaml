@@ -86,13 +86,13 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 48.0
+    weight: 43.0
     anchor: US
   - symbol: USO-EU
-    weight: 39.0
+    weight: 50.0
     anchor: EU
   - symbol: USO-JP
-    weight: 13.0
+    weight: 7.0
     anchor: US
   trade_etf: USO
   trade_future: MCL
@@ -158,8 +158,32 @@ funds:
   trade_etf: USO
   trade_future: MCL
   position: 56.00000000000001
+- code: '160216'
+  name: 国泰大宗商品
+  category: 黄金
+  trade_etf: GLD,USO
+  trade_future: ''
+  holdings:
+    equity_ratio: 67.0
+    cash_ratio: 33.0
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 63.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: USO
+    weight: 37.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  holdings_portfolio: []
+  future_hedging: []
 - code: '161815'
-  name: 银华抗通胀主题
+  name: 银华抗通胀
   category: 黄金
   trade_etf: GLD,USO
   trade_future: ''
@@ -256,11 +280,27 @@ funds:
   trade_future: MGC
   position: 96.63000000000001
 - code: '161116'
-  name: 易方达黄金主题
+  name: 易方达黄金
   category: 黄金
+  trade_etf: GLD
+  trade_future: MGC
   holdings:
     equity_ratio: 93.0
-    cash_ratio: 12.0
+    cash_ratio: 7.0
+  valuation_portfolio:
+  - symbol: GLD
+    weight: 87.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: GLD-EU
+    weight: 13.0
+    anchor: EU
+    name: ''
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
   holdings_portfolio:
   - symbol: GLD
     weight: 20.09
@@ -296,20 +336,9 @@ funds:
   - symbol: MGC
     delivery_month: '2604'
     weight: 100.0
-    beta: 1.0
     currency: USD
     exchange: SMART
     name: ''
-  valuation_portfolio:
-  - symbol: GLD
-    weight: 87.0
-    anchor: US
-  - symbol: GLD-EU
-    weight: 13.0
-    anchor: EU
-  trade_etf: GLD
-  trade_future: MGC
-  position: 93.0
 - code: '164701'
   name: 汇添富贵金属
   category: 黄金
@@ -497,7 +526,7 @@ funds:
     name: 表明普 500 指数微型期货（Micro E-mini S&P 500
   position: 95.0
 - code: '161130'
-  name: 易方达纳斯达克100
+  name: 易方达纳100
   category: 指数
   trade_etf: QQQ
   trade_future: MNQ
@@ -520,9 +549,8 @@ funds:
     currency: USD
     exchange: SMART
     name: 微型纳斯达克100指数期货
-  position: 95.0
 - code: '161226'
-  name: 国投瑞银白银期货
+  name: 国瑞白银期货
   category: 其他
   trade_etf: ''
   trade_future: 沪银Ag
@@ -530,6 +558,7 @@ funds:
     equity_ratio: 100.0
     cash_ratio: 0.0
   valuation_portfolio: []
+  sina_index_url: ''
   holdings_portfolio: []
   future_hedging:
   - symbol: 沪银Ag
@@ -538,7 +567,6 @@ funds:
     currency: USD
     exchange: SMART
     name: 上海期货交易所主连
-  position: 100.0
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
 future_oil_calibration: .nan

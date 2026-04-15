@@ -319,30 +319,35 @@ class LofDataGenerator:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "Referer": "https://finance.sina.com.cn/"
         }
-        try:
-            time.sleep(1)
-            response = requests.get(url, headers=headers, timeout=15)
-            match = re.search(r'\[.*\]', response.text, re.DOTALL)
-            if match:
-                data = json.loads(match.group(0))
-                if len(data) > 0:
-                    df = pd.DataFrame(data)
-                    if 'd' in df.columns and 'c' in df.columns:
-                        df = df[['d', 'c']].copy()
-                        df.columns = ['日期', '价格']
-                        df['日期'] = pd.to_datetime(df['日期']).dt.strftime('%Y-%m-%d')
-                        df['价格'] = pd.to_numeric(df['价格'], errors='coerce')
-                        df = df.sort_values('日期', ascending=False).reset_index(drop=True)
-                        # 回显成功读取到的ETF数据信息
-                        latest_date = df['日期'].iloc[0]
-                        latest_price = df['价格'].iloc[0]
-                        print(f"  [OK] 成功读取{symbol}数据，最新日期: {latest_date}，最新价格: {latest_price}")
-                        return df.head(max_records)
-            print(f"  [ERROR] 未能从新浪获取 {symbol} 有效数据")
-            return None
-        except Exception as e:
-            print(f"  [ERROR] 请求新浪美股数据失败: {e}")
-            return None
+        
+        import random
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                time.sleep(random.uniform(1.0, 3.0))
+                response = requests.get(url, headers=headers, timeout=15)
+                match = re.search(r'\[.*\]', response.text, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(0))
+                    if len(data) > 0:
+                        df = pd.DataFrame(data)
+                        if 'd' in df.columns and 'c' in df.columns:
+                            df = df[['d', 'c']].copy()
+                            df.columns = ['日期', '价格']
+                            df['日期'] = pd.to_datetime(df['日期']).dt.strftime('%Y-%m-%d')
+                            df['价格'] = pd.to_numeric(df['价格'], errors='coerce')
+                            df = df.sort_values('日期', ascending=False).reset_index(drop=True)
+                            # 回显成功读取到的ETF数据信息
+                            latest_date = df['日期'].iloc[0]
+                            latest_price = df['价格'].iloc[0]
+                            print(f"  [OK] 成功读取{symbol}数据，最新日期: {latest_date}，最新价格: {latest_price}")
+                            return df.head(max_records)
+                print(f"  [WARNING] 第{attempt + 1}次尝试: 未能从新浪获取 {symbol} 有效数据")
+            except Exception as e:
+                print(f"  [WARNING] 第{attempt + 1}次尝试: 请求新浪美股数据失败: {e}")
+                
+        print(f"  [ERROR] 从新浪获取 {symbol} 数据彻底失败")
+        return None
     
     def get_futures_settlement_data(self):
         """从新浪获取期货结算价数据"""

@@ -1,78 +1,83 @@
 {
   "api": {
-    "last_access_date": "20260414",
+    "last_access_date": "20260415",
     "access_times": {
-      "915": "13:47:53",
+      "915": "11:35:29",
       "1435": null,
-      "1605": "17:21:12"
+      "1605": null
     }
   },
   "lof": {
-    "last_process_date": "2026-04-14",
+    "last_process_date": "2026-04-15",
     "processed_funds": {
       "501018": {
-        "last_process_time": "21:23:18",
-        "has_price": true,
+        "last_process_time": "11:40:09",
+        "has_price": false,
         "has_nav": false
       },
       "160723": {
-        "last_process_time": "21:23:22",
-        "has_price": true,
+        "last_process_time": "11:40:11",
+        "has_price": false,
         "has_nav": false
       },
       "161129": {
-        "last_process_time": "21:23:25",
-        "has_price": true,
+        "last_process_time": "11:40:14",
+        "has_price": false,
+        "has_nav": false
+      },
+      "161815": {
+        "last_process_time": "11:40:20",
+        "has_price": false,
         "has_nav": false
       },
       "160719": {
-        "last_process_time": "21:23:31",
-        "has_price": true,
+        "last_process_time": "11:40:23",
+        "has_price": false,
         "has_nav": false
       },
       "161116": {
-        "last_process_time": "21:23:33",
-        "has_price": true,
+        "last_process_time": "11:40:26",
+        "has_price": false,
         "has_nav": false
       },
       "164701": {
-        "last_process_time": "21:23:37",
-        "has_price": true,
+        "last_process_time": "11:40:29",
+        "has_price": false,
         "has_nav": false
       },
       "165513": {
-        "last_process_time": "21:23:40",
-        "has_price": true,
+        "last_process_time": "11:40:31",
+        "has_price": false,
         "has_nav": false
       },
       "162411": {
-        "last_process_time": "21:23:45",
-        "has_price": true,
+        "last_process_time": "11:40:34",
+        "has_price": false,
         "has_nav": false
       },
       "161127": {
-        "last_process_time": "21:23:47",
-        "has_price": true,
+        "last_process_time": "11:40:38",
+        "has_price": false,
         "has_nav": false
       },
       "161125": {
-        "last_process_time": "21:23:51",
-        "has_price": true,
+        "last_process_time": "11:40:41",
+        "has_price": false,
         "has_nav": false
       },
       "161130": {
-        "last_process_time": "21:23:54",
-        "has_price": true,
+        "last_process_time": "11:40:43",
+        "has_price": false,
         "has_nav": false
       },
       "161226": {
-        "last_process_time": "21:23:56",
-        "has_price": true,
-        "has_nav": true
+        "last_process_time": "11:40:45",
+        "has_price": false,
+        "has_nav": false
       },
-      "161815": {
-        "last_process_time": "21:23:27",
-        "has_price": true,
+      "160216": {
+        "last_process_time": "11:40:17",
+        "has_price": false,
         "has_nav": false
       }
     }

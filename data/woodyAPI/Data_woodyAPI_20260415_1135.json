@@ -1,0 +1,234 @@
+{
+  "chat_id": 992671436,
+  "reply_to_message_id": 6620,
+  "text": {
+    "SH501018": {
+      "date": "2026-04-13",
+      "netvalue": "1.7682",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "^USO-EU": {
+          "ratio": "47",
+          "price": "132.81"
+        },
+        "USO": {
+          "ratio": "29",
+          "price": "128.47"
+        },
+        "^USO-JP": {
+          "ratio": "24",
+          "price": "132.82"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.68"
+    },
+    "SZ160723": {
+      "date": "2026-04-13",
+      "netvalue": "2.0176",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "^USO-EU": {
+          "ratio": "50",
+          "price": "132.81"
+        },
+        "USO": {
+          "ratio": "43",
+          "price": "128.47"
+        },
+        "^USO-JP": {
+          "ratio": "7",
+          "price": "132.82"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.77"
+    },
+    "SZ161129": {
+      "date": "2026-04-13",
+      "netvalue": "1.6763",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "^USO-EU": {
+          "ratio": "40",
+          "price": "132.81"
+        },
+        "^USO-JP": {
+          "ratio": "35",
+          "price": "132.82"
+        },
+        "USO": {
+          "ratio": "19",
+          "price": "128.47"
+        },
+        "^USO-HK": {
+          "ratio": "6",
+          "price": "132.75"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.56"
+    },
+    "SZ160216": {
+      "date": "2026-04-13",
+      "netvalue": "0.757",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "63",
+          "price": "435.36"
+        },
+        "USO": {
+          "ratio": "37",
+          "price": "128.47"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.67"
+    },
+    "SZ161815": {
+      "date": "2026-04-13",
+      "netvalue": "1.176",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "75",
+          "price": "435.36"
+        },
+        "USO": {
+          "ratio": "15",
+          "price": "128.47"
+        },
+        "^USO-EU": {
+          "ratio": "10",
+          "price": "132.81"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.73"
+    },
+    "SZ160719": {
+      "date": "2026-04-13",
+      "netvalue": "2.137",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "57",
+          "price": "435.36"
+        },
+        "^GLD-EU": {
+          "ratio": "43",
+          "price": "432.07"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.95"
+    },
+    "SZ161116": {
+      "date": "2026-04-13",
+      "netvalue": "1.773",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "87",
+          "price": "435.36"
+        },
+        "^GLD-EU": {
+          "ratio": "13",
+          "price": "432.07"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.93"
+    },
+    "SZ164701": {
+      "date": "2026-04-13",
+      "netvalue": "1.887",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "99",
+          "price": "435.36"
+        },
+        "SLV": {
+          "ratio": "1",
+          "price": "68.28"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.98"
+    },
+    "SZ165513": {
+      "date": "2026-04-13",
+      "netvalue": "1.1339",
+      "CNYholdings": "6.8657",
+      "symbol_hedge": {
+        "GLD": {
+          "ratio": "86",
+          "price": "435.36"
+        },
+        "^GLD-EU": {
+          "ratio": "11",
+          "price": "432.07"
+        },
+        "^GLD-JP": {
+          "ratio": "3",
+          "price": "434.23"
+        }
+      },
+      "CNY": "6.8582",
+      "position": "0.89"
+    },
+    "SZ162411": {
+      "calibration": "1283.965034",
+      "date": "2026-04-13",
+      "netvalue": "0.9024",
+      "symbol_hedge": "XOP",
+      "hedge": "1351.542141",
+      "CNY": "6.8582",
+      "position": "0.95"
+    },
+    "SZ161127": {
+      "calibration": "505.675623",
+      "date": "2026-04-13",
+      "netvalue": "1.7934",
+      "symbol_hedge": "XBI",
+      "hedge": "532.290129",
+      "CNY": "6.8582",
+      "position": "0.95"
+    },
+    "SPY": {
+      "calibration": "10.034701",
+      "date": "2026-04-13",
+      "netvalue": "686.242676",
+      "position": "1",
+      "symbol_hedge": "^GSPC"
+    },
+    "SZ161125": {
+      "calibration": "16429.962240",
+      "date": "2026-04-13",
+      "netvalue": "2.8776",
+      "symbol_hedge": "SPY",
+      "hedge": "1723.48903",
+      "CNY": "6.8582",
+      "position": "0.95"
+    },
+    "QQQ": {
+      "calibration": "41.107937",
+      "date": "2026-04-13",
+      "netvalue": "617.489422",
+      "position": "1",
+      "symbol_hedge": "^NDX"
+    },
+    "SZ161130": {
+      "calibration": "44809.343311",
+      "date": "2026-04-13",
+      "netvalue": "3.8893",
+      "symbol_hedge": "QQQ",
+      "hedge": "1147.411747",
+      "CNY": "6.8582",
+      "position": "0.95"
+    }
+  },
+  "method": "sendMessage"
+}

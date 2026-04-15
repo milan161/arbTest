@@ -252,8 +252,12 @@ class BasicDataGenerator:
             # 调用API获取数据
             print(f"[API] 正在调用API获取数据...")
             try:
-                result = FetchPalmmicroData(symbols_str)
-                print(f"[API] API调用完成")
+                if API_AVAILABLE:
+                    result = FetchPalmmicroData(symbols_str)
+                    print(f"[API] API调用完成")
+                else:
+                    result = None
+                    print(f"[API] API模块不可用，跳过网络调用")
                 
                 # 检查API调用是否成功
                 if result is not None:

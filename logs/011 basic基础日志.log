@@ -1,71 +1,76 @@
-﻿--- 2026-04-13 18:03:37 START 011 ---
+﻿--- 2026-04-15 11:35:25 START 011 ---
 [API] 成功导入API模块
-今天是: 2026-04-13
-当前时间: 18:03:38
-[API] 16:05之后已访问过API，今天不再重复访问，避免被封账户
+今天是: 2026-04-15
+当前时间: 11:35:26
+[API] 9:15-14:35第一次运行，访问API获取数据
 
 === 第一步 从API获取数据  ===
-[API] 不访问API，使用最新的本地CSV文件: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260413_1615.csv
-[API] 从CSV文件成功读取数据: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260413_1615.csv
-[API] 共读取 13 条记录
+[API] LOF代码列表: SH501018,SZ160723,SZ161129,SZ160216,SZ161815,SZ160719,SZ161116,SZ164701,SZ165513,SZ162411,SZ161127,SZ161125,SZ161130
+[API] 正在调用API获取数据...
+发送的JSON数据: {"update_id": 886050244, "message": {"message_id": 6620, "from": {"id": 992671436, "is_bot": false, "first_name": "woody", "username": "palmmicro", "language_code": "zh-Hans"}, "chat": {"id": 992671436, "first_name": "woody", "username": "palmmicro", "type": "private"}, "date": 1776224126, "text": "SH501018,SZ160723,SZ161129,SZ160216,SZ161815,SZ160719,SZ161116,SZ164701,SZ165513,SZ162411,SZ161127,SZ161125,SZ161130"}}
+服务器返回的原始内容: {"chat_id":992671436,"reply_to_message_id":6620,"text":{"SH501018":{"date":"2026-04-13","netvalue":"1.7682","CNYholdings":"6.8657","symbol_hedge":{"^USO-EU":{"ratio":"47","price":"132.81"},"USO":{"ratio":"29","price":"128.47"},"^USO-JP":{"ratio":"24","price":"132.82"}},"CNY":"6.8582","position":"0.68"},"SZ160723":{"date":"2026-04-13","netvalue":"2.0176","CNYholdings":"6.8657","symbol_hedge":{"^USO-EU":{"ratio":"50","price":"132.81"},"USO":{"ratio":"43","price":"128.47"},"^USO-JP":{"ratio":"7","price":"132.82"}},"CNY":"6.8582","position":"0.77"},"SZ161129":{"date":"2026-04-13","netvalue":"1.6763","CNYholdings":"6.8657","symbol_hedge":{"^USO-EU":{"ratio":"40","price":"132.81"},"^USO-JP":{"ratio":"35","price":"132.82"},"USO":{"ratio":"19","price":"128.47"},"^USO-HK":{"ratio":"6","price":"132.75"}},"CNY":"6.8582","position":"0.56"},"SZ160216":{"date":"2026-04-13","netvalue":"0.757","CNYholdings":"6.8657","symbol_hedge":{"GLD":{"ratio":"63","price":"435.36"},"USO":{"ratio":"37","price":"128.47"}},"CNY":"6.8582","position":"0.67"},"SZ161815":{"date":"2026-04-13","netvalue":"1.176","CNYholdings":"6.8657","symbol_hedge":{"GLD":{"ratio":"75","price":"435.36"},"USO":{"ratio":"15","price":"128.47"},"^USO-EU":{"ratio":"10","price":"132.81"}},"CNY":"6.8582","position":"0.73"},"SZ160719":{"date":"2026-04-13","netvalue":"2.137","CNYholdings":"6.8657","symbol_hedge":{"GLD":{"ratio":"57","price":"435.36"},"^GLD-EU":{"ratio":"43","price":"432.07"}},"CNY":"6.8582","position":"0.95"},"SZ161116":{"date":"2026-04-13","netvalue":"1.773","CNYholdings":"6.8657","symbol_hedge":{"GLD":{"ratio":"87","price":"435.36"},"^GLD-EU":{"ratio":"13","price":"432.07"}},"CNY":"6.8582","position":"0.93"},"SZ164701":{"date":"2026-04-13","netvalue":"1.887","CNYholdings":"6.8657","symbol_hedge":{"GLD":{"ratio":"99","price":"435.36"},"SLV":{"ratio":"1","price":"68.28"}},"CNY":"6.8582","position":"0.98"},"SZ165513":{"date":"2026-04-13","netvalue":"1.1339","CNYholdings":"6.8657","symbol_hedge":{"GLD":{"ratio":"86","price":"435.36"},"^GLD-EU":{"ratio":"11","price":"432.07"},"^GLD-JP":{"ratio":"3","price":"434.23"}},"CNY":"6.8582","position":"0.89"},"SZ162411":{"calibration":"1283.965034","date":"2026-04-13","netvalue":"0.9024","symbol_hedge":"XOP","hedge":"1351.542141","CNY":"6.8582","position":"0.95"},"SZ161127":{"calibration":"505.675623","date":"2026-04-13","netvalue":"1.7934","symbol_hedge":"XBI","hedge":"532.290129","CNY":"6.8582","position":"0.95"},"SPY":{"calibration":"10.034701","date":"2026-04-13","netvalue":"686.242676","position":"1","symbol_hedge":"^GSPC"},"SZ161125":{"calibration":"16429.962240","date":"2026-04-13","netvalue":"2.8776","symbol_hedge":"SPY","hedge":"1723.48903","CNY":"6.8582","position":"0.95"},"QQQ":{"calibration":"41.107937","date":"2026-04-13","netvalue":"617.489422","position":"1","symbol_hedge":"^NDX"},"SZ161130":{"calibration":"44809.343311","date":"2026-04-13","netvalue":"3.8893","symbol_hedge":"QQQ","hedge":"1147.411747","CNY":"6.8582","position":"0.95"}},"method":"sendMessage"}
+解析后的Python对象类型: <class 'dict'>
+注意：服务器返回了一个JSON对象（字典），而非数组。
+{'SH501018': {'date': '2026-04-13', 'netvalue': '1.7682', 'CNYholdings': '6.8657', 'symbol_hedge': {'^USO-EU': {'ratio': '47', 'price': '132.81'}, 'USO': {'ratio': '29', 'price': '128.47'}, '^USO-JP': {'ratio': '24', 'price': '132.82'}}, 'CNY': '6.8582', 'position': '0.68'}, 'SZ160723': {'date': '2026-04-13', 'netvalue': '2.0176', 'CNYholdings': '6.8657', 'symbol_hedge': {'^USO-EU': {'ratio': '50', 'price': '132.81'}, 'USO': {'ratio': '43', 'price': '128.47'}, '^USO-JP': {'ratio': '7', 'price': '132.82'}}, 'CNY': '6.8582', 'position': '0.77'}, 'SZ161129': {'date': '2026-04-13', 'netvalue': '1.6763', 'CNYholdings': '6.8657', 'symbol_hedge': {'^USO-EU': {'ratio': '40', 'price': '132.81'}, '^USO-JP': {'ratio': '35', 'price': '132.82'}, 'USO': {'ratio': '19', 'price': '128.47'}, '^USO-HK': {'ratio': '6', 'price': '132.75'}}, 'CNY': '6.8582', 'position': '0.56'}, 'SZ160216': {'date': '2026-04-13', 'netvalue': '0.757', 'CNYholdings': '6.8657', 'symbol_hedge': {'GLD': {'ratio': '63', 'price': '435.36'}, 'USO': {'ratio': '37', 'price': '128.47'}}, 'CNY': '6.8582', 'position': '0.67'}, 'SZ161815': {'date': '2026-04-13', 'netvalue': '1.176', 'CNYholdings': '6.8657', 'symbol_hedge': {'GLD': {'ratio': '75', 'price': '435.36'}, 'USO': {'ratio': '15', 'price': '128.47'}, '^USO-EU': {'ratio': '10', 'price': '132.81'}}, 'CNY': '6.8582', 'position': '0.73'}, 'SZ160719': {'date': '2026-04-13', 'netvalue': '2.137', 'CNYholdings': '6.8657', 'symbol_hedge': {'GLD': {'ratio': '57', 'price': '435.36'}, '^GLD-EU': {'ratio': '43', 'price': '432.07'}}, 'CNY': '6.8582', 'position': '0.95'}, 'SZ161116': {'date': '2026-04-13', 'netvalue': '1.773', 'CNYholdings': '6.8657', 'symbol_hedge': {'GLD': {'ratio': '87', 'price': '435.36'}, '^GLD-EU': {'ratio': '13', 'price': '432.07'}}, 'CNY': '6.8582', 'position': '0.93'}, 'SZ164701': {'date': '2026-04-13', 'netvalue': '1.887', 'CNYholdings': '6.8657', 'symbol_hedge': {'GLD': {'ratio': '99', 'price': '435.36'}, 'SLV': {'ratio': '1', 'price': '68.28'}}, 'CNY': '6.8582', 'position': '0.98'}, 'SZ165513': {'date': '2026-04-13', 'netvalue': '1.1339', 'CNYholdings': '6.8657', 'symbol_hedge': {'GLD': {'ratio': '86', 'price': '435.36'}, '^GLD-EU': {'ratio': '11', 'price': '432.07'}, '^GLD-JP': {'ratio': '3', 'price': '434.23'}}, 'CNY': '6.8582', 'position': '0.89'}, 'SZ162411': {'calibration': '1283.965034', 'date': '2026-04-13', 'netvalue': '0.9024', 'symbol_hedge': 'XOP', 'hedge': '1351.542141', 'CNY': '6.8582', 'position': '0.95'}, 'SZ161127': {'calibration': '505.675623', 'date': '2026-04-13', 'netvalue': '1.7934', 'symbol_hedge': 'XBI', 'hedge': '532.290129', 'CNY': '6.8582', 'position': '0.95'}, 'SPY': {'calibration': '10.034701', 'date': '2026-04-13', 'netvalue': '686.242676', 'position': '1', 'symbol_hedge': '^GSPC'}, 'SZ161125': {'calibration': '16429.962240', 'date': '2026-04-13', 'netvalue': '2.8776', 'symbol_hedge': 'SPY', 'hedge': '1723.48903', 'CNY': '6.8582', 'position': '0.95'}, 'QQQ': {'calibration': '41.107937', 'date': '2026-04-13', 'netvalue': '617.489422', 'position': '1', 'symbol_hedge': '^NDX'}, 'SZ161130': {'calibration': '44809.343311', 'date': '2026-04-13', 'netvalue': '3.8893', 'symbol_hedge': 'QQQ', 'hedge': '1147.411747', 'CNY': '6.8582', 'position': '0.95'}}
+[API] API调用完成
+[API] API数据已保存到: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260415_1135.json
+[API] CSV文件已生成: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260415_1135.csv
+[API] 已更新访问状态: 915
+[API] 从CSV文件成功读取数据: D:\Study\codexTest\CodexLOFarb\data\woodyAPI\Data_woodyAPI_20260415_1135.csv
+[API] 共读取 15 条记录
 
 === 根据 API 数据同步更新 YAML 配置文件 ===
-  [ℹ️] YAML 配置文件中的仓位和权重已是最新，无需更新
+  [YAML更新] 160723 USO 权重已修正: 48.0% -> 43.0%
+  [YAML更新] 160723 USO-EU 权重已修正: 39.0% -> 50.0%
+  [YAML更新] 160723 USO-JP 权重已修正: 13.0% -> 7.0%
+  [OK] lof_config.yaml 文件已成功更新保存
 
 ========================================
 第二步：处理basic基础文件（作为备份）
 ========================================
 
 === 从外汇管理局获取汇率数据 ===
-INFO:readers.data_fetcher:汇率数据日期: 2026-04-13 9:15
+INFO:readers.data_fetcher:汇率数据日期: 2026-04-15 9:15
 INFO:readers.data_fetcher:找到 25 条汇率记录
-INFO:readers.data_fetcher:美元/人民币: 6.8657
-汇率数据日期: 2026-04-13
-人民币中间价: 6.8657
-今天是交易日，T日为: 2026-04-13
-T-1日为: 2026-04-10
-[汇率] 已添加/更新汇率数据: 2026-04-13 - 6.8657
+INFO:readers.data_fetcher:美元/人民币: 6.8582
+汇率数据日期: 2026-04-15
+人民币中间价: 6.8582
+今天是交易日，T日为: 2026-04-15
+T-1日为: 2026-04-14
+[汇率] 已添加/更新汇率数据: 2026-04-15 - 6.8582
 
-=== 根据CNYholding查找对应日期 ===
-参考CNYholding值: 6.8649
-找到最匹配的日期: 2026-04-09 (差值: 0.0000)
-
-=== 从API获取数据并填充到日期: 2026-04-09 ===
-  [API] USO 价格: 126.96
-  [API] ^USO-JP 价格: 125.86
-  [API] ^USO-EU 价格: 128.54
-  [API] ^USO-HK 价格: 125.25
-  [API] GLD 价格: 437.91
-  [API] ^GLD-EU 价格: 438.95
-  [API] ^GLD-JP 价格: 433.59
+=== 解析 API 数据的基准日期 ===
+✅ 从 API 报文中成功提取到明确的基准日期: 2026-04-13
 
 === 从API获取LOF校准值与对冲值 ===
-  [API] 162411 校准值: 1283.450938
-  [API] 162411 对冲值: 1351.000987
-  [API] 161127 校准值: 505.568726
-  [API] 161127 对冲值: 532.177606
-  [API] 161125 校准值: 16422.100251
-  [API] 161125 对冲值: 1722.508795
-  [API] 161130 校准值: 44777.140379
-  [API] 161130 对冲值: 1146.607503
+  [API] 162411 校准值: 1283.965034 (精准写入基准日: 2026-04-13)
+  [API] 162411 对冲值: 1351.542141 (精准写入基准日: 2026-04-13)
+  [API] 161127 校准值: 505.675623 (精准写入基准日: 2026-04-13)
+  [API] 161127 对冲值: 532.290129 (精准写入基准日: 2026-04-13)
+  [API] SPY 校准值: 10.034701 (精准写入基准日: 2026-04-13)
+  [API] 161125 校准值: 16429.96224 (精准写入基准日: 2026-04-13)
+  [API] 161125 对冲值: 1723.48903 (精准写入基准日: 2026-04-13)
+  [API] QQQ 校准值: 41.107937 (精准写入基准日: 2026-04-13)
+  [API] 161130 校准值: 44809.343311 (精准写入基准日: 2026-04-13)
+  [API] 161130 对冲值: 1147.411747 (精准写入基准日: 2026-04-13)
 SUCCESS: 基础数据已保存到: D:\Study\codexTest\CodexLOFarb\data\GLD_USO_basic_data.csv
-SUCCESS: 共保存了 217 条记录
-基础数据列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'GLD价格', 'USO价格']
+SUCCESS: 共保存了 219 条记录
+基础数据列名: ['日期', '人民币中间价', 'GLD', '^GLD-EU', '^GLD-JP', 'USO', '^USO-EU', '^USO-JP', '^USO-HK', 'XOP', 'SLV', 'XBI', 'SPY', 'QQQ', '黄金校准', '原油校准', '162411校准', '162411对冲', '161127校准', '161127对冲', '161125校准', '161125对冲', '161130校准', '161130对冲', '.INX', '.NDX', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle', 'SPY校准', 'QQQ校准']
 数据:
-             日期  人民币中间价     GLD  ^GLD-EU  ...  NQ_settle  ES_settle   GLD价格   USO价格
-0    2026-04-13  6.8657     NaN      NaN  ...        NaN        NaN     NaN     NaN
-1    2026-04-12     NaN     NaN      NaN  ...        NaN        NaN     NaN     NaN
-2    2026-04-10  6.8654  437.13   438.82  ...   25281.25    6855.25  437.13  124.82
-3    2026-04-09  6.8649  437.91   438.95  ...   25251.50    6863.25  437.91  126.96
-4    2026-04-08  6.8680  434.53   436.38  ...   25074.25    6823.75  434.53  124.58
-..          ...     ...     ...      ...  ...        ...        ...     ...     ...
-212  2025-06-10     NaN     NaN      NaN  ...        NaN        NaN     NaN     NaN
-213  2025-06-09     NaN     NaN      NaN  ...        NaN        NaN     NaN     NaN
-214  2025-06-06     NaN     NaN      NaN  ...        NaN        NaN     NaN     NaN
-215  2025-06-05     NaN     NaN      NaN  ...        NaN        NaN     NaN     NaN
-216  2025-06-04     NaN     NaN      NaN  ...        NaN        NaN     NaN     NaN
+             日期  人民币中间价     GLD  ...  ES_settle      SPY校准      QQQ校准
+0    2026-04-15  6.8582     NaN  ...        NaN        NaN        NaN
+1    2026-04-14  6.8593  445.09  ...    7004.75        NaN        NaN
+2    2026-04-13  6.8657  435.36  ...    6922.75  10.034701  41.107937
+3    2026-04-12     NaN     NaN  ...        NaN        NaN        NaN
+4    2026-04-10  6.8654  437.13  ...    6855.25  10.034697  41.107265
+..          ...     ...     ...  ...        ...        ...        ...
+214  2025-06-10     NaN     NaN  ...        NaN        NaN        NaN
+215  2025-06-09     NaN     NaN  ...        NaN        NaN        NaN
+216  2025-06-06     NaN     NaN  ...        NaN        NaN        NaN
+217  2025-06-05     NaN     NaN  ...        NaN        NaN        NaN
+218  2025-06-04     NaN     NaN  ...        NaN        NaN        NaN
 
-[217 rows x 32 columns]
+[219 rows x 32 columns]
 
 === 基础数据CSV文件已生成 ===
 基础数据包含历史汇率、GLD/USO及其区域变种的锚点数据，已保存为 GLD_USO_basic_data.csv
