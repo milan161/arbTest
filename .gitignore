@@ -12,9 +12,6 @@ __pycache__/
 ibapi/
 
 # 脚本、测试
-scripts/
-Test_read_data/
-private/
 
 # 数据库、日志、临时文件
 *.db
