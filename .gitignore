@@ -10,7 +10,8 @@ __pycache__/
 
 # 项目依赖/第三方库
 ibapi/
-
+_mytoken.py
+telegram.py
 # 脚本、测试
 
 # 数据库、日志、临时文件
@@ -19,4 +20,4 @@ ibapi/
 
 # 备份、说明文档
 .git.bak/
-GIT使用办法.txt
+zGIT使用办法.txt
