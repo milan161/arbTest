@@ -1,8 +1,7 @@
 @echo off
-chcp 65001 > nul
+chcp 936 > nul
 setlocal
 set "ROOT=%~dp0"
-set "PY=C:\Users\milan\AppData\Local\Programs\Python\Python311\python.exe"
 set "LOGDIR=%ROOT%logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
@@ -11,8 +10,11 @@ echo    LOF 基金套利系统 - 一键启动程序
 echo =======================================
 echo.
 
-if not exist "%PY%" (
-  echo [错误] 找不到 Python，请检查路径是否正确: %PY%
+REM 尝试查找Python解释器
+set "PY=python.exe"
+where %PY% > nul 2>&1
+if %errorlevel% neq 0 (
+  echo [错误] 找不到 Python，请确保Python已安装并添加到环境变量
   pause > nul
   exit /b 1
 )
@@ -24,30 +26,30 @@ set PYTHONIOENCODING=utf-8
 
 echo [0/6] 正在获取今日最新基础数据 (011)...
 echo (这一步需要10-30秒，请稍候...)
-"%PY%" -X utf8 LOF011_generate_basic_data.py > "%LOGDIR%\011_auto.log" 2>&1
+%PY% LOF011_generate_basic_data.py > "%LOGDIR%\011_auto.log" 2>&1
 echo 011 执行完毕！
 
 echo [1/6] 正在获取今日LOF历史数据 (012)...
 echo (这一步需要10-30秒，请稍候...)
-"%PY%" -X utf8 LOF012_generate_lof_data.py > "%LOGDIR%\012_auto.log" 2>&1
+%PY% LOF012_generate_lof_data.py > "%LOGDIR%\012_auto.log" 2>&1
 echo 012 执行完毕！
 
 echo [2/6] 启动维护面板后台 (端口 5002)...
-start "LOF Admin (5002)" /D "%ROOT%" cmd /k ""%PY%" -X utf8 LOF01_admin_launcher.py"
+start "LOF Admin (5002)" /D "%ROOT%" cmd /k "%PY% LOF01_admin_launcher.py"
 
 echo [3/6] 启动实时数据与行情服务 (端口 5000)...
-start "LOF Backend (5000)" /D "%ROOT%" cmd /k ""%PY%" -X utf8 LOF02_fetch_trade_data.py"
+start "LOF Backend (5000)" /D "%ROOT%" cmd /k "%PY% LOF02_fetch_trade_data.py"
 
 echo 等待后台服务初始化及IB连接握手 (8秒)...
-timeout /t 8 > nul
+REM 使用ping命令替代timeout，兼容低版本系统
+ping -n 9 127.0.0.1 > nul
 
 echo [4/6] 正在检查历史数据并生成今日监控报表...
 echo (如果需要爬取新数据，这一步可能需要10-20秒，请稍候...)
 pushd "%ROOT%"
-"%PY%" -X utf8 LOF03_generate_monitor_html.py > "%LOGDIR%\html_generate.log" 2>&1
+%PY% LOF03_generate_monitor_html.py > "%LOGDIR%\html_generate.log" 2>&1
 popd
 echo 报表生成完毕！
-
 echo [5/6] 自动打开浏览器...
 start "" "http://localhost:5000/"
 

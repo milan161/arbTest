@@ -7,17 +7,17 @@ HtmlGenerator: <class 'LOF033_html_generator.HtmlGenerator'>
 成功: 历史数据已是最新，不需要更新
 历史数据已是最新，不需要更新
 开始生成LOF基金套利报表...
-无法连接到后台服务获取IB数据: HTTPConnectionPool(host='127.0.0.1', port=10808): Read timed out. (read timeout=5)
-获取到的期货数据: {'AG0': {'change_percent': -0.010238558410975734, 'price': 19532.0, 'settlement': 1.0, 'source': '新浪API', 'vwap': 0.0}, 'CL': {'change_percent': -1.179638821417261, 'price': 93.573, 'source': '新浪API'}, 'ES': {'change_percent': 0.06160802599971276, 'price': 7081.36, 'source': '新浪API'}, 'GC': {'change_percent': 0.08468689557640156, 'price': 4812.372, 'source': '新浪API'}, 'NQ': {'change_percent': -0.02287893231649684, 'price': 26481.19, 'source': '新浪API'}, 'is_trading_time': True, 'timestamp': 1776392108}
+IB状态: IB API 未连接
+获取到的期货数据: {'AG0': {'change_percent': -0.007664793050587634, 'price': 19570.0, 'settlement': 19803.0, 'source': 'SSE', 'vwap': 19590.29462226412}, 'CL': {'change_percent': -1.0243953955011078, 'price': 93.72, 'source': '新浪API'}, 'ES': {'change_percent': 0.11148791860958494, 'price': 7084.89, 'source': '新浪API'}, 'GC': {'change_percent': -0.08963666992492982, 'price': 4803.99, 'source': '新浪API'}, 'NQ': {'change_percent': -0.01853722073827919, 'price': 26482.34, 'source': '新浪API'}, 'is_trading_time': False, 'timestamp': 1776412449}
 使用期货校准值: 黄金=10.9067, 原油=0.8227
 
 === 生成HTML前的调试信息 ===
 汇率: 汇率 - 中间价: 6.8622
 IB夜盘价格: {}
-IB状态信息: 后台服务(端口5000)未启动
+IB状态信息: IB API 未连接
 黄金校准值: 10.9067
 原油校准值: 0.8227
-生成的主页行数: 36891
-生成的详情页面数: 1441507
+生成的主页行数: 36916
+生成的详情页面数: 1441782
 =============================
 监控报表生成成功: D:\Study\codexTest\CodexLOFarb\lof_monitor.html

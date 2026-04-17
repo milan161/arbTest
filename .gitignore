@@ -20,4 +20,7 @@ telegram.py
 
 # 备份、说明文档
 .git.bak/
+scripts/
+Test_read_data/
+公众号/
 zGIT使用办法.txt
