@@ -884,7 +884,7 @@
                 <button class="tab-button" onclick="switchTab(3)" style="background: var(--secondary-light); color: var(--secondary-dark); border: none; padding: 10px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-weight: bold; font-size: 14px; font-family: var(--font-sans);">指数套利</button>
                 <button class="tab-button" onclick="switchTab(4)" style="background: var(--secondary-light); color: var(--secondary-dark); border: none; padding: 10px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-weight: bold; font-size: 14px; font-family: var(--font-sans);">白银专区</button>
                 <button class="tab-button" onclick="switchTab(5)" style="background: var(--secondary-light); color: var(--secondary-dark); border: none; padding: 10px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-weight: bold; font-size: 14px; font-family: var(--font-sans); margin-left: auto;">🧪 新功能调试</button>
-                <button class="tab-button" onclick="switchTab(6)" style="background: var(--secondary-light); color: var(--secondary-dark); border: none; padding: 10px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-weight: bold; font-size: 14px; font-family: var(--font-sans);">⚙️ 静态数据维护</button>
+                <button class="tab-button" onclick="switchTab(6)" style="background: var(--secondary-light); color: var(--secondary-dark); border: none; padding: 10px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-weight: bold; font-size: 14px; font-family: var(--font-sans);">⚙️ LOF基金配置</button>
             </div>
             <div id="tab-1" class="tab-content active" style="margin-bottom: 10px;">
                 <div class="card" style="margin-bottom: 10px;">
@@ -1175,29 +1175,13 @@
             </div>
             <div id="tab-6" class="tab-content" style="margin-bottom: 10px;">
                 <div class="card" style="margin-bottom: 10px; padding: 25px; background-color: #fafafa;">
-                    <div style="text-align: center; font-size: 16px; font-weight: bold; color: #555; margin-bottom: 20px;">数据维护控制面板</div>
+                    <div style="text-align: center; font-size: 16px; font-weight: bold; color: #555; margin-bottom: 20px;">LOF基金配置中心</div>
                     <div style="display: flex; gap: 30px; justify-content: center;">
-                        <div style="width: 150px; background: #eef6ff; border: 1px solid #cfe3ff; border-radius: 8px; padding: 15px; display:flex; flex-direction:column; justify-content: center; gap: 8px; box-shadow: var(--shadow-sm);">
-                            <div style="font-weight: bold; color: #1e4fa3; font-size: 18px; text-align: center;">A</div>
+                        <div style="width: 200px; background: #eef6ff; border: 1px solid #cfe3ff; border-radius: 8px; padding: 20px; display:flex; flex-direction:column; justify-content: center; gap: 12px; box-shadow: var(--shadow-sm);">
+                            <div style="font-weight: bold; color: #1e4fa3; font-size: 24px; text-align: center;">⚙️</div>
                             <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">配置中心</div>
-                            <button class="admin-btn" style="background:#2f6fed; color:#fff; padding:6px 12px; font-size:13px; align-self: center; border-radius:4px; border:none; cursor:pointer;" onclick="openConfig()">打开面板</button>
+                            <button class="admin-btn" style="background:#2f6fed; color:#fff; padding:10px 20px; font-size:14px; font-weight:bold; align-self: center; border-radius:6px; border:none; cursor:pointer; width: 100%;" onclick="openConfig()">打开配置面板</button>
                             <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;">状态: <b id="admin-lof00-status">未检测</b></div>
-                        </div>
-                        <div style="width: 180px; background: #fff6e6; border: 1px solid #ffd59e; border-radius: 8px; padding: 15px; display:flex; flex-direction:column; justify-content: center; gap: 8px; box-shadow: var(--shadow-sm);">
-                            <div style="font-weight: bold; color: #b25a00; font-size: 18px; text-align: center;">B</div>
-                            <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">数据采集(01)</div>
-                            <button class="admin-btn primary" style="background:#ff9f1a; color:#fff; padding: 6px 12px; font-size: 13px; align-self: center; border-radius:4px; border:none; cursor:pointer;" onclick="runAdminTask('01')">抓取全市场数据</button>
-                            <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;"><b id="admin-01-status">未知</b></div>
-                            <div style="font-size: 11px; color: #666; text-align:center;" id="admin-01-time">未运行</div>
-                            <button class="admin-btn" style="padding: 4px 8px; font-size: 11px; align-self: center; margin-top: 5px; border-radius:4px; cursor:pointer;" onclick="openAdminLog('01')">查看日志</button>
-                        </div>
-                        <div style="width: 180px; background: #ffeef1; border: 1px solid #f4c3cf; border-radius: 8px; padding: 15px; display:flex; flex-direction:column; justify-content: center; gap: 8px; box-shadow: var(--shadow-sm);">
-                            <div style="font-weight: bold; color: #1f7a4a; font-size: 18px; text-align: center;">C</div>
-                            <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">静态估值(012)</div>
-                            <button class="admin-btn primary" style="background:#f08aa5; color:#fff; padding: 6px 12px; font-size: 13px; align-self: center; border-radius:4px; border:none; cursor:pointer;" onclick="runAdminTask('012')">计算LOF新值</button>
-                            <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;"><b id="admin-012-status">未知</b></div>
-                            <div style="font-size: 11px; color: #666; text-align:center;" id="admin-012-time">未运行</div>
-                            <button class="admin-btn" style="padding: 4px 8px; font-size: 11px; align-self: center; margin-top: 5px; border-radius:4px; cursor:pointer;" onclick="openAdminLog('012')">查看日志</button>
                         </div>
                     </div>
                     <div style="text-align:center; font-size:12px; color:#888; margin-top:15px;" id="admin-msg"></div>
