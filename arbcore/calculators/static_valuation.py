@@ -39,12 +39,6 @@ class StaticValuationCalculator:
         factors_df = pd.read_sql("SELECT date, position as 仓位, hedge, calibration FROM fund_daily_factors WHERE fund_code = ?", conn, params=(fund_code,))
         df = pd.merge(df, factors_df, on='date', how='left')
         
-        # 智能填充仓位兜底
-        default_pos = fund.get('holdings', {}).get('equity_ratio', 100)
-        if default_pos > 1: default_pos = default_pos / 100.0
-        df['仓位'] = df['仓位'].fillna(default_pos)
-        df['仓位'] = df['仓位'].apply(lambda x: x / 100.0 if x > 1 else x)
-        
         # 4. 匹配海外底层 ETF 行情
         portfolio = fund.get('valuation_portfolio', [])
         if not portfolio:
@@ -77,10 +71,6 @@ class StaticValuationCalculator:
             weight_df = pd.read_sql(f'SELECT date, weight as "{sym}权重" FROM fund_basket_weights WHERE fund_code = ? AND underlying_symbol = ?', conn, params=(fund_code, sym))
             df = pd.merge(df, weight_df, on='date', how='left')
             
-            # 兜底
-            default_weight = item.get('weight', 0)
-            df[f"{sym}权重"] = df[f"{sym}权重"].fillna(default_weight)
-
         # 确保魔法锚点 ETF 也被拉入计算基座
         if primary_sym and primary_sym not in df.columns:
             primary_df = pd.read_sql(f'SELECT date, price as "{primary_sym}" FROM usa_etf_daily_prices WHERE symbol = ?', conn, params=(primary_sym,))
@@ -128,11 +118,27 @@ class StaticValuationCalculator:
         df.sort_values('date', ascending=False, inplace=True)
         df.reset_index(drop=True, inplace=True)
         
-        # 权重缺失值向下兼容 (bfill)
-        for sym in etf_symbols:
+        # === 核心修复：向下兼容 (bfill)，继承最近一个交易日的真实API因子 ===
+        # 1. 仓位与对冲校准值继承
+        for col in ['仓位', 'hedge', 'calibration', '黄金期货校准', '原油期货校准']:
+            if col in df.columns:
+                df[col] = df[col].bfill()
+                
+        # 2. ETF权重继承与兜底
+        for item in portfolio:
+            sym = item.get('symbol', '').replace('^', '')
+            if sym in ['GLD-JP', 'GLD-EU', 'USO-JP', 'USO-EU', 'USO-HK']:
+                sym = f"^{sym}"
             w_col = f"{sym}权重"
             if w_col in df.columns:
-                df[w_col] = df[w_col].bfill().fillna(0.0)
+                df[w_col] = df[w_col].bfill().fillna(item.get('weight', 0))
+                
+        # 3. 仓位终极兜底转换 (仅在连历史最老一天都没有API数据时才触发)
+        default_pos = fund.get('holdings', {}).get('equity_ratio', 100)
+        if default_pos > 1: default_pos = default_pos / 100.0
+        if '仓位' in df.columns:
+            df['仓位'] = df['仓位'].fillna(default_pos)
+            df['仓位'] = df['仓位'].apply(lambda x: x / 100.0 if x > 1 else x)
         
         # 初始化计算列占位符
         df['static_valuation'] = None
@@ -181,8 +187,8 @@ class StaticValuationCalculator:
             net_ratio = None
             
             # 🌟 魔法捷径：Woody 常量折叠极简推演
-            # 逻辑：只要 T-1 存在对冲因子，且 T 日主锚点 (如GLD) 正常读取，就走 O(1) 极速通道
-            if pd.notna(b_hedge) and b_hedge > 0 and primary_sym and primary_sym in row:
+            # 逻辑：仅限单一纯净ETF(如XOP/SPY)使用单一代入。多区域组合(黄金/原油)必须强制走矩阵兜底。
+            if pd.notna(b_hedge) and b_hedge > 0 and primary_sym and primary_sym in row and len(portfolio) == 1:
                 c_price = row.get(primary_sym)
                 if pd.notna(c_price) and c_price > 0:
                     val = calculate_magic_valuation(base_nav, position, c_price, cur_fx, b_hedge)

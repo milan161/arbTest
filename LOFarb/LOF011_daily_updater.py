@@ -55,6 +55,60 @@ class DailyUpdater:
         # 调用统一接口进行获取和解析
         return WoodyAPIService.fetch_and_process(self.db, codes, backup_dir, source_id='woody_lof')
 
+    def step2_5_sync_yaml_with_latest_factors(self):
+        """步骤2.5：将数据库中最新的真实仓位和权重同步反写回 lof_config.yaml"""
+        logger.info("=== 步骤2.5：同步最新因子到 lof_config.yaml ===")
+        try:
+            conn = self.db._get_conn()
+            yaml_updated = False
+            
+            for fund in self.config.get('funds', []):
+                code = str(fund.get('code', ''))
+                if not code: continue
+                
+                # 1. 查询最新仓位
+                pos_df = pd.read_sql("SELECT position FROM fund_daily_factors WHERE fund_code=? ORDER BY date DESC LIMIT 1", conn, params=(code,))
+                if not pos_df.empty and pd.notna(pos_df.iloc[0]['position']):
+                    new_pos = float(pos_df.iloc[0]['position'])
+                    if new_pos <= 1.5: new_pos = new_pos * 100  # 转换为百分比(防呆设计)
+                    
+                    old_pos = fund.get('holdings', {}).get('equity_ratio', 0)
+                    if abs(new_pos - old_pos) > 0.01:
+                        if 'holdings' not in fund: fund['holdings'] = {}
+                        fund['holdings']['equity_ratio'] = round(new_pos, 2)
+                        fund['holdings']['cash_ratio'] = round(100 - new_pos, 2)
+                        fund['position'] = round(new_pos, 2)
+                        yaml_updated = True
+                        logger.info(f"🔄 [{code}] YAML仓位已同步: {old_pos}% -> {new_pos:.2f}%")
+                
+                # 2. 查询最新权重
+                weight_df = pd.read_sql("SELECT underlying_symbol, weight FROM fund_basket_weights WHERE fund_code=? AND date=(SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)", conn, params=(code, code))
+                if not weight_df.empty:
+                    db_weights = {row['underlying_symbol'].replace('^', ''): float(row['weight']) for _, row in weight_df.iterrows() if pd.notna(row['weight'])}
+                    
+                    for port_key in ['valuation_portfolio', 'hedging_portfolio']:
+                        for item in fund.get(port_key, []):
+                            sym = item.get('symbol', '').replace('^', '')
+                            if sym in db_weights:
+                                new_w = db_weights[sym]
+                                old_w = item.get('weight', 0)
+                                if abs(new_w - old_w) > 0.01:
+                                    item['weight'] = round(new_w, 2)
+                                    yaml_updated = True
+                                    logger.info(f"🔄 [{code}] YAML权重已同步 ({sym}): {old_w}% -> {new_w:.2f}%")
+            conn.close()
+            
+            if yaml_updated:
+                config_file = os.path.join(os.path.dirname(__file__), "lof_config.yaml")
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    yaml.safe_dump(self.config, f, allow_unicode=True, sort_keys=False)
+                logger.info("✅ lof_config.yaml 文件已成功覆写更新！")
+            else:
+                logger.info("✅ 经对比，YAML中已是最新仓位权重，无需覆写。")
+                
+        except Exception as e:
+            logger.error(f"❌ 同步YAML配置失败: {e}")
+
     def step3_fetch_exchange_rate(self):
         """步骤三：抓取汇率（人民币中间价）存入库"""
         logger.info("=== 步骤三：抓取汇率（人民币中间价） ===")
@@ -308,6 +362,7 @@ class DailyUpdater:
     def run(self):
         logger.info("🚀 开始执行每日数据大一统更新流水线...")
         self.step1_and_2_fetch_woody_api()
+        self.step2_5_sync_yaml_with_latest_factors()
             
         self.step3_fetch_exchange_rate()
         self.step4_fetch_lof_market()

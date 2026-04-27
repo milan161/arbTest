@@ -14,9 +14,9 @@ from ibapi.contract import Contract
 from ibapi.order import Order
 
 class IBReader(EWrapper, EClient):
-    def __init__(self, client_id=5026, on_price_update=None):
+    def __init__(self, client_id=None, on_price_update=None):
         EClient.__init__(self, self)
-        self.client_id = client_id
+        self.client_id = client_id if client_id is not None else random.randint(1000, 9999)
         self.on_price_update = on_price_update  # 注入回调函数解耦 SocketIO
         self.target_ports = [4001, 4002, 7496, 7497] 
         self.current_port_index = 0
@@ -241,7 +241,11 @@ class IBReader(EWrapper, EClient):
         else:
             return
         # 🤫 彻底屏蔽 10089(延时警告) 和 10346(持仓通道被TWS强制抢占警告)
-        if errorCode in [2103, 2104, 2105, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
+        if errorCode in [2104, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
+            return
+            
+        if errorCode in [2103, 2105]:
+            print(f"[IBReader] ⚠️ IB数据农场连接断开 (代码 {errorCode}): {errorString} - 这将导致长连接无数据！")
             return
             
         # 智能诊断：拦截典型的“无行情订阅权限”错误码

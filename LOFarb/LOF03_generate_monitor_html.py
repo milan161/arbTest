@@ -135,6 +135,32 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
     if lof_df.empty:
         print(f"警告: 基金 {code} 无数据，跳过处理")
         return None, None, None
+        
+    # === 核心修复：动态提取基准日 (T-1) 的真实仓位和权重，彻底覆盖 YAML 默认值 ===
+    base_row = None
+    for _, row in lof_df.sort_values('date', ascending=False).iterrows():
+        nav_val = row.get('nav', 0)
+        if pd.notna(nav_val) and nav_val and float(nav_val) > 0:
+            base_row = row
+            break
+            
+    if base_row is not None:
+        db_pos = base_row.get('position', base_row.get('仓位'))
+        if pd.notna(db_pos) and db_pos != '无' and db_pos != '':
+            try:
+                pf = float(db_pos)
+                if pf > 1: pf = pf / 100.0
+                if pf > 0: pos_float = pf
+            except: pass
+            
+        for item in h_list:
+            sym = item['symbol']
+            weight_col = f"{sym}权重"
+            if weight_col in base_row:
+                db_w = base_row.get(weight_col)
+                if pd.notna(db_w) and db_w != '无' and db_w != '':
+                    try: item['weight'] = float(db_w)
+                    except: pass
     
     # 准备数据
     lof_df_sorted = lof_df.sort_values('date', ascending=False).reset_index(drop=True)
@@ -1302,7 +1328,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 <div style="display: flex; align-items: center; gap: 20px;">
                     <div style="font-size:18px; font-weight:bold;">{name} ({code})</div>
                     <div style="font-size:13px; color:#333;">
-                        基础仓位: <span style="font-weight:bold; color:#000;">{pos_float*100:.0f}%</span>
+                        基础仓位: <span style="font-weight:bold; color:#000;">{pos_float*100:.2f}%</span>
                         <span style="margin-left:30px; font-weight:bold; color:#000;">{hedge_info.replace('<div>对冲ETF: ', '对冲ETF: ').replace('</div>', '')}</span>
                     </div>
                 </div>
@@ -1327,7 +1353,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                     <div style="display: flex; align-items: center; gap: 20px;">
                         <div style="font-size:18px; font-weight:bold; color: #1976d2;">{name} ({code}) - 期货估值对账表</div>
                         <div style="font-size:13px; color:#333;">
-                            基础仓位: <span style="font-weight:bold; color:#000;">{pos_float*100:.0f}%</span>
+                            基础仓位: <span style="font-weight:bold; color:#000;">{pos_float*100:.2f}%</span>
                             <span style="margin-left:30px; font-weight:bold; color:#000;">挂钩锚点: {future_symbol} 新浪期货历史收盘价</span>
                         </div>
                     </div>
@@ -1419,7 +1445,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             <div class="history-header" style="position: sticky; top: 0; z-index: 100; background-color: #fffdf5; border-bottom: 2px solid #ffcc80; display: flex; align-items: center; justify-content: space-between; padding: 8px 15px !important; height: auto !important; min-height: 40px !important;">
                 <div style="display: flex; align-items: center; gap: 20px;">
                     <div style="font-size:18px; font-weight:bold; color: #d35400;">{name} ({code}) - 实时估值计算器</div>
-                    <div style="font-size:13px; color:#333;">基础仓位: <span style="font-weight:bold; color:#000;">{pos_float*100:.0f}%</span></div>
+                    <div style="font-size:13px; color:#333;">基础仓位: <span style="font-weight:bold; color:#000;">{pos_float*100:.2f}%</span></div>
                 </div>
                 <button onclick="goHome()" class="back-btn">⬅ 返回主面板</button>
             </div>
@@ -1715,6 +1741,24 @@ def generate(futures_data=None, ib_data=None):
                 if sym.replace('^', '') in ['GLD-JP', 'GLD-EU', 'USO-JP', 'USO-EU', 'USO-HK']:
                     item['symbol'] = f"^{sym.replace('^', '')}"
             
+            # === 核心修复：注入 JS 沙盘前，用基准日真实的 Woody 仓位和权重覆盖 ===
+            db_pos = base_row.get('position', base_row.get('仓位'))
+            if pd.notna(db_pos) and db_pos != '无' and db_pos != '':
+                try:
+                    pf = float(db_pos)
+                    if pf > 1: pf = pf / 100.0
+                    if pf > 0: position = pf
+                except: pass
+
+            for item in hedging_portfolio:
+                sym = item['symbol']
+                weight_col = f"{sym}权重"
+                if weight_col in base_row:
+                    db_w = base_row.get(weight_col)
+                    if pd.notna(db_w) and db_w != '无' and db_w != '':
+                        try: item['weight'] = float(db_w)
+                        except: pass
+
             base_exchange_rate = base_row.get('exchange_rate')
             if pd.isna(base_exchange_rate):
                 base_exchange_rate = None
@@ -2014,7 +2058,8 @@ def generate(futures_data=None, ib_data=None):
                     hedgeValue = baseData.etfHedgeValue; // 降级兜底
                 }
 
-                if (hedgeValue && hedgeValue > 0) {
+                // 🌟 魔法捷径：仅限单一资产(如XOP/QQQ)使用常量折叠。多资产变种组合绝不能用单一价格乘整体Hedge！
+                if (hedgeValue && hedgeValue > 0 && baseData.hedgingPortfolio.length === 1) {
                     var primarySym = baseData.hedgingPortfolio[0].symbol;
                     var currentAssetPrice = 0;
                     if (primarySym.includes('GLD')) currentAssetPrice = gldPrice;
@@ -2034,6 +2079,7 @@ def generate(futures_data=None, ib_data=None):
                 var weightedEtfChangeRate = 0;
                 var hasValidData = false;
                 var validWeight = 0;
+                
                 for (var i = 0; i < baseData.hedgingPortfolio.length; i++) {
                     var item = baseData.hedgingPortfolio[i];
                     var currentPrice = 0;
@@ -2046,7 +2092,7 @@ def generate(futures_data=None, ib_data=None):
                     else if (item.symbol.includes('QQQ')) currentPrice = qqqPrice;
                     
                     var basePrice = baseData.baseEtfPrices[item.symbol];
-                    if (basePrice > 0 && currentPrice > 0) {
+                    if (basePrice > 0 && currentPrice > 0 && item.weight > 0) {
                         weightedEtfChangeRate += (currentPrice / basePrice) * item.weight;
                         validWeight += item.weight;
                         hasValidData = true;
@@ -2169,6 +2215,12 @@ def generate(futures_data=None, ib_data=None):
                 if (window.calcPureFutureSandbox) {
                     window.calcPureFutureSandbox(code);
                 }
+                
+                // 启动盘口轮询定时器
+                window.pollOrderBookIntervals = window.pollOrderBookIntervals || {};
+                if(window.pollOrderBookIntervals[code]) clearInterval(window.pollOrderBookIntervals[code]);
+                window.pollOrderBook(code);
+                window.pollOrderBookIntervals[code] = setInterval(function() { window.pollOrderBook(code); }, 1000);
                 
                 // 5. 直接从主面板读取估值，然后用A股 LOF 测试单价计算溢价
                 var targetPriceEl = document.getElementById('sb-target-price-' + code);
@@ -2486,7 +2538,7 @@ def generate(futures_data=None, ib_data=None):
                 var hedgeValue = baseData.hedgeValue;
                 if (!hedgeValue || hedgeValue <= 0) hedgeValue = baseData.etfHedgeValue;
                 
-                if (hedgeValue && hedgeValue > 0 && baseData.hedgingPortfolio && baseData.hedgingPortfolio.length > 0) {
+                if (hedgeValue && hedgeValue > 0 && baseData.hedgingPortfolio && baseData.hedgingPortfolio.length === 1) {
                     var primarySym = baseData.hedgingPortfolio[0].symbol;
                     var baseSym = 'unknown';
                     if (primarySym.includes('GLD')) baseSym = 'gld';
@@ -2506,6 +2558,7 @@ def generate(futures_data=None, ib_data=None):
                 if (!val) {
                     var weightedChange = 0;
                     var validWeight = 0;
+                    
                     baseData.hedgingPortfolio.forEach(function(h) {
                         var sym = h.symbol;
                         var baseSym = 'unknown';
@@ -2523,7 +2576,7 @@ def generate(futures_data=None, ib_data=None):
                         
                         if (basePrice > 0 && currentPrice > 0 && weight > 0) {
                             weightedChange += (currentPrice / basePrice) * weight;
-                            validWeight += weight;
+                            validWeight += h.weight;
                         }
                     });
                 
@@ -4042,10 +4095,17 @@ def generate(futures_data=None, ib_data=None):
     
     # --- 拆分的表 5：新功能调试 (TAB 5) ---
     final_html += '            <div id="tab-5" class="tab-content" style="margin-bottom: 10px;">\n'
-    final_html += '                <div class="card" style="margin-bottom: 10px; padding: 40px; background-color: #fafafa; text-align: center; min-height: 300px;">\n'
-    final_html += '                    <h2 style="color: var(--primary-color);">🌾 自留地</h2>\n'
-    final_html += '                    <p style="color: var(--secondary-color); margin-top: 15px;">此处为新功能调试预留区域，暂无内容。</p>\n'
-    final_html += '                </div>\n'
+    
+    # 【机密隔离】尝试动态加载本地私密沙盘模块
+    try:
+        import LOF004_sandbox
+        final_html += LOF004_sandbox.generate_private_sniper_panel()
+    except ImportError:
+        final_html += '                <div class="card" style="margin-bottom: 10px; padding: 40px; background-color: #fafafa; text-align: center; min-height: 300px;">\n'
+        final_html += '                    <h2 style="color: var(--primary-color);">🌾 自留地</h2>\n'
+        final_html += '                    <p style="color: var(--secondary-color); margin-top: 15px;">此处为学生演示/新功能预留区域，暂无内容。</p>\n'
+        final_html += '                </div>\n'
+        
     final_html += '            </div>\n'
 
     # --- 拆分的表 6：LOF基金配置 (TAB 6) ---

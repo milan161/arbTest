@@ -79,7 +79,8 @@ class DynamicValuationCalculator:
         # --- 1. 纯 ETF 实时估值 (优先走魔法捷径) ---
         portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
         
-        if hedge and portfolio:
+        # 仅限单一ETF使用魔法捷径，多区域组合强制退回矩阵
+        if hedge and portfolio and len(portfolio) == 1:
             primary_sym = portfolio[0].get('symbol', '').replace('^', '')
             base_sym = 'GLD' if 'GLD' in primary_sym else ('USO' if 'USO' in primary_sym else ('XOP' if 'XOP' in primary_sym else ('XBI' if 'XBI' in primary_sym else ('SLV' if 'SLV' in primary_sym else ('SPY' if 'SPY' in primary_sym else ('QQQ' if 'QQQ' in primary_sym else primary_sym))))))
             c_price = current_etfs.get(base_sym, 0.0)
@@ -119,7 +120,7 @@ class DynamicValuationCalculator:
             if c_fut > 0:
                 # [魔法] 期货校准实时估值 (利用 calibration 将期货等效为 ETF)
                 eff_calib = calibration if calibration and calibration > 0 else (gold_calib if fut_sym == 'GC' else (oil_calib if fut_sym == 'CL' else None))
-                if eff_calib and hedge:
+                if eff_calib and hedge and len(portfolio) == 1:
                     c_future_etf = c_fut / eff_calib
                     result['fut_calib_val'] = calculate_magic_valuation(b_nav, position, c_future_etf, current_fx, hedge)
 

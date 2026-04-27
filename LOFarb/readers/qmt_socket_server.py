@@ -1,6 +1,6 @@
 # encoding: gbk
 # =================================================================
-# v4.0 绝杀版 - 银河QMT Socket Server端策略
+# v4.1 沙盘推演版 - 银河QMT Socket Server端策略
 # 【重要】此文件是运行在银河QMT客户端内部的策略代码
 # 不是Python主程序调用的，请在QMT策略编辑器中加载此代码
 # =================================================================
@@ -131,7 +131,7 @@ def broadcast_message(msg):
 
 def init(ContextInfo):
     global g_account_id, g_context
-    print("\n[策略日志] 加载 v4.0 绝杀版 Socket 策略 (同步并发锁)...")
+    print("\n[策略日志] 加载 v4.1 沙盘推演版 Socket 策略 (五档盘口与并发锁)...")
     g_account_id = '230500059288'
     g_context = ContextInfo
     ContextInfo.set_account(g_account_id)
@@ -141,7 +141,7 @@ def init(ContextInfo):
     t.start()
 
     ContextInfo.run_time("check_tasks", "1nSecond", "2020-01-01 09:30:00")
-    print("银河QMT Engine Initialized (v4.0 Mode).")
+    print("银河QMT Engine Initialized (v4.1 Sandbox Mode).")
 
 
 def push_ticks():
@@ -152,7 +152,19 @@ def push_ticks():
         try:
             ticks = g_context.get_full_tick(list(g_subscribed_stocks))
             for code, tick in ticks.items():
-                msg = f"TICK,{code},{tick.get('lastPrice', 0)},{tick.get('volume', 0)},{tick.get('timetag', '')}\n"
+                ap = tick.get('askPrice', [0, 0, 0, 0, 0])
+                av = tick.get('askVol', [0, 0, 0, 0, 0])
+                bp = tick.get('bidPrice', [0, 0, 0, 0, 0])
+                bv = tick.get('bidVol', [0, 0, 0, 0, 0])
+                
+                # 防御性截取，防止数组长度不够
+                ap = ap + [0]*5 if len(ap) < 5 else ap
+                av = av + [0]*5 if len(av) < 5 else av
+                bp = bp + [0]*5 if len(bp) < 5 else bp
+                bv = bv + [0]*5 if len(bv) < 5 else bv
+                
+                # 格式: TICK, code, lastPrice, volume, ask_p1, ask_v1, ask_p2, ask_v2, bid_p1, bid_v1, bid_p2, bid_v2, timetag
+                msg = f"TICK,{code},{tick.get('lastPrice', 0)},{tick.get('volume', 0)},{ap[0]},{av[0]},{ap[1]},{av[1]},{bp[0]},{bv[0]},{bp[1]},{bv[1]},{tick.get('timetag', '')}\n"
                 broadcast_message(msg)
         except Exception:
             pass

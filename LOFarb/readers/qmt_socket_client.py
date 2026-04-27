@@ -18,6 +18,7 @@ class QmtSocketClient:
         
         # 存储实时价格
         self.prices = {}
+        self.order_books = {}  # 存储完整盘口字典，供沙盘推演冲击成本使用
         self.lock = threading.Lock()
         
         # 价格更新回调函数
@@ -112,15 +113,52 @@ class QmtSocketClient:
         """处理接收到的消息"""
         if msg.startswith("TICK,"):
             parts = msg.split(',')
-            if len(parts) >= 5: # 假设TICK格式至少包含到卖一价 (TICK,code,last,bid,ask,...)
+            # 兼容新版全量盘口格式: TICK, code, last, vol, ask_p1, ask_v1, ask_p2, ask_v2, bid_p1, bid_v1, bid_p2, bid_v2, timetag
+            if len(parts) >= 12:
+                code_full = parts[1]
+                last_price = float(parts[2]) if parts[2] else 0
+                volume = float(parts[3]) if parts[3] else 0
+                ask_p1 = float(parts[4]) if parts[4] else 0
+                ask_v1 = float(parts[5]) if parts[5] else 0
+                ask_p2 = float(parts[6]) if parts[6] else 0
+                ask_v2 = float(parts[7]) if parts[7] else 0
+                bid_p1 = float(parts[8]) if parts[8] else 0
+                bid_v1 = float(parts[9]) if parts[9] else 0
+                bid_p2 = float(parts[10]) if parts[10] else 0
+                bid_v2 = float(parts[11]) if parts[11] else 0
+                
+                code = code_full.split('.')[0] if '.' in code_full else code_full
+                
+                # 优先使用卖一价，如果卖一价为0（比如涨停），则使用最新成交价作为替代
+                price_to_use = ask_p1 if ask_p1 > 0 else last_price
+
+                if price_to_use > 0:
+                    with self.lock:
+                        # 记录完整盘口，供 LOF04 沙盘推演滑点和冲击成本使用
+                        self.order_books[code] = {
+                            'last_price': last_price, 'volume': volume,
+                            'ask_p1': ask_p1, 'ask_v1': ask_v1,
+                            'ask_p2': ask_p2, 'ask_v2': ask_v2,
+                            'bid_p1': bid_p1, 'bid_v1': bid_v1,
+                            'bid_p2': bid_p2, 'bid_v2': bid_v2
+                        }
+                        
+                        old_price = self.prices.get(code, 0)
+                        self.prices[code] = price_to_use
+                        if old_price != price_to_use:
+                            print(f"⚡ [银河] {code} 价格更新: {price_to_use} (卖一: {ask_p1}, 最新: {last_price})")
+                            if self.on_price_update:
+                                try:
+                                    self.on_price_update(code, price_to_use)
+                                except Exception as e:
+                                    print(f"❌ [银河QMT] 回调执行失败: {e}")
+            # 兼容老版本格式回退，以防万一服务端还没重启
+            elif len(parts) >= 5:
                 code_full = parts[1]
                 last_price = float(parts[2]) if parts[2] else 0
                 ask_price = float(parts[4]) if parts[4] else 0
                 code = code_full.split('.')[0] if '.' in code_full else code_full
-                
-                # 优先使用卖一价，如果卖一价为0（比如涨停），则使用最新成交价作为替代
                 price_to_use = ask_price if ask_price > 0 else last_price
-
                 if price_to_use > 0:
                     with self.lock:
                         old_price = self.prices.get(code, 0)
@@ -140,6 +178,11 @@ class QmtSocketClient:
         with self.lock:
             return self.prices.get(code, 0)
     
+    def get_order_book(self, code: str) -> dict:
+        """获取指定代码的完整盘口数据"""
+        with self.lock:
+            return self.order_books.get(code, {})
+            
     def ping(self) -> bool:
         """心跳检测"""
         resp = self.single_shot_query("PING", timeout=5.0)

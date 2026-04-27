@@ -570,22 +570,45 @@ class LOFPriceReader:
                     if not hasattr(self, '_qmt_success_logged') and price > 0:
                         print("  ✅ [行情状态] 银河QMT数据接收成功，行情链路畅通！")
                         self._qmt_success_logged = True
-                    if old_price != price:
-                        socketio.emit('lof_price_update', {
-                            'code': code,
-                            'price': price,
-                            'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]
-                        })
+                        
+                    # 尝试从 qmt_client 提取完整五档盘口字典
+                    clean_code = code.split('.')[0] if '.' in code else code
+                    order_book = None
+                    if hasattr(self, 'qmt_client') and self.qmt_client:
+                        order_book = self.qmt_client.get_order_book(clean_code)
+                        
+                    # 1. 满足你在黑窗口看日志的需求 (为了防止刷屏太快，只在首次或价格变动时打印)
+                    if order_book and (old_price != price or not hasattr(self, '_first_tick_logged')):
+                        ask1 = order_book.get('ask1_p', price)
+                        last_p = order_book.get('last', price)
+                        print(f"⚡ [银河] {clean_code} 价格更新: {price:.3f} (卖一: {ask1:.3f}, 最新: {last_p:.3f})")
+                        self._first_tick_logged = True
+
+                    # 2. 将五档盘口打包，通过 WebSocket 穿透推送到前端自留地
+                    payload = {
+                        'code': clean_code,
+                        'price': price,
+                        'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                    }
+                    if order_book:
+                        payload['order_book'] = order_book # 附加五档数据
+                        # 额外发送沙盘专属深度数据事件
+                        socketio.emit('lof_order_book_update', {'code': clean_code, 'data': order_book})
+
+                    # 只要价格变动或者带有盘口数据，就推送给前端
+                    if old_price != price or order_book:
+                        socketio.emit('lof_price_update', payload)
                 
                 self.qmt_client = QmtSocketClient(on_price_update=on_qmt_price_update)
                 if self.qmt_client.connect():
-                    if self.qmt_client.ping():
-                        self.qmt_client.start_long_connection()
-                        qmt_codes = [self._get_qmt_code(c) for c in self.lof_codes]
-                        self.qmt_client.subscribe(qmt_codes)
-                        
-                        self.use_qmt = True
-                        print("  🚀 [引擎启动] 首选引擎【银河QMT Socket】已成功挂载！")
+                    self.qmt_client.start_long_connection()
+                    qmt_codes = [self._get_qmt_code(c) for c in self.lof_codes]
+                    self.qmt_client.subscribe(qmt_codes)
+                    
+                    self.use_qmt = True
+                    print("  🚀 [引擎启动] 首选引擎【银河QMT Socket】已成功挂载！")
+                else:
+                    print("  ⚠️ [引擎降级] 银河QMT Socket(8888端口)连接被拒绝，请确认QMT内是否已运行Server端！")
             except Exception as e:
                 print(f"  ⚠️ [引擎降级] 银河QMT初始化失败({e})，尝试备用通道...")
                 self.use_qmt = False
@@ -927,6 +950,19 @@ def reconnect_lof():
     lof_price_reader.reconnect()
     return jsonify({'status': 'success', 'source': lof_price_reader.get_source_name()})
 
+@app.route('/api/order_book/<code>')
+def get_order_book(code):
+    """获取指定A股的五档深度盘口"""
+    # 提取纯数字代码，兼容 '162411' 或 '162411.SZ'
+    clean_code = code.split('.')[0] if '.' in code else code
+    
+    if lof_price_reader.use_qmt and lof_price_reader.qmt_client:
+        book = lof_price_reader.qmt_client.get_order_book(clean_code)
+        if book:
+            return jsonify({'status': 'success', 'data': book})
+            
+    return jsonify({'status': 'error', 'message': '暂无盘口数据 (目前仅银河QMT Socket通道支持五档盘口)'})
+
 @app.route('/admin/run/<task>', methods=['POST'])
 def admin_run(task):
     if task == '011': _run_script_async("LOF011_daily_updater.py", "011")
@@ -1049,6 +1085,14 @@ if __name__ == "__main__":
             print("   1. 检查 VSCode 下方的终端面板，点击右侧的「垃圾桶」图标关闭所有旧终端。")
             print("   2. 或者打开 Windows 任务管理器，强制结束所有残留的 'python.exe' 进程。")
             print("   3. 清理完毕后，再次重新运行本脚本即可。")
+            print("❌"*20 + "\n")
+        elif "10013" in str(e):
+            print("\n" + "❌"*20)
+            print("【致命错误】Web服务器启动失败：[WinError 10013] 访问权限被拒绝！")
+            print("这说明你的 5000 端口被 Windows 系统服务强行锁死，或被管理员权限进程霸占。")
+            print("👉 解决办法：")
+            print("   1. 彻底重启一次电脑即可释放端口锁定。")
+            print("   2. 或打开任务管理器强制结束所有 python.exe 进程。")
             print("❌"*20 + "\n")
         else:
             print(f"启动服务器失败: {e}")
