@@ -1184,7 +1184,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                                     <span style="font-weight:bold; color:#1565c0; font-size:11px;">🌍 IB {us_sym}:</span>
                                     <input type="hidden" id="ib-trade-sym-{code}-{suffix}" value="{us_sym}">
                                     <span style="color:#666; font-size: 11px;">数量:</span>
-                                    <input type="number" id="ib-trade-vol-{code}-{suffix}" value="10" step="1" oninput="this.dataset.manual='true'" style="width:60px; padding:2px; border:1px solid #ccc; border-radius:4px; font-family:Consolas; font-weight:bold; font-size:11px;">
+                                    <input type="number" id="ib-trade-vol-{code}-{suffix}" value="10" step="10" oninput="this.dataset.manual='true'" style="width:60px; padding:2px; border:1px solid #ccc; border-radius:4px; font-family:Consolas; font-weight:bold; font-size:11px;">
                                     <span style="color:#666; font-size: 11px;">限价:</span>
                                     <input type="number" id="ib-trade-price-{code}-{suffix}" step="0.01" style="width:80px; padding:2px; border:1px solid #ccc; border-radius:4px; font-family:Consolas; font-weight:bold; color:#1565c0; font-size:11px;">
                                 </div>
@@ -2875,7 +2875,39 @@ def generate(futures_data=None, ib_data=None):
                 if (!vol || vol <= 0 || vol % 100 !== 0) { alert('⚠️ 委托数量必须是100的整数倍！'); return; }
                 
                 var actionText = action === 'BUY' ? '折价买入' : '溢价卖出(或折价赎回)';
-                if (!confirm('🚨 危险操作确认 🚨\n\n您确定要通过 ' + brokerNameDisplay + ' 自动执行以下交易吗？\n\n方向: ' + actionText + '\n代码: ' + code + '\n价格: ' + price + '\n数量: ' + vol)) return;
+                
+                var warningMsg = "";
+                var livePrice = 0;
+                var livePriceEl = document.getElementById('realtime-price-' + code);
+                if (livePriceEl) {
+                    var lpMatch = livePriceEl.textContent.match(/[\d.]+/);
+                    if (lpMatch) livePrice = parseFloat(lpMatch[0]);
+                }
+                
+                var currentAsk = 0;
+                if (window.latestOrderBooks && window.latestOrderBooks[code]) {
+                    var ob = window.latestOrderBooks[code];
+                    currentAsk = ob.ask_p1 || ob.ask1_p || 0;
+                }
+                
+                var refPrice = currentAsk > 0 ? currentAsk : livePrice;
+                if (refPrice > 0) {
+                    var diffPct = Math.abs(price - refPrice) / refPrice * 100;
+                    if (diffPct > 2.0) warningMsg += `\n\n🚨 【严重偏离警告】限价 ￥${price} 偏离参考价 ￥${refPrice} 达 ${diffPct.toFixed(2)}%！请检查数字！`;
+                    if (action === 'SELL' && price < refPrice * 0.99) warningMsg += `\n\n🚨 【倒挂砸盘警告】卖出价 ￥${price} 远低于市价 ￥${refPrice}！`;
+                    if (action === 'BUY') {
+                        if (currentAsk > 0 && price > currentAsk) {
+                            warningMsg += `\n\n🚨 【防误吃警告】买入价 ￥${price} 高于当前卖一价 ￥${currentAsk}！将立刻跨越盘口吃单成交！！！`;
+                        } else if (currentAsk === 0 && livePrice > 0 && price > livePrice * 1.01) {
+                            warningMsg += `\n\n🚨 【防误吃警告】买入价 ￥${price} 远高于市价 ￥${livePrice}！将立刻吃单成交！！！`;
+                        }
+                    }
+                }
+                
+                var confirmText = '🚨 危险操作确认 🚨\n\n您确定要通过 ' + brokerNameDisplay + ' 自动执行以下交易吗？\n\n方向: ' + actionText + '\n代码: ' + code + '\n价格: ￥' + price + '\n数量: ' + vol + ' 股';
+                if (warningMsg) confirmText += warningMsg;
+                
+                if (!confirm(confirmText)) return;
                 
                 var msgEl = document.getElementById('trade-msg-' + code + '-' + sandboxType);
                 msgEl.textContent = '🚀 指令发送中...';
@@ -2908,7 +2940,27 @@ def generate(futures_data=None, ib_data=None):
                 if (!priceInput || priceInput <= 0) { alert('⚠️ 请输入有效的限价！'); return; }
                 
                 var actionText = action === 'BUY' ? '买入平仓' : '卖空开仓';
-                if (!confirm('🚨 IB 危险操作确认\n\n您确定要通过 IB 自动执行以下美股交易吗？\n\n方向: ' + actionText + '\n标的: ' + symInput + '\n价格: ' + priceInput + '\n数量: ' + volInput)) return;
+                
+                var warningMsg = "";
+                if (window.latestIbPrices && window.latestIbPrices[symInput]) {
+                    var p = window.latestIbPrices[symInput];
+                    var bid = p.bid || 0;
+                    var ask = p.ask || 0;
+                    var marketPrice = ask > 0 ? ask : bid;
+                    if (marketPrice === 0) marketPrice = bid > 0 ? bid : ask;
+                    
+                    if (marketPrice > 0) {
+                        var diffPct = Math.abs(priceInput - marketPrice) / marketPrice * 100;
+                        if (diffPct > 1.0) warningMsg += `\n\n🚨 【严重偏离警告】限价 $${priceInput} 偏离当前盘口价($${marketPrice}) 达 ${diffPct.toFixed(2)}%！请确认是否错看百位/十位数！！！`;
+                        if (action === 'SELL' && ask > 0 && priceInput < ask) warningMsg += `\n\n🚨 【防误砸警告】卖空价 $${priceInput} 低于当前卖一价 $${ask}！定价过于激进，将跨盘口砸盘或直接吃单成交！！！`;
+                        if (action === 'BUY' && ask > 0 && priceInput > ask) warningMsg += `\n\n🚨 【防误吃警告】买入价 $${priceInput} 高于当前卖一价 $${ask}！将导致立刻吃单成交！！！`;
+                    }
+                }
+                
+                var confirmText = '🚨 IB 危险操作确认\n\n您确定要通过 IB 自动执行以下美股交易吗？\n\n方向: ' + actionText + '\n标的: ' + symInput + '\n价格: $' + priceInput + '\n数量: ' + volInput + ' 股';
+                if (warningMsg) confirmText += warningMsg;
+                
+                if (!confirm(confirmText)) return;
                 
                 var msgEl = document.getElementById('ib-trade-msg-' + code + '-' + sandboxType);
                 msgEl.textContent = '🚀 指令发送中...';
@@ -3857,6 +3909,10 @@ def generate(futures_data=None, ib_data=None):
                     const resp = await fetch(ADMIN_BASE + '/admin/status');
                     const data = await resp.json();
                     
+                    if (data['01']) setAdminStatus('01', data['01'].status, data['01'].last_run);
+                    if (data['012']) setAdminStatus('012', data['012'].status, data['012'].last_run);
+                    if (data['woody']) setAdminStatus('woody', data['woody'].status, data['woody'].last_run);
+
                     try {
                         const resp2 = await fetch(ADMIN_BASE + '/admin/lof00');
                         const info = await resp2.json();
@@ -4177,11 +4233,31 @@ def generate(futures_data=None, ib_data=None):
     final_html += '                <div class="card" style="margin-bottom: 10px; padding: 25px; background-color: #fafafa;">\n'
     final_html += '                    <div style="text-align: center; font-size: 16px; font-weight: bold; color: #555; margin-bottom: 20px;">LOF基金配置中心</div>\n'
     final_html += '                    <div style="display: flex; gap: 30px; justify-content: center;">\n'
+    final_html += '                    <div style="text-align: center; font-size: 16px; font-weight: bold; color: #555; margin-bottom: 20px;">全盘维护中心</div>\n'
+    final_html += '                    <div style="display: flex; gap: 30px; justify-content: center; flex-wrap: wrap;">\n'
     final_html += '                        <div style="width: 200px; background: #eef6ff; border: 1px solid #cfe3ff; border-radius: 8px; padding: 20px; display:flex; flex-direction:column; justify-content: center; gap: 12px; box-shadow: var(--shadow-sm);">\n'
     final_html += '                            <div style="font-weight: bold; color: #1e4fa3; font-size: 24px; text-align: center;">⚙️</div>\n'
     final_html += '                            <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">配置中心</div>\n'
     final_html += '                            <button class="admin-btn" style="background:#2f6fed; color:#fff; padding:10px 20px; font-size:14px; font-weight:bold; align-self: center; border-radius:6px; border:none; cursor:pointer; width: 100%;" onclick="openConfig()">打开配置面板</button>\n'
     final_html += '                            <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;">状态: <b id="admin-lof00-status">未检测</b></div>\n'
+    final_html += '                        </div>\n'
+    final_html += '                        <div style="width: 200px; background: #fff8e1; border: 1px solid #ffecb3; border-radius: 8px; padding: 20px; display:flex; flex-direction:column; justify-content: center; gap: 12px; box-shadow: var(--shadow-sm);">\n'
+    final_html += '                            <div style="font-weight: bold; color: #f57f17; font-size: 24px; text-align: center;">📥</div>\n'
+    final_html += '                            <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">数据大一统更新</div>\n'
+    final_html += '                            <button class="admin-btn" style="background:#fbc02d; color:#fff; padding:10px 20px; font-size:14px; font-weight:bold; align-self: center; border-radius:6px; border:none; cursor:pointer; width: 100%;" onclick="runAdminTask(\'01\')">拉取今日数据</button>\n'
+    final_html += '                            <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;">上次: <b id="admin-01-time">未运行</b></div>\n'
+    final_html += '                        </div>\n'
+    final_html += '                        <div style="width: 200px; background: #fce4ec; border: 1px solid #f8bbd0; border-radius: 8px; padding: 20px; display:flex; flex-direction:column; justify-content: center; gap: 12px; box-shadow: var(--shadow-sm);">\n'
+    final_html += '                            <div style="font-weight: bold; color: #c2185b; font-size: 24px; text-align: center;">⚡</div>\n'
+    final_html += '                            <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">Woody 因子强制更新</div>\n'
+    final_html += '                            <button class="admin-btn" style="background:#d81b60; color:#fff; padding:10px 20px; font-size:14px; font-weight:bold; align-self: center; border-radius:6px; border:none; cursor:pointer; width: 100%;" onclick="runAdminTask(\'woody\')">强制刷新 Woody</button>\n'
+    final_html += '                            <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;">上次: <b id="admin-woody-time">未运行</b></div>\n'
+    final_html += '                        </div>\n'
+    final_html += '                        <div style="width: 200px; background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px; padding: 20px; display:flex; flex-direction:column; justify-content: center; gap: 12px; box-shadow: var(--shadow-sm);">\n'
+    final_html += '                            <div style="font-weight: bold; color: #2e7d32; font-size: 24px; text-align: center;">🧮</div>\n'
+    final_html += '                            <div style="font-size: 13px; color: #555; text-align:center; margin-bottom: 5px;">全市场静态计算</div>\n'
+    final_html += '                            <button class="admin-btn" style="background:#43a047; color:#fff; padding:10px 20px; font-size:14px; font-weight:bold; align-self: center; border-radius:6px; border:none; cursor:pointer; width: 100%;" onclick="runAdminTask(\'012\')">重新计算估值</button>\n'
+    final_html += '                            <div style="font-size: 11px; color: #555; text-align:center; margin-top: 5px;">上次: <b id="admin-012-time">未运行</b></div>\n'
     final_html += '                        </div>\n'
     final_html += '                    </div>\n'
     final_html += '                    <div style="text-align:center; font-size:12px; color:#888; margin-top:15px;" id="admin-msg"></div>\n'

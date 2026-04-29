@@ -61,13 +61,29 @@ class DynamicValuationCalculator:
         if not b_nav or not b_fx or b_nav <= 0 or b_fx <= 0:
             return None
             
-        pos_val = fund_config.get('holdings', {}).get('equity_ratio', 100.0)
-        position = (pos_val / 100.0) if pos_val > 1 else pos_val
+        # 核心修正1：优先使用基准日(T-1)真实的仓位，严禁直接使用 YAML 配置里的最新(T)仓位
+        db_pos = base_data.get('仓位', base_data.get('position'))
+        if pd.notna(db_pos) and db_pos != '无' and db_pos != '':
+            try:
+                pf = float(db_pos)
+                position = pf if pf <= 1 else pf / 100.0
+            except:
+                pos_val = fund_config.get('holdings', {}).get('equity_ratio', 100.0)
+                position = (pos_val / 100.0) if pos_val > 1 else pos_val
+        else:
+            pos_val = fund_config.get('holdings', {}).get('equity_ratio', 100.0)
+            position = (pos_val / 100.0) if pos_val > 1 else pos_val
+            
         fx_change = current_fx / b_fx if current_fx > 0 else 1.0
         
-        factor = self.db.get_latest_fund_factor(code)
-        hedge = factor.get('hedge') if factor else None
-        calibration = factor.get('calibration') if factor else None
+        # 核心修正2：严格从基准日(T-1)提取魔法因子，严禁使用 get_latest_fund_factor 造成时间穿透
+        hedge = base_data.get('hedge')
+        if pd.isna(hedge) or hedge == '无' or hedge == '': hedge = None
+        else: hedge = float(hedge)
+        
+        calibration = base_data.get('calibration')
+        if pd.isna(calibration) or calibration == '无' or calibration == '': calibration = None
+        else: calibration = float(calibration)
 
         result = {
             'etf_val': None,

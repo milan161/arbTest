@@ -1019,6 +1019,21 @@ def api_ib_trade():
     success, msg = ib_reader_instance.place_us_order(symbol, action, volume, price)
     return jsonify({"status": "success" if success else "error", "message": msg})
 
+@app.route('/api/ib_cancel_all', methods=['POST'])
+def api_ib_cancel_all():
+    """一键撤销所有IB未成交订单"""
+    try:
+        if hasattr(ib_reader_instance, 'cancel_all_orders'):
+            success, msg = ib_reader_instance.cancel_all_orders()
+            if not success:
+                return jsonify({"status": "error", "message": msg})
+        else:
+            return jsonify({"status": "error", "message": "精准撤单机制未就绪，请在 TWS 客户端手动操作"})
+            
+        return jsonify({"status": "success", "message": "指令已发送: 仅撤销沙盘产生的挂单"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"撤单异常: {str(e)}"})
+
 @app.route('/sse/futures')
 def sse_futures():
     """SSE端点，用于实时推送期货数据"""

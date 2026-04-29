@@ -119,8 +119,8 @@ class StaticValuationCalculator:
         df.reset_index(drop=True, inplace=True)
         
         # === 核心修复：向下兼容 (bfill)，继承最近一个交易日的真实API因子 ===
-        # 1. 仓位与对冲校准值继承
-        for col in ['仓位', 'hedge', 'calibration', '黄金期货校准', '原油期货校准']:
+        # 1. 宏观期货校准继承 (注：严禁穿透继承 仓位、hedge 和 calibration)
+        for col in ['黄金期货校准', '原油期货校准']:
             if col in df.columns:
                 df[col] = df[col].bfill()
                 
@@ -180,7 +180,8 @@ class StaticValuationCalculator:
             if pd.isna(cur_fx) or cur_fx <= 0: continue
                 
             fx_change = cur_fx / base_fx
-            position = row['仓位']
+            # 核心修正：估值推演必须且只能使用基准日(T-1)的仓位，绝不能使用估值日(T)的仓位！
+            position = b_row['仓位']
             
             # 1. 计算【ETF 静态官方估值】
             val = None

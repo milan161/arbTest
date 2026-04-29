@@ -256,6 +256,12 @@ def admin_run_01():
 def admin_run_012():
     _run_script_async("LOF012_calculate_static_valuation.py", "012")
     return jsonify({"status": "started", "task": "012"}), 200
+
+@app.route("/admin/run/woody", methods=["GET", "POST"])
+def admin_run_woody():
+    _run_script_async("LOF011_daily_updater.py", "woody", force_woody=True)
+    return jsonify({"status": "started", "task": "woody"}), 200
+
 @app.route("/admin/run/calib", methods=["GET", "POST"])
 def admin_run_calib():
     _run_script_async("LOF011_daily_updater.py", "calib", extra_args=["--calib-only"])

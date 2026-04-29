@@ -2,6 +2,7 @@
 # woody_api_service.py - 统一的 Woody API 数据获取、备份与因子解析服务
 
 import os
+import os # 确保 os 模块被导入
 import json
 from datetime import datetime
 import pandas as pd
@@ -24,8 +25,14 @@ class WoodyAPIService:
         today_str = datetime.now().strftime('%Y-%m-%d')
         sync_key = f"{source_id}_batch"
         
+        force_update = os.environ.get("FORCE_WOODY_UPDATE", "0") == "1"
+
         # 1. 防刷检查
-        if db.is_access_synced_today(today_str, sync_key):
+        if force_update:
+            logger.warning(f"⚠️ FORCE_WOODY_UPDATE 环境变量已设置，强制重新拉取 {source_id} 数据...")
+            # 强制更新前，先移除旧的同步状态，确保新的成功同步能被记录
+            db.remove_access_sync_status(today_str, sync_key)
+        elif db.is_access_synced_today(today_str, sync_key):
             logger.info(f"✅ 今日已成功拉取过 {source_id}，防刷机制启动，跳过网络请求...")
             raw_content = db.get_raw_api_data(today_str, source_id)
             if not raw_content:

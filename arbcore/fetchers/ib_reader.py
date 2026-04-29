@@ -35,6 +35,7 @@ class IBReader(EWrapper, EClient):
         self.next_order_id = None
         self.req_events = {} 
         self.req_data = {} 
+        self.placed_order_ids = set() # 记录本实例下发的所有订单 ID，用于精准撤单
         
         # 内存长连接订阅池
         self.mkt_req_ids = {}
@@ -399,7 +400,7 @@ class IBReader(EWrapper, EClient):
         contract = Contract()
         contract.symbol = symbol
         contract.secType = "STK"
-        contract.exchange = "OVERNIGHT"
+        contract.exchange = "SMART"
         contract.currency = "USD"
         
         order = Order()
@@ -407,12 +408,38 @@ class IBReader(EWrapper, EClient):
         order.orderType = "LMT"
         order.totalQuantity = float(quantity)
         order.lmtPrice = float(price)
-        order.eTradeOnly = False
-        order.firmQuoteOnly = False
+        order.tif = "DAY"
         order.outsideRth = True # 允许在盘前盘后(夏令时夜盘)成交
         
         order_id = self.next_order_id
         self.placeOrder(order_id, contract, order)
+        self.placed_order_ids.add(order_id)
         self.next_order_id += 1 # 内部自增以便连续下单
         
         return True, f"指令已发送: {action} {quantity}股 {symbol} @ {price}"
+
+    def cancel_all_orders(self):
+        """精准撤单：只撤销本程序沙盘发出的订单，绝不误伤手机APP挂的单"""
+        if not self.isConnected():
+            return False, "IB 未连接"
+        try:
+            import inspect
+            sig = inspect.signature(self.cancelOrder)
+            
+            # 仅精准撤销本程序下发的活动订单，对手机APP手动单秋毫无犯
+            for oid in list(self.placed_order_ids):
+                if 'orderCancel' in sig.parameters:
+                    try:
+                        from ibapi.order import OrderCancel
+                        self.cancelOrder(oid, OrderCancel())
+                    except ImportError:
+                        self.cancelOrder(oid, None)
+                elif 'manualOrderCancelTime' in sig.parameters:
+                    self.cancelOrder(oid, "")
+                else:
+                    self.cancelOrder(oid)
+                    
+            self.placed_order_ids.clear()
+            return True, "沙盘挂单已精准撤销 (您的手机手动MOC单不受影响)"
+        except Exception as e:
+            return False, f"撤单异常: {str(e)}"

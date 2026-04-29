@@ -380,6 +380,16 @@ class DatabaseManager:
         conn.close()
         return result is not None
 
+    def remove_access_sync_status(self, sync_date: str, source: str):
+        """移除指定日期和来源的访问同步状态，强制允许重新抓取"""
+        with self.lock:
+            conn = self._get_conn()
+            query = "DELETE FROM access_sync_status WHERE sync_date = ? AND access_source = ?"
+            conn.execute(query, (sync_date, source))
+            conn.commit()
+            conn.close()
+
+
     # 兼容过渡期旧代码 (防止系统中其他旧代码报错)
     def mark_api_synced(self, sync_date: str, source: str):
         self.mark_access_synced(sync_date, source)
