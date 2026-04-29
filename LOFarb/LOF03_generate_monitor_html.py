@@ -1833,10 +1833,24 @@ def generate(futures_data=None, ib_data=None):
                 latest_calibration_factor = gold_calibration
             elif category == '原油':
                 latest_calibration_factor = oil_calibration
+            if base_row is not None:
+                try:
+                    cal = base_row.get('calibration', 0.0)
+                    if pd.notna(cal) and cal != '无':
+                        latest_calibration_factor = float(cal)
+                except:
+                    pass
+                    
+            # 如果基金自身没有校准值，且属于黄金原油，则用全局期货校准值兜底
+            if latest_calibration_factor <= 0:
+                if category == '黄金':
+                    latest_calibration_factor = gold_calibration
+                elif category == '原油':
+                    latest_calibration_factor = oil_calibration
             
             if base_row is not None:
                 try:
-                    hv = base_row.get('hedge_value', 0.0)
+                    hv = base_row.get('hedge_value', base_row.get('hedge', 0.0))
                     if pd.notna(hv) and hv != '无':
                         hedge_value = float(hv)
                 except:
@@ -2060,14 +2074,23 @@ def generate(futures_data=None, ib_data=None):
                     return 0; // 彻底没有有效汇率，强制熔断返回0
                 }
                 
-                // 🌟 魔法捷径：提取 O(1) 常量折叠对冲因子
-                var hedgeValue = baseData.hedgeValue;
-                if (!hedgeValue || hedgeValue <= 0) {
-                    hedgeValue = baseData.etfHedgeValue; // 降级兜底
+                // 🌟 魔法公式：使用真实的 Woody Calibration 计算实时估值
+                var calibration = baseData.latestCalibrationFactor;
+                var position = baseData.position;
+                
+                // 如果后端没有传真实的 calibration，则用 hedgeValue 动态推导一个兜底的 calibration
+                if (!calibration || calibration <= 0) {
+                    var hedgeValue = baseData.hedgeValue;
+                    if (!hedgeValue || hedgeValue <= 0) {
+                        hedgeValue = baseData.etfHedgeValue; 
+                    }
+                    if (hedgeValue && hedgeValue > 0 && position > 0) {
+                        calibration = hedgeValue * position;
+                    }
                 }
 
-                // 🌟 魔法捷径：仅限单一资产(如XOP/QQQ)使用常量折叠。多资产变种组合绝不能用单一价格乘整体Hedge！
-                if (hedgeValue && hedgeValue > 0 && baseData.hedgingPortfolio.length === 1) {
+                // 🌟 仅限单一资产(如XOP/QQQ)使用校准魔法。多资产变种组合(如黄金、原油)强制退回矩阵。
+                if (calibration && calibration > 0 && baseData.hedgingPortfolio.length === 1 && position > 0) {
                     var primarySym = baseData.hedgingPortfolio[0].symbol;
                     var currentAssetPrice = 0;
                     if (primarySym.includes('GLD')) currentAssetPrice = gldPrice;
@@ -2079,11 +2102,12 @@ def generate(futures_data=None, ib_data=None):
                     else if (primarySym.includes('QQQ')) currentAssetPrice = qqqPrice;
                     
                     if (currentAssetPrice > 0) {
-                        return baseData.baseNav * (1.0 - baseData.position) + (currentAssetPrice * todayExchangeRate) / hedgeValue;
+                        // 原汁原味的 Woody 公式：实时估值 = 现金底仓 + (仓位 / Calibration) * (ETF实时价 * 实时汇率)
+                        return baseData.baseNav * (1.0 - position) + (position / calibration) * (currentAssetPrice * todayExchangeRate);
                     }
                 }
                 
-                // 🌟 矩阵兜底：当魔法因子完全缺失时，退回 T-1 权重矩阵
+                // 🌟 矩阵兜底：商品多资产组合(黄金/原油)，或魔法因子缺失时，退回 T-1 权重矩阵
                 var weightedEtfChangeRate = 0;
                 var hasValidData = false;
                 var validWeight = 0;
