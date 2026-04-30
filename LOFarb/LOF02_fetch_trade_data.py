@@ -566,6 +566,13 @@ class LOFPriceReader:
             # 【优先级1】尝试挂载银河QMT Socket长连接
             try:
                 def on_qmt_price_update(code, raw_price):
+                    # 健壮性修复：检查 raw_price 是否为有效数字，过滤掉时间戳等异常数据
+                    try:
+                        # 尝试将 raw_price 转换为浮点数。如果失败，说明不是价格数据，直接忽略。
+                        price_from_raw = float(raw_price)
+                    except (ValueError, TypeError):
+                        return # 静默忽略非价格数据
+
                     clean_code = code.split('.')[0] if '.' in code else code
                     
                     # 尝试从 qmt_client 提取完整五档盘口字典
@@ -574,7 +581,7 @@ class LOFPriceReader:
                         order_book = self.qmt_client.get_order_book(clean_code)
                         
                     # 严格遵循“卖一价”原则，如果卖一价为0（如涨停封板），则兜底使用 raw_price (通常是最新成交价)
-                    price = raw_price
+                    price = price_from_raw # 使用已经验证过的数字
                     if order_book:
                         ask1 = float(order_book.get('ask1_p', order_book.get('ask_p1', 0)))
                         if ask1 > 0:
@@ -590,9 +597,9 @@ class LOFPriceReader:
                     # 1. 满足你在黑窗口看日志的需求 (为了防止刷屏太快，只在首次或价格变动时打印)
                     log_flag = f'_tick_logged_{clean_code}'
                     if order_book and (old_price != price or not hasattr(self, log_flag)):
-                        ask1_print = order_book.get('ask1_p', order_book.get('ask_p1', raw_price))
-                        last_p = order_book.get('last_price', raw_price)
-                        print(f"⚡ [银河] {clean_code} 价格更新: {price:.3f} (卖一: {ask1_print:.3f}, 最新: {last_p:.3f})")
+                        ask1_print = order_book.get('ask1_p', order_book.get('ask_p1', price_from_raw))
+                        last_p = order_book.get('last_price', price_from_raw)
+                        print(f"⚡ [银河] {clean_code} 价格更新: {price:.3f} (卖一: {float(ask1_print):.3f}, 最新: {float(last_p):.3f})")
                         setattr(self, log_flag, True)
 
                     # 2. 将五档盘口打包，通过 WebSocket 穿透推送到前端自留地

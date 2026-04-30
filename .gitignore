@@ -46,6 +46,6 @@ venv/
 # ====================
 # 数据库文件
 # ====================
-# 忽略数据库文件，只保留文件夹结构
-database/*.db
-database/*.sqlite
+# 忽略 database 目录及其子目录下的所有数据库文件
+database/**/*.db
+database/**/*.sqlite

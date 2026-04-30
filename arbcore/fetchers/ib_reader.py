@@ -44,6 +44,25 @@ class IBReader(EWrapper, EClient):
         self.running = False
         self.polling_thread = None
 
+    def is_us_night_session(self):
+        """判断当前是否为IBKR美股夜盘交易时段 (北京时间)"""
+        now = datetime.now()
+        current_time = now.time()
+        # 夏令时：3月第二个周日到11月第一个周日。简单处理为3-11月。
+        is_summer_time = 3 <= now.month <= 11
+        if is_summer_time:
+            # 美东时间 20:00 - 03:50 -> 北京时间 08:00 - 15:50
+            night_start = datetime.strptime("08:00", "%H:%M").time()
+            night_end = datetime.strptime("15:50", "%H:%M").time()
+        else:
+            # 美东时间 20:00 - 03:50 -> 北京时间 09:00 - 16:50
+            night_start = datetime.strptime("09:00", "%H:%M").time()
+            night_end = datetime.strptime("16:50", "%H:%M").time()
+        
+        # 周一到周五
+        is_weekday = 0 <= now.weekday() <= 4
+        return is_weekday and (night_start <= current_time < night_end)
+
     def _get_next_req_id(self):
         self.req_id_counter += 1
         return self.req_id_counter
@@ -170,19 +189,7 @@ class IBReader(EWrapper, EClient):
             
             self.fetch_prev_closes_once()
 
-            now = datetime.now()
-            current_time = now.time()
-            is_summer_time = 3 <= now.month <= 11
-            if is_summer_time:
-                night_start = datetime.strptime("08:00", "%H:%M").time()
-                night_end = datetime.strptime("16:00", "%H:%M").time()
-                session_name = "夏令时"
-            else:
-                night_start = datetime.strptime("09:00", "%H:%M").time()
-                night_end = datetime.strptime("17:00", "%H:%M").time()
-                session_name = "冬令时"
-            
-            is_night = night_start <= current_time < night_end
+            is_night = self.is_us_night_session()
             
             if not is_night:
                 self.prices, self.sources, self.last_update_time = {}, {}, datetime.now()
@@ -400,23 +407,42 @@ class IBReader(EWrapper, EClient):
         contract = Contract()
         contract.symbol = symbol
         contract.secType = "STK"
-        contract.exchange = "SMART"
+        
+        # 🛡️ 智能追加 Primary Exchange (主交易所)
+        # 直接路由时，如果没有 primaryExchange，极易被系统当作歧义合约而瞬间拒单 (Error 201)
+        primary_map = {"QQQ": "NASDAQ", "SPY": "ARCA", "GLD": "ARCA", "USO": "ARCA", "XOP": "ARCA", "XBI": "ARCA", "SLV": "ARCA"}
+        # 🛡️ 核心修复：夜盘直连 OVERNIGHT 必须移除 primaryExchange，否则 Gateway 的 Sec-def 断连时极易导致 201 废单
+        if symbol in primary_map and not self.is_us_night_session():
+            contract.primaryExchange = primary_map[symbol]
+            
+        # 智能判断交易所 (根据测试脚本的成功经验，统一使用 OVERNIGHT)
+        if self.is_us_night_session():
+            contract.exchange = "OVERNIGHT"
+            print("[IBReader] 智能路由: 检测到夜盘时段，订单交易所切换为 OVERNIGHT")
+        else:
+            contract.exchange = "SMART"
+            print("[IBReader] 智能路由: 非夜盘时段，订单交易所使用 SMART")
         contract.currency = "USD"
         
         order = Order()
         order.action = action # 'BUY' 或 'SELL'
+        
+        # 🛡️ 核心修复：API卖空指令的正确姿势。Gateway 不会像 TWS 界面那样自动转换，必须显式声明融券来源
+        if action == "SELL":
+            order.shortSaleSlot = 1
+            
         order.orderType = "LMT"
         order.totalQuantity = float(quantity)
         order.lmtPrice = float(price)
         order.tif = "DAY"
-        order.outsideRth = True # 允许在盘前盘后(夏令时夜盘)成交
+        order.outsideRth = True # 与测试脚本保持100%一致，允许盘外交易
         
         order_id = self.next_order_id
         self.placeOrder(order_id, contract, order)
         self.placed_order_ids.add(order_id)
         self.next_order_id += 1 # 内部自增以便连续下单
         
-        return True, f"指令已发送: {action} {quantity}股 {symbol} @ {price}"
+        return True, f"指令已发送: {action} {quantity}股 {symbol} @ {price} (路由: {contract.exchange})"
 
     def cancel_all_orders(self):
         """精准撤单：只撤销本程序沙盘发出的订单，绝不误伤手机APP挂的单"""

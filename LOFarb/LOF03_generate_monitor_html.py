@@ -2249,12 +2249,11 @@ def generate(futures_data=None, ib_data=None):
                 if (window.calcPureFutureSandbox) {
                     window.calcPureFutureSandbox(code);
                 }
-                
-                // 启动盘口轮询定时器
-                window.pollOrderBookIntervals = window.pollOrderBookIntervals || {};
-                if(window.pollOrderBookIntervals[code]) clearInterval(window.pollOrderBookIntervals[code]);
-                window.pollOrderBook(code);
-                window.pollOrderBookIntervals[code] = setInterval(function() { window.pollOrderBook(code); }, 1000);
+                // 已废弃旧的轮询方式，现在使用 socketio lof_order_book_update 实时推送
+                // window.pollOrderBookIntervals = window.pollOrderBookIntervals || {};
+                // if(window.pollOrderBookIntervals[code]) clearInterval(window.pollOrderBookIntervals[code]);
+                // window.pollOrderBook(code);
+                // window.pollOrderBookIntervals[code] = setInterval(function() { window.pollOrderBook(code); }, 1000);
                 
                 // 5. 直接从主面板读取估值，然后用A股 LOF 测试单价计算溢价
                 var targetPriceEl = document.getElementById('sb-target-price-' + code);
@@ -3580,6 +3579,7 @@ def generate(futures_data=None, ib_data=None):
                 pages.forEach(function(page) { page.classList.remove('active'); });
                 var targetPage = document.getElementById(pageId);
                 if (targetPage) { targetPage.classList.add('active'); }
+                window.scrollTo(0, 0);
             }
             
             function goHome() {
@@ -3587,6 +3587,7 @@ def generate(futures_data=None, ib_data=None):
                 pages.forEach(function(page) { page.classList.remove('active'); });
                 var homePage = document.getElementById('page-home');
                 if (homePage) { homePage.classList.add('active'); }
+                window.scrollTo(0, 0);
             }
             
             function toggleVerify(uid) {
@@ -4278,6 +4279,7 @@ def generate(futures_data=None, ib_data=None):
     final_html += '                    <div style="text-align:center; font-size:12px; color:#888; margin-top:15px;" id="admin-msg"></div>\n'
     final_html += '                </div>\n'
     final_html += '            </div>\n'
+    final_html += '          </div>\n'
 
     final_html += '        </div>\n'  # 统一闭合主面板 page-home 容器
 
