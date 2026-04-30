@@ -2060,7 +2060,7 @@ def generate(futures_data=None, ib_data=None):
             }
             
             // 高效的O(1)计算实时估值函数，抛弃AJAX读取CSV的卡顿机制
-            function calculateETFRealTimeValuation(fundCode, category, gldPrice, usoPrice, xopPrice, xbiPrice, slvPrice, spyPrice, qqqPrice, staticValuation) {
+            function calculateETFRealTimeValuation(fundCode, category, gldPrice, usoPrice, xopPrice, xbiPrice, xlyPrice, slvPrice, spyPrice, qqqPrice, staticValuation) {
                 var baseData = window.fundBaseData[fundCode];
                 if (!baseData || !baseData.position || baseData.hedgingPortfolio.length === 0) {
                     return 0;
@@ -2097,6 +2097,7 @@ def generate(futures_data=None, ib_data=None):
                     else if (primarySym.includes('USO')) currentAssetPrice = usoPrice;
                     else if (primarySym.includes('XOP')) currentAssetPrice = xopPrice;
                     else if (primarySym.includes('XBI')) currentAssetPrice = xbiPrice;
+                    else if (primarySym.includes('XLY')) currentAssetPrice = xlyPrice;
                     else if (primarySym.includes('SLV')) currentAssetPrice = slvPrice;
                     else if (primarySym.includes('SPY')) currentAssetPrice = spyPrice;
                     else if (primarySym.includes('QQQ')) currentAssetPrice = qqqPrice;
@@ -2119,6 +2120,7 @@ def generate(futures_data=None, ib_data=None):
                     else if (item.symbol.includes('USO')) currentPrice = usoPrice;
                     else if (item.symbol.includes('XOP')) currentPrice = xopPrice;
                     else if (item.symbol.includes('XBI')) currentPrice = xbiPrice;
+                    else if (item.symbol.includes('XLY')) currentPrice = xlyPrice;
                     else if (item.symbol.includes('SLV')) currentPrice = slvPrice;
                     else if (item.symbol.includes('SPY')) currentPrice = spyPrice;
                     else if (item.symbol.includes('QQQ')) currentPrice = qqqPrice;
@@ -2994,7 +2996,7 @@ def generate(futures_data=None, ib_data=None):
                 
                 var useIB = document.getElementById('source-ib') && document.getElementById('source-ib').checked;
                 var badge = document.getElementById('active-source-badge');
-                var gldPrice = 0, usoPrice = 0, xopPrice = 0, xbiPrice = 0, slvPrice = 0, spyPrice = 0, qqqPrice = 0;
+                var gldPrice = 0, usoPrice = 0, xopPrice = 0, xbiPrice = 0, xlyPrice = 0, slvPrice = 0, spyPrice = 0, qqqPrice = 0;
                 
                 console.log('===== calculateRealTimeValues 调试 =====');
                 console.log('数据源:', useIB ? 'IB' : '手工');
@@ -3006,6 +3008,7 @@ def generate(futures_data=None, ib_data=None):
                     var u = document.getElementById('ib-val-uso')?.textContent || '0';
                     var x = document.getElementById('ib-val-xop')?.textContent || '0';
                     var xbi = document.getElementById('ib-val-xbi')?.textContent || '0';
+                    var xly = document.getElementById('ib-val-xly')?.textContent || '0';
                     var s = document.getElementById('ib-val-slv')?.textContent || '0';
                     var spy = document.getElementById('ib-val-spy')?.textContent || '0';
                     var qqq = document.getElementById('ib-val-qqq')?.textContent || '0';
@@ -3013,6 +3016,7 @@ def generate(futures_data=None, ib_data=None):
                     usoPrice = parseFloat(u) || 0;
                     xopPrice = parseFloat(x) || 0;
                     xbiPrice = parseFloat(xbi) || 0;
+                    xlyPrice = parseFloat(xly) || 0;
                     slvPrice = parseFloat(s) || 0;
                     spyPrice = parseFloat(spy) || 0;
                     qqqPrice = parseFloat(qqq) || 0;
@@ -3022,12 +3026,13 @@ def generate(futures_data=None, ib_data=None):
                     usoPrice = parseFloat(document.getElementById('uso-price')?.value) || 0;
                     xopPrice = parseFloat(document.getElementById('xop-price')?.value) || 0;
                     xbiPrice = parseFloat(document.getElementById('xbi-price')?.value) || 0;
+                    xlyPrice = parseFloat(document.getElementById('xly-price')?.value) || 0;
                     slvPrice = parseFloat(document.getElementById('slv-price')?.value) || 0;
                     spyPrice = parseFloat(document.getElementById('spy-price')?.value) || 0;
                     qqqPrice = parseFloat(document.getElementById('qqq-price')?.value) || 0;
                 }
                 
-                console.log('价格 - GLD:', gldPrice, 'USO:', usoPrice, 'XOP:', xopPrice, 'XBI:', xbiPrice, 'SLV:', slvPrice, 'SPY:', spyPrice, 'QQQ:', qqqPrice);
+                console.log('价格 - GLD:', gldPrice, 'USO:', usoPrice, 'XOP:', xopPrice, 'XBI:', xbiPrice, 'XLY:', xlyPrice, 'SLV:', slvPrice, 'SPY:', spyPrice, 'QQQ:', qqqPrice);
                 console.log('汇率元素:', document.getElementById('exchange-rate-display')?.textContent);
                 
                 var allRows = document.querySelectorAll('tbody tr');
@@ -3083,6 +3088,7 @@ def generate(futures_data=None, ib_data=None):
                                 else if (item.symbol.includes('USO')) curP = usoPrice;
                                 else if (item.symbol.includes('XOP')) curP = xopPrice;
                                 else if (item.symbol.includes('XBI')) curP = xbiPrice;
+                                else if (item.symbol.includes('XLY')) curP = xlyPrice;
                                 else if (item.symbol.includes('SLV')) curP = slvPrice;
                                 else if (item.symbol.includes('SPY')) curP = spyPrice;
                                 else if (item.symbol.includes('QQQ')) curP = qqqPrice;
@@ -3092,7 +3098,7 @@ def generate(futures_data=None, ib_data=None):
                         
                         if (canCalculate) {
                             
-                            var etfRealTimeValuation = window.calculateETFRealTimeValuation(code, category, gldPrice, usoPrice, xopPrice, xbiPrice, slvPrice, spyPrice, qqqPrice, staticValuation);
+                            var etfRealTimeValuation = window.calculateETFRealTimeValuation(code, category, gldPrice, usoPrice, xopPrice, xbiPrice, xlyPrice, slvPrice, spyPrice, qqqPrice, staticValuation);
                             
                             if (etfRealTimeValuation && etfRealTimeValuation > 0) {
                                 var etfRealTimePremium = (closePrice - etfRealTimeValuation) / etfRealTimeValuation * 100;
@@ -3141,13 +3147,14 @@ def generate(futures_data=None, ib_data=None):
                     uso: usoPrice,
                     xop: xopPrice,
                     xbi: xbiPrice,
+                    xly: xlyPrice,
                     slv: slvPrice,
                     spy: spyPrice,
                     qqq: qqqPrice
                 };
                 
                 localStorage.setItem('nightSessionPrices', JSON.stringify({
-                    GLD: gldPrice, USO: usoPrice, XOP: xopPrice, XBI: xbiPrice, SLV: slvPrice, SPY: spyPrice, QQQ: qqqPrice, timestamp: new Date().getTime()
+                    GLD: gldPrice, USO: usoPrice, XOP: xopPrice, XBI: xbiPrice, XLY: xlyPrice, SLV: slvPrice, SPY: spyPrice, QQQ: qqqPrice, timestamp: new Date().getTime()
                 }));
                 
                 // 行情跳动后，刷新所有已打开沙盘的对冲数量
@@ -3727,6 +3734,7 @@ def generate(futures_data=None, ib_data=None):
                             if (prices.USO && document.getElementById('uso-price')) document.getElementById('uso-price').value = parseFloat(prices.USO).toFixed(3);
                             if (prices.XOP && document.getElementById('xop-price')) document.getElementById('xop-price').value = parseFloat(prices.XOP).toFixed(3);
                             if (prices.XBI && document.getElementById('xbi-price')) document.getElementById('xbi-price').value = parseFloat(prices.XBI).toFixed(3);
+                            if (prices.XLY && document.getElementById('xly-price')) document.getElementById('xly-price').value = parseFloat(prices.XLY).toFixed(3);
                             if (prices.SLV && document.getElementById('slv-price')) document.getElementById('slv-price').value = parseFloat(prices.SLV).toFixed(3);
                             if (prices.SPY && document.getElementById('spy-price')) document.getElementById('spy-price').value = parseFloat(prices.SPY).toFixed(3);
                             if (prices.QQQ && document.getElementById('qqq-price')) document.getElementById('qqq-price').value = parseFloat(prices.QQQ).toFixed(3);
@@ -3752,6 +3760,7 @@ def generate(futures_data=None, ib_data=None):
                             document.getElementById('ib-val-uso').textContent = prices.USO && prices.USO.bid ? prices.USO.bid.toFixed(2) : '-';
                             document.getElementById('ib-val-xop').textContent = prices.XOP && prices.XOP.bid ? prices.XOP.bid.toFixed(2) : '-';
                             document.getElementById('ib-val-xbi').textContent = prices.XBI && prices.XBI.bid ? prices.XBI.bid.toFixed(2) : '-';
+                            document.getElementById('ib-val-xly').textContent = prices.XLY && prices.XLY.bid ? prices.XLY.bid.toFixed(2) : '-';
                             document.getElementById('ib-val-slv').textContent = prices.SLV && prices.SLV.bid ? prices.SLV.bid.toFixed(2) : '-';
                             if(document.getElementById('ib-val-spy')) document.getElementById('ib-val-spy').textContent = prices.SPY && prices.SPY.bid ? prices.SPY.bid.toFixed(2) : '-';
                             if(document.getElementById('ib-val-qqq')) document.getElementById('ib-val-qqq').textContent = prices.QQQ && prices.QQQ.bid ? prices.QQQ.bid.toFixed(2) : '-';
@@ -3803,6 +3812,7 @@ def generate(futures_data=None, ib_data=None):
                             if (document.getElementById('prev-val-uso')) document.getElementById('prev-val-uso').textContent = prevCloses.USO ? prevCloses.USO.toFixed(2) : '-';
                             if (document.getElementById('prev-val-xop')) document.getElementById('prev-val-xop').textContent = prevCloses.XOP ? prevCloses.XOP.toFixed(2) : '-';
                             if (document.getElementById('prev-val-slv')) document.getElementById('prev-val-slv').textContent = prevCloses.SLV ? prevCloses.SLV.toFixed(2) : '-';
+                        if (document.getElementById('prev-val-xly')) document.getElementById('prev-val-xly').textContent = prevCloses.XLY ? prevCloses.XLY.toFixed(2) : '-';
                         if (document.getElementById('prev-val-xbi')) document.getElementById('prev-val-xbi').textContent = prevCloses.XBI ? prevCloses.XBI.toFixed(2) : '-';
                         if (document.getElementById('prev-val-spy')) document.getElementById('prev-val-spy').textContent = prevCloses.SPY ? prevCloses.SPY.toFixed(2) : '-';
                         if (document.getElementById('prev-val-qqq')) document.getElementById('prev-val-qqq').textContent = prevCloses.QQQ ? prevCloses.QQQ.toFixed(2) : '-';
@@ -3815,6 +3825,7 @@ def generate(futures_data=None, ib_data=None):
                             document.getElementById('ib-val-uso').textContent = '未能读到实时数据';
                             document.getElementById('ib-val-xop').textContent = '未能读到实时数据';
                             document.getElementById('ib-val-xbi').textContent = '未能读到实时数据';
+                            document.getElementById('ib-val-xly').textContent = '未能读到实时数据';
                             document.getElementById('ib-val-slv').textContent = '未能读到实时数据';
                             if(document.getElementById('ib-val-spy')) document.getElementById('ib-val-spy').textContent = '未能读到实时数据';
                             if(document.getElementById('ib-val-qqq')) document.getElementById('ib-val-qqq').textContent = '未能读到实时数据';
@@ -3863,6 +3874,7 @@ def generate(futures_data=None, ib_data=None):
                     if (document.getElementById('prev-val-uso')) document.getElementById('prev-val-uso').textContent = prevCloses.USO ? prevCloses.USO.toFixed(2) : '-';
                     if (document.getElementById('prev-val-xop')) document.getElementById('prev-val-xop').textContent = prevCloses.XOP ? prevCloses.XOP.toFixed(2) : '-';
                     if (document.getElementById('prev-val-slv')) document.getElementById('prev-val-slv').textContent = prevCloses.SLV ? prevCloses.SLV.toFixed(2) : '-';
+                    if (document.getElementById('prev-val-xly')) document.getElementById('prev-val-xly').textContent = prevCloses.XLY ? prevCloses.XLY.toFixed(2) : '-';
                     if (document.getElementById('prev-val-spy')) document.getElementById('prev-val-spy').textContent = prevCloses.SPY ? prevCloses.SPY.toFixed(2) : '-';
                     if (document.getElementById('prev-val-qqq')) document.getElementById('prev-val-qqq').textContent = prevCloses.QQQ ? prevCloses.QQQ.toFixed(2) : '-';
                     
@@ -3983,6 +3995,7 @@ def generate(futures_data=None, ib_data=None):
     xop_ib = f"{ib_night_prices.get('XOP', {}).get('bid', 0):.2f}" if ib_night_prices.get('XOP') else "-"
     xbi_ib = f"{ib_night_prices.get('XBI', {}).get('bid', 0):.2f}" if ib_night_prices.get('XBI') else "-"
     slv_ib = f"{ib_night_prices.get('SLV', {}).get('bid', 0):.2f}" if ib_night_prices.get('SLV') else "-"
+    xly_ib = f"{ib_night_prices.get('XLY', {}).get('bid', 0):.2f}" if ib_night_prices.get('XLY') else "-"
     spy_ib = f"{ib_night_prices.get('SPY', {}).get('bid', 0):.2f}" if ib_night_prices.get('SPY') else "-"
     qqq_ib = f"{ib_night_prices.get('QQQ', {}).get('bid', 0):.2f}" if ib_night_prices.get('QQQ') else "-"
     
@@ -3996,14 +4009,13 @@ def generate(futures_data=None, ib_data=None):
         try:
             import pandas as pd
             conn = sqlite3.connect(SHARED_DB_PATH)
-            df = pd.read_sql("SELECT * FROM basic_data", conn)
+            # 修正：直接从 usa_etf_daily_prices 精准查询，不再依赖旧的宽表 basic_data
+            df = pd.read_sql(f"SELECT price FROM usa_etf_daily_prices WHERE symbol = ? ORDER BY date DESC LIMIT 1", conn, params=(symbol,))
             conn.close()
-            if symbol in df.columns:
-                # 获取最新的非空值
-                latest_value = df[symbol].dropna().tail(1)
-                if not latest_value.empty:
-                    return f"{latest_value.iloc[0]:.2f}"
-        except Exception:
+            if not df.empty and pd.notna(df.iloc[0]['price']):
+                return f"{df.iloc[0]['price']:.2f}"
+        except Exception as e:
+            print(f"从数据库获取 {symbol} 昨收价失败: {e}")
             pass
         # 本地数据不可用时，再尝试使用IB数据
         if ib_prev_closes.get(symbol):
@@ -4014,30 +4026,31 @@ def generate(futures_data=None, ib_data=None):
     prev_uso = get_prev_close('USO')
     prev_xop = get_prev_close('XOP')
     prev_xbi = get_prev_close('XBI')
+    prev_xly = get_prev_close('XLY')
     prev_slv = get_prev_close('SLV')
     prev_spy = get_prev_close('SPY')
     prev_qqq = get_prev_close('QQQ')
-    prev_text = f"昨收(SMART): GLD ${prev_gld} | USO ${prev_uso} | XOP ${prev_xop} | XBI ${prev_xbi} | SLV ${prev_slv} | SPY ${prev_spy} | QQQ ${prev_qqq}"
+    prev_text = f"昨收(SMART): GLD ${prev_gld} | USO ${prev_uso} | XOP ${prev_xop} | XBI ${prev_xbi} | XLY ${prev_xly} | SLV ${prev_slv} | SPY ${prev_spy} | QQQ ${prev_qqq}"
         
     final_html += '        <div id="page-home" class="page-section active" style="margin-top: 0px; padding:0; background:transparent; box-shadow:none;">\n'
     # === 第二排：页头 + ABC控制面板 + IB夜盘数据 同排并列 ===
     final_html += '        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">\n'
     
     # === 左侧：页头 ===
-    final_html += '            <div style="flex: 0 0 280px; background: white; padding: 8px 12px; border-radius: 6px; box-shadow: var(--shadow-sm); border: 1px solid var(--border-color); display: flex; flex-direction: column; justify-content: center;">\n'
+    final_html += '            <div style="flex: 0 0 280px; background: white; padding: 8px 12px; border-radius: 6px; box-shadow: var(--shadow-sm); border: 1px solid var(--border-color); display: flex; flex-direction: column; justify-content: center; height: 118px;">\n'
     final_html += f'                <div style="font-size: 22px; font-weight: 700; color: #d32f2f; text-align: center; margin-bottom: 4px; letter-spacing: 1px;">LOF基金套利监控系统</div>\n'
     final_html += f'                <div style="font-size: 13px; color: var(--secondary-color); text-align: center; font-family: var(--font-mono);"><span id="current-date-time">{global_date_str}</span> | <span id="exchange-rate-display">{today_exchange_rate}</span></div>\n'
     final_html += '                 <div style="font-size: 11px; text-align: center; margin-top: 6px; color: #666;">A股实时行情: <span id="lof-source-badge" style="font-weight:bold; background:#f5f5f5; color:#333; padding:2px 4px; border-radius:3px; border:1px solid #ddd; margin-right:4px;">检测中...</span> <button onclick="reconnectLofSource()" style="font-size:10px; padding:1px 4px; cursor:pointer; border:1px solid #ccc; border-radius:3px; background:#fff; color:#333;" title="如果您刚打开了QMT或通达信，点击此按钮可让程序重新挂载极速通道">🔄 尝试重连</button></div>\n'
     final_html += '            </div>\n'
     
     # === 右侧：横排极致压缩版IB表格 (增加宽度) ===
-    final_html += '            <div style="flex: 1 1 auto; min-width: 680px;">\n'
+    final_html += '            <div style="flex: 1 1 auto; min-width: 760px;">\n'
     final_html += '                <div style="background-color: #f8f9fa; border-radius: 4px; border: 1px solid #e9ecef; overflow: hidden; font-size: 13px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); font-family: var(--font-sans);">\n'
     final_html += '                    <table style="width: 100%; height: 100%; border-collapse: collapse; text-align: center;">\n'
     final_html += '                        <thead style="background-color: #e3f2fd; color: #1565c0; border-bottom: 1px solid #90caf9;">\n'
     final_html += '                            <tr style="height: 28px;">\n'
     final_html += '                                <th style="padding: 2px 4px; text-align: left; width: 80px; border-right: 1px solid #bbdefb; font-size: 12px;">数据源</th>\n'
-    final_html += '                                <th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">GLD</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">USO</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">XOP</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">XBI</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">SLV</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">SPY</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">QQQ</th>\n'
+    final_html += '                                <th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">GLD</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">USO</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">XOP</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">XBI</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">XLY</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">SLV</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">SPY</th><th style="font-size:13px; font-family: var(--font-mono); padding: 2px 4px;">QQQ</th>\n'
     final_html += '                                <th style="width: 75px; border-left: 1px solid #bbdefb; font-size: 12px; padding: 2px 4px;">状态指示</th>\n'
     final_html += '                            </tr>\n'
     final_html += '                        </thead>\n'
@@ -4050,12 +4063,13 @@ def generate(futures_data=None, ib_data=None):
     final_html += '                                <td style="padding:2px 4px; color:#999;">-</td>\n'
     final_html += '                                <td style="padding:2px 4px; color:#999;">-</td>\n'
     final_html += '                                <td style="padding:2px 4px; color:#999;">-</td>\n'
+    final_html += '                                <td style="padding:2px 4px; color:#999;">-</td>\n'
     final_html += '                                <td style="padding:2px 4px;"><span id="es-price" style="font-weight:bold; color:#d35400; font-size: 13px;">-</span> <span id="es-change" style="font-size:11px;"></span></td>\n'
     final_html += '                                <td style="padding:2px 4px;"><span id="nq-price" style="font-weight:bold; color:#d35400; font-size: 13px;">-</span> <span id="nq-change" style="font-size:11px;"></span></td>\n'
     final_html += '                            <!-- 昨收盘 -->\n'
     final_html += '                            <tr style="border-bottom: 1px dashed #dee2e6; color: #6c757d; background-color: #fdfdfe; height: 24px;">\n'
     final_html += '                                <td style="padding: 2px 4px; text-align: left; font-weight: bold; border-right: 1px dashed #dee2e6; font-size: 12px;">昨收(SMART)</td>\n'
-    final_html += f'                                <td id="prev-val-gld" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_gld}</td><td id="prev-val-uso" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_uso}</td><td id="prev-val-xop" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_xop}</td><td id="prev-val-xbi" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_xbi}</td><td id="prev-val-slv" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_slv}</td><td id="prev-val-spy" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_spy}</td><td id="prev-val-qqq" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_qqq}</td>\n'
+    final_html += f'                                <td id="prev-val-gld" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_gld}</td><td id="prev-val-uso" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_uso}</td><td id="prev-val-xop" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_xop}</td><td id="prev-val-xbi" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_xbi}</td><td id="prev-val-xly" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_xly}</td><td id="prev-val-slv" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_slv}</td><td id="prev-val-spy" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_spy}</td><td id="prev-val-qqq" style="font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{prev_qqq}</td>\n'
     final_html += f'                                <td rowspan="4" style="border-left: 1px solid #dee2e6; vertical-align: middle; background-color: #fff; padding: 2px;">\n'
     final_html += f'                                    <div id="active-source-badge" style="font-size: 10px; padding: 2px; border-radius: 2px; font-weight: bold; margin: 0 auto 2px; width: 70px; text-align: center; white-space: nowrap;"></div>\n'
     final_html += f'                                    <div id="ib-status-text" style="font-size: 10px; padding: 2px; border-radius: 2px; background-color: {ib_status_color}; color: white; max-width: 75px; margin: 0 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;" title="{ib_status_message}">{ib_status_message}</div>\n'
@@ -4068,7 +4082,7 @@ def generate(futures_data=None, ib_data=None):
     final_html += f'                                        <input type="radio" name="calc_source" id="source-ib" value="ib" {"checked" if has_ib_data else ""} onchange="window.calculateRealTimeValues()" style="margin: 0; transform: scale(0.7);"> 夜盘(买一)\n'
     final_html += '                                    </label>\n'
     final_html += '                                </td>\n'
-    final_html += f'                                <td id="ib-val-gld" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{gld_ib}</td><td id="ib-val-uso" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{uso_ib}</td><td id="ib-val-xop" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{xop_ib}</td><td id="ib-val-xbi" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{xbi_ib}</td><td id="ib-val-slv" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{slv_ib}</td><td id="ib-val-spy" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{spy_ib}</td><td id="ib-val-qqq" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{qqq_ib}</td>\n'
+    final_html += f'                                <td id="ib-val-gld" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{gld_ib}</td><td id="ib-val-uso" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{uso_ib}</td><td id="ib-val-xop" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{xop_ib}</td><td id="ib-val-xbi" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{xbi_ib}</td><td id="ib-val-xly" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{xly_ib}</td><td id="ib-val-slv" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{slv_ib}</td><td id="ib-val-spy" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{spy_ib}</td><td id="ib-val-qqq" style="font-weight:bold;color:#1976d2; font-family: var(--font-mono); padding:2px 4px; font-size: 13px;">{qqq_ib}</td>\n'
     final_html += '                            </tr>\n'
     final_html += '                            <!-- 手工输入 -->\n'
     final_html += '                            <tr style="background-color: #fff; height: 24px;">\n'
@@ -4081,6 +4095,7 @@ def generate(futures_data=None, ib_data=None):
     final_html += '                                <td style="padding:2px 4px;"><input type="number" id="uso-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'
     final_html += '                                <td style="padding:2px 4px;"><input type="number" id="xop-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'
     final_html += '                                <td style="padding:2px 4px;"><input type="number" id="xbi-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'
+    final_html += '                                <td style="padding:2px 4px;"><input type="number" id="xly-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'
     final_html += '                                <td style="padding:2px 4px;"><input type="number" id="slv-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'
     final_html += '                                <td style="padding:2px 4px;"><input type="number" id="spy-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'
     final_html += '                                <td style="padding:2px 4px;"><input type="number" id="qqq-price" step="0.01" style="width: 64px; padding: 2px; font-size: 12px; font-family: var(--font-mono); font-weight:bold; text-align:center; border:1px solid #ccc; border-radius:2px; outline: none; color:#e65100; background-color:#fff3e0;" oninput="document.getElementById(\'source-manual\').checked=true; window.calculateRealTimeValues()"></td>\n'

@@ -46,6 +46,7 @@ def load_config():
                     elif cat == '原油' and code != '162411': fund['trade_etf'] = 'USO'
                     elif code == '162411': fund['trade_etf'] = 'XOP'
                     elif code == '161130': fund['trade_etf'] = 'QQQ'
+                    elif code == '162415': fund['trade_etf'] = 'XLY'
                     elif code == '161125': fund['trade_etf'] = 'SPY'
                     else: fund['trade_etf'] = ''
                 if 'trade_future' not in fund:
@@ -357,7 +358,7 @@ HTML_TEMPLATE = """
                         <label for="trade_etf">实盘交易 ETF <span style="color:#999; font-weight:normal;">(如 GLD, XOP)</span></label>
                         <input type="text" name="trade_etf" list="trade-etf-list" class="form-control" value="{{ fund.trade_etf }}" style="font-family:monospace; font-weight:bold; color:#1565c0;">
                         <datalist id="trade-etf-list">
-                            <option value="GLD">黄金</option> <option value="USO">原油</option> <option value="XOP">油气</option>
+                            <option value="GLD">黄金</option> <option value="USO">原油</option> <option value="XOP">油气</option> <option value="XLY">非必需消费</option>
                             <option value="SPY">标普500</option> <option value="QQQ">纳指100</option> <option value="XBI">标普生物</option> <option value="SLV">白银</option>
                         </datalist>
                     </div>
