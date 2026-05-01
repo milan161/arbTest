@@ -247,30 +247,60 @@ class DailyUpdater:
         """步骤五：抓取美股市场交易数据（标准ETF、期货、指数）"""
         logger.info("=== 步骤五：抓取美股市场交易数据（标准ETF、期货、指数） ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
-        if self.db.is_access_synced_today(today_str, source='usa_market_data_sina'):
+        
+        # 智能检查：如果 index_daily 表里根本没数据，说明之前被 access_sync 拦截漏抓了，强制解除今日防封号限制
+        conn = self.db._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM index_daily")
+        index_count = cursor.fetchone()[0]
+        conn.close()
+        
+        if self.db.is_access_synced_today(today_str, source='usa_market_data_sina') and index_count > 0:
             logger.info("✅ 今日已获取过新浪美股市场数据，为防封号跳过...")
             return
 
         standard_etf_symbols = set()
         index_symbols = set()
+        
+        # 预定义非ETF名单，防止误当做美股ETF爬取（拦截 _settle 后缀污染）
+        future_tickers = {'GC', 'CL', 'NQ', 'ES', 'AG', 'AG0', 'MGC', 'MCL', 'MES', 'MNQ', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle'}
+        index_tickers = {'INX', 'NDX', 'DJI', '.INX', '.NDX', '.DJI'}
+        
         # 智能提取所有底层 ETF (过滤掉带后缀的衍生品，只取 GLD, USO, SPY 等根资产)
         for fund in self.config.get('funds', []):
             for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
                 sym = item.get('symbol', '').replace('^', '').split('-')[0]
-                if sym: standard_etf_symbols.add(sym)
+                if not sym: continue
+                if sym in future_tickers:
+                    continue  # 期货行情由专门的结算价接口获取，不走美股API
+                elif sym in index_tickers or sym.startswith('.'):
+                    clean_sym = f".{sym.replace('.', '')}"
+                    index_symbols.add(clean_sym)
+                else:
+                    standard_etf_symbols.add(sym)
+                    
             if fund.get('trade_etf'):
                 for s in str(fund.get('trade_etf')).replace('，', ',').split(','):
-                    if s.strip(): standard_etf_symbols.add(s.strip().upper())
+                    s = s.strip().upper()
+                    if s and s not in future_tickers and s not in index_tickers and not s.startswith('.'):
+                        standard_etf_symbols.add(s)
             # 提取纯净指数
             idx_url = fund.get('sina_index_url', '')
+            idx_sym = None
             if idx_url:
-                # 兼容旧版 list=gb_ndx 和新版 symbol=.ndx
-                m = re.search(r'(?:symbol=|list=gb_)(\.?\w+)', idx_url, re.IGNORECASE)
+                # 兼容新浪各种指数链接格式 (如 quotes/.INX.html)
+                m = re.search(r'(?:symbol=|list=gb_|quotes/)([.a-zA-Z0-9]+)', idx_url, re.IGNORECASE)
                 if m:
-                    # 确保指数格式为 .XXX
-                    raw_sym = m.group(1).upper()
-                    clean_sym = f".{raw_sym}" if not raw_sym.startswith('.') else raw_sym
-                    index_symbols.add(clean_sym)
+                    raw_sym = m.group(1).upper().replace('.HTML', '')
+                    idx_sym = f".{raw_sym}" if not raw_sym.startswith('.') else raw_sym
+                    
+            if not idx_sym and fund.get('category', '') == '指数':
+                trade_etf = str(fund.get('trade_etf', '')).upper()
+                if 'QQQ' in trade_etf: idx_sym = '.NDX'
+                elif 'SPY' in trade_etf: idx_sym = '.INX'
+                
+            if idx_sym:
+                index_symbols.add(idx_sym)
         
         today_str = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
@@ -278,7 +308,17 @@ class DailyUpdater:
         # --- 1. 抓取标准ETF ---
         missing_etfs = []
         for sym in standard_etf_symbols:
-            df = data_fetcher.fetch_sina_us_stock_historical_data(sym, start_date=start_date, end_date=today_str)
+            import time
+            df = None
+            # 增加 3 次网络防抖重试机制，防止 USO 偶发的 Response ended prematurely
+            for attempt in range(3):
+                df = data_fetcher.fetch_sina_us_stock_historical_data(sym, start_date=start_date, end_date=today_str)
+                if df is not None and not df.empty:
+                    break
+                if attempt < 2:
+                    logger.warning(f"⏳ [ETF] {sym} 第 {attempt+1} 次抓取失败，2秒后准备重试...")
+                    time.sleep(2)
+                    
             if df is not None and not df.empty:
                 for _, row in df.iterrows():
                     date_str = row['date'].strftime('%Y-%m-%d')
@@ -288,22 +328,35 @@ class DailyUpdater:
             else:
                 missing_etfs.append(sym)
         if missing_etfs:
-            logger.error(f"🚨 健壮性告警：以下标准 ETF 数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_etfs)}")
+            logger.error(f"🚨 健壮性告警：以上标准 ETF 数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_etfs)}")
             
         # --- 2. 抓取指数 ---
         missing_indices = []
+        # 极简模式：只取最近几天的记录以确保能拿到上一个交易日，不浪费资源请求长线历史
+        index_start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
         for sym in index_symbols:
-            df = data_fetcher.fetch_sina_us_stock_historical_data(sym, start_date=start_date, end_date=today_str)
+            import time
+            df = None
+            # 恢复原生模式：直接使用带小数点的符号 (如 .NDX) 获取，剔除自作多情的轮询
+            for attempt in range(3):
+                df = data_fetcher.fetch_sina_us_stock_historical_data(sym, start_date=index_start_date, end_date=today_str)
+                if df is not None and not df.empty:
+                    break
+                if attempt < 2:
+                    time.sleep(1)
+                
             if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    date_str = row['date'].strftime('%Y-%m-%d')
-                    price = row['close']
-                    if price > 0: self.db.upsert_index_price(date=date_str, symbol=sym, price=price)
-                logger.info(f"✅ [指数] {sym} 历史行情入库完成。")
+                # 精准提取上一个交易日最新收盘价
+                latest_row = df.sort_values('date', ascending=True).iloc[-1]
+                date_str = latest_row['date'].strftime('%Y-%m-%d')
+                price = latest_row['close']
+                if price > 0: 
+                    self.db.upsert_index_price(date=date_str, symbol=sym, price=price)
+                logger.info(f"✅ [指数] {sym} 极简入库完成 ({date_str} 收盘价 -> {price})。")
             else:
                 missing_indices.append(sym)
         if missing_indices:
-            logger.error(f"🚨 健壮性告警：以下纯净指数数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_indices)}")
+            logger.error(f"🚨 健壮性告警：以上纯净指数数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_indices)}")
             
         # --- 3. 抓取期货结算价 ---
         futures_data = data_fetcher.get_futures_settlement_data()

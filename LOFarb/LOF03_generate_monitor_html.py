@@ -47,6 +47,8 @@ def read_fund_history_from_db(code):
         conn.close()
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
+            # 自动去重，防止多个相同日期的数据导致后续 loc[] 得到 DataFrame 从而引起 Series 的布尔判定报错
+            df = df.drop_duplicates(subset=['date']).reset_index(drop=True)
         return df
     except Exception as e:
         print(f"读取数据库 fund_history_{code} 失败: {e}")
@@ -1674,6 +1676,7 @@ def generate(futures_data=None, ib_data=None):
         futures_history_df = pd.read_csv(futures_csv_path)
         if 'date' in futures_history_df.columns:
             futures_history_df['date'] = pd.to_datetime(futures_history_df['date']).dt.strftime('%Y-%m-%d')
+            futures_history_df = futures_history_df.drop_duplicates(subset=['date'])
             futures_history_df.set_index('date', inplace=True)
 
     # ====== 新架构：直接从数据库读取全局通用参数 ======

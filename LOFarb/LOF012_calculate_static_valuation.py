@@ -126,7 +126,24 @@ class LofValuationApp:
                 logger.error(f"❌ 处理基金 {fund.get('code')} 时出错: {e}")
                 import traceback
                 traceback.print_exc()
+                
+        # 强制启动数据库去重，防止底层 append 重复写入导致 03 前台崩溃
+        self.clean_duplicate_db()
         logger.info("🎉 静态估值计算流水线全部完成！")
+
+    def clean_duplicate_db(self):
+        conn = self.db._get_conn()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fund_history_%'")
+            for (table,) in cursor.fetchall():
+                cursor.execute(f"DELETE FROM {table} WHERE rowid NOT IN (SELECT MAX(rowid) FROM {table} GROUP BY date)")
+            conn.commit()
+            logger.info("🧹 已自动执行底层表冗余数据清理。")
+        except Exception as e:
+            logger.warning(f"清理重复数据失败: {e}")
+        finally:
+            conn.close()
 
 if __name__ == "__main__":
     LofValuationApp().run()
