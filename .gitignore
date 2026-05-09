@@ -49,3 +49,9 @@ venv/
 # 忽略 database 目录及其子目录下的所有数据库文件
 database/**/*.db
 database/**/*.sqlite
+
+# ====================
+# 私用配置文件
+# ====================
+# 私用基金配置（不上传，用于个人自定义基金）
+LOFarb/lof_config_private.yaml

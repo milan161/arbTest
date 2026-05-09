@@ -499,8 +499,12 @@ class LOFPriceReader:
         
         self.lof_codes = ['160719', '160723', '161116', '164701', '161129', '161226', '162411', '501018']
         try:
-            with open('lof_config.yaml', 'r', encoding='utf-8') as f:
-                self.lof_codes = [x['code'] for x in yaml.safe_load(f).get('funds', [])]
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from arbcore.config.config_loader import get_fund_codes
+            
+            config_file = os.path.join(os.path.dirname(__file__), "lof_config.yaml")
+            self.lof_codes = get_fund_codes(config_file)
         except: pass
         
         self.headers = {

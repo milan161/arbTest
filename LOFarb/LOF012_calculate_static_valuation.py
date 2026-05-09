@@ -78,9 +78,13 @@ class LofValuationApp:
             conn.close()
 
     def _load_config(self):
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from arbcore.config.config_loader import load_config
+        
         config_file = os.path.join(os.path.dirname(__file__), "lof_config.yaml")
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+        logger.info(f"📋 加载配置文件: {config_file}")
+        return load_config(config_file)
             
     def pre_diagnose_fund(self, fund):
         """在计算前把该基金的仓位、净值、价格全透视打印出来"""

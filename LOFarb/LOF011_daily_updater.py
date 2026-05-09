@@ -42,9 +42,13 @@ class DailyUpdater:
         self.woody_crawler = WoodyWebCrawler()
         
     def _load_config(self):
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from arbcore.config.config_loader import load_config
+        
         config_file = os.path.join(os.path.dirname(__file__), "lof_config.yaml")
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+        logger.info(f"📋 加载配置文件: {config_file}")
+        return load_config(config_file)
 
     def step1_and_2_fetch_woody_api(self):
         """步骤一：通过通用基座拉取Woody API，并生成JSON/CSV备份、步骤二：解析入库"""

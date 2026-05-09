@@ -1,6 +1,11 @@
 # LOF031_config_manager.py - 配置管理模块
 import os
-import yaml
+import sys
+
+# 添加 arbcore 路径到 sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from arbcore.config.config_loader import load_config
 
 class ConfigManager:
     """配置管理类"""
@@ -11,17 +16,9 @@ class ConfigManager:
         self.config = None
     
     def load_config(self):
-        """加载配置文件"""
-        if not os.path.exists(self.config_file):
-            print(f"配置文件不存在: {self.config_file}")
-            return None
-        try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
-            return self.config
-        except Exception as e:
-            print(f"加载配置文件失败: {e}")
-            return None
+        """加载配置文件（使用 arbcore 通用配置加载器）"""
+        self.config = load_config(self.config_file)
+        return self.config if self.config else None
     
     def get(self, key, default=None):
         """获取配置值"""

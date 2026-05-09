@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../w
 from _mytoken import BOT_TOKEN
 
 def post_json_array_to_telegram(
-    data_array: List[Any], 
+    data_array: Union[Dict[str, Any], List[Any]], 
     bot_token: str, 
     timeout: int = 30
 ) -> Union[List[Any], Dict[str, Any], None]:
@@ -42,13 +42,23 @@ def post_json_array_to_telegram(
     # 3. 设置请求头
     headers = {'Content-Type': 'application/json'}
     
+    # 强制禁用系统层面的 VPN 代理，确保直连
+    # 💡 优化：将 None 改为空字符串 ""，彻底阻断 requests 读取系统环境变量
+    bypass_proxies = {
+        "http": "",
+        "https": "",
+        "all": ""  # 可选：覆盖某些代理工具设置的 ALL_PROXY 变量
+    }
+
+      
     # 4. 发送POST请求并处理响应
     try:
         response = requests.post(
             url, 
-            data=json_payload,      # 发送JSON字符串
+            data=json_payload.encode('utf-8'), # 显式编码为utf-8，增强对 PHP 后端的兼容性
             headers=headers, 
-            timeout=timeout
+            timeout=timeout,
+            proxies=bypass_proxies  # <--- 加上这一行，让变量真正被使用
         )
         
         # 检查HTTP状态码
@@ -114,7 +124,16 @@ def FetchPalmmicroData(strSymbols):
     if result is not None:
         # 可以进一步处理result
         if isinstance(result, dict):
-            print(result['text'])
+            text_response = result.get('text')
+            if text_response:
+                # 修复: Woody API 返回的 text 字段本身是一个包含各基金数据的字典，
+                # 对字典进行切片操作会引发 "unhashable type: 'slice'" 错误。
+                # 正确的做法是先将其转换为字符串再进行截取预览。
+                if isinstance(text_response, (dict, list)):
+                    preview_str = json.dumps(text_response, ensure_ascii=False, indent=2)
+                else:
+                    preview_str = str(text_response)
+                print(f"提取到的文本: {preview_str[:400]}...") # 增加预览长度以看到更多结构
     else:
         print("函数执行失败，请检查上面的错误信息。")
     return result # <--- 核心修复：将获取到的结果返回给调用

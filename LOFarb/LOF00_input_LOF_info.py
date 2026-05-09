@@ -5,8 +5,14 @@
 from flask import Flask, render_template_string, request, redirect, url_for, flash
 import yaml
 import os
+import sys
 from datetime import datetime
 import socket
+
+# 添加 arbcore 路径到 sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from arbcore.config.config_loader import load_config as load_arbcore_config, get_config_path
 
 app = Flask(__name__)
 app.secret_key = "lof_config_manager"
@@ -14,6 +20,9 @@ app.secret_key = "lof_config_manager"
 # 配置文件路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "lof_config.yaml")
+
+# 当前使用的配置文件（运行时确定）
+CURRENT_CONFIG_FILE = CONFIG_FILE
 
 # 市场配置
 MARKETS = {
@@ -29,44 +38,45 @@ ANCHORS = {"US": "美股收盘 (US)", "EU": "欧洲收盘时刻 (EU)", "JP": "�
 
 # 加载配置
 def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        return {"funds": []}, None
+    global CURRENT_CONFIG_FILE
+    
     try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            cfg = yaml.safe_load(f) or {"funds": []}
-            
-            # 🚨 自动热迁移逻辑：兼容旧版 hedging_portfolio，并智能推断 trade_etf
-            for fund in cfg.get('funds', []):
-                if 'hedging_portfolio' in fund:
-                    fund['valuation_portfolio'] = fund.pop('hedging_portfolio')
-                if 'trade_etf' not in fund:
+        # 使用 arbcore 通用配置加载器
+        cfg = load_arbcore_config(CONFIG_FILE) or {"funds": []}
+        CURRENT_CONFIG_FILE = get_config_path()
+        
+        # 🚨 自动热迁移逻辑：兼容旧版 hedging_portfolio，并智能推断 trade_etf
+        for fund in cfg.get('funds', []):
+            if 'hedging_portfolio' in fund:
+                fund['valuation_portfolio'] = fund.pop('hedging_portfolio')
+            if 'trade_etf' not in fund:
+                cat = fund.get('category', '')
+                code = str(fund.get('code', ''))
+                if cat == '黄金': fund['trade_etf'] = 'GLD'
+                elif cat == '原油' and code != '162411': fund['trade_etf'] = 'USO'
+                elif code == '162411': fund['trade_etf'] = 'XOP'
+                elif code == '161130': fund['trade_etf'] = 'QQQ'
+                elif code == '162415': fund['trade_etf'] = 'XLY'
+                elif code == '161125': fund['trade_etf'] = 'SPY'
+                else: fund['trade_etf'] = ''
+            if 'trade_future' not in fund:
+                f_list = fund.get('future_hedging', [])
+                if f_list: fund['trade_future'] = f_list[0].get('symbol', '')
+                else:
                     cat = fund.get('category', '')
                     code = str(fund.get('code', ''))
-                    if cat == '黄金': fund['trade_etf'] = 'GLD'
-                    elif cat == '原油' and code != '162411': fund['trade_etf'] = 'USO'
-                    elif code == '162411': fund['trade_etf'] = 'XOP'
-                    elif code == '161130': fund['trade_etf'] = 'QQQ'
-                    elif code == '162415': fund['trade_etf'] = 'XLY'
-                    elif code == '161125': fund['trade_etf'] = 'SPY'
-                    else: fund['trade_etf'] = ''
-                if 'trade_future' not in fund:
-                    f_list = fund.get('future_hedging', [])
-                    if f_list: fund['trade_future'] = f_list[0].get('symbol', '')
-                    else:
-                        cat = fund.get('category', '')
-                        code = str(fund.get('code', ''))
-                        if cat == '黄金': fund['trade_future'] = 'MGC'
-                        elif cat == '原油' and code != '162411': fund['trade_future'] = 'MCL'
-                        elif code == '161130': fund['trade_future'] = 'MNQ'
-                        elif code == '161125': fund['trade_future'] = 'MES'
-                        else: fund['trade_future'] = ''
-            return cfg, None
+                    if cat == '黄金': fund['trade_future'] = 'MGC'
+                    elif cat == '原油' and code != '162411': fund['trade_future'] = 'MCL'
+                    elif code == '161130': fund['trade_future'] = 'MNQ'
+                    elif code == '161125': fund['trade_future'] = 'MES'
+                    else: fund['trade_future'] = ''
+        return cfg, None
     except Exception as e:
         return {"funds": []}, f"配置文件读取失败: {e}"
 
 # 保存配置
 def save_config(config):
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+    with open(CURRENT_CONFIG_FILE, 'w', encoding='utf-8') as f:
         yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
 
 # CSS样式

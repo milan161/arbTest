@@ -6,12 +6,38 @@ currencies:
 - currency: JPY
   symbol: USD
 funds:
+- code: '163208'
+  name: 诺安油气能源
+  category: 原油
+  trade_etf: USO
+  trade_future: MCL
+  holdings:
+    equity_ratio: 96.0
+    cash_ratio: 4.0
+  valuation_portfolio:
+  - symbol: USO
+    weight: 11.72
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  - symbol: XLE
+    weight: 88.28
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: multi
 - code: '501018'
   name: 南方原油
   category: 原油
   holdings:
-    equity_ratio: 78.41
-    cash_ratio: 21.59
+    equity_ratio: 81.16
+    cash_ratio: 18.84
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -23,17 +49,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 37.85
+    weight: 41.73
     anchor: EU
   - symbol: USO
-    weight: 55.67
+    weight: 46.9
     anchor: US
   - symbol: USO-JP
-    weight: 6.48
+    weight: 11.37
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 78.41
+  position: 81.16
 - code: '160723'
   name: 嘉实原油
   category: 原油
@@ -101,8 +127,8 @@ funds:
   name: 易方达原油
   category: 原油
   holdings:
-    equity_ratio: 71.99
-    cash_ratio: 28.01
+    equity_ratio: 74.25
+    cash_ratio: 25.75
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -144,37 +170,37 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 39.95
+    weight: 27.27
     anchor: EU
   - symbol: USO-JP
     weight: 0.95
     anchor: US
   - symbol: USO
-    weight: 58.44
+    weight: 66.41
     anchor: US
   - symbol: USO-HK
-    weight: 1.61
+    weight: 6.32
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 71.99
+  position: 74.25
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 1.18
-    cash_ratio: 98.82
+    equity_ratio: 1.01
+    cash_ratio: 98.99
   valuation_portfolio:
   - symbol: GLD
-    weight: 72.2
+    weight: 35.06
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
   - symbol: USO
-    weight: 20.45
+    weight: 56.67
     anchor: US
     name: ''
     currency: USD
@@ -182,30 +208,30 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 1.18
+  position: 1.01
 - code: '161815'
   name: 银华抗通胀
   category: 黄金
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 80.77
-    cash_ratio: 19.23
+    equity_ratio: 84.64
+    cash_ratio: 15.36
   valuation_portfolio:
   - symbol: GLD
-    weight: 91.05
+    weight: 55.64
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
   - symbol: USO
-    weight: 1.0
+    weight: 14.83
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
   - symbol: USO-EU
-    weight: 9.25
+    weight: 29.54
     anchor: EU
     name: ''
     currency: USD
@@ -225,13 +251,13 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 80.77
+  position: 84.64
 - code: '160719'
   name: 嘉实黄金
   category: 黄金
   holdings:
-    equity_ratio: 96.92
-    cash_ratio: 3.08
+    equity_ratio: 96.57
+    cash_ratio: 3.43
   holdings_portfolio:
   - symbol: GLD
     weight: 19.02
@@ -273,31 +299,31 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 52.81
+    weight: 54.26
     anchor: US
   - symbol: GLD-EU
-    weight: 47.19
+    weight: 45.74
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 96.92
+  position: 96.57
 - code: '161116'
   name: 易方达黄金
   category: 黄金
   trade_etf: GLD
   trade_future: MGC
   holdings:
-    equity_ratio: 93.81
-    cash_ratio: 6.19
+    equity_ratio: 93.62
+    cash_ratio: 6.38
   valuation_portfolio:
   - symbol: GLD
-    weight: 78.26
+    weight: 78.74
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
   - symbol: GLD-EU
-    weight: 21.74
+    weight: 21.26
     anchor: EU
     name: ''
     currency: USD
@@ -341,13 +367,13 @@ funds:
     currency: USD
     exchange: SMART
     name: ''
-  position: 93.81
+  position: 93.62
 - code: '164701'
   name: 汇添富贵金属
   category: 黄金
   holdings:
-    equity_ratio: 99.16
-    cash_ratio: 0.84
+    equity_ratio: 99.29
+    cash_ratio: 0.71
   holdings_portfolio:
   - symbol: UGL
     weight: 33.165
@@ -409,7 +435,7 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 99.92
+    weight: 100.03
     anchor: US
     name: ''
     currency: USD
@@ -422,7 +448,7 @@ funds:
     exchange: SMART
   trade_etf: GLD
   trade_future: MGC
-  position: 99.16
+  position: 99.29
 - code: '165513'
   name: 中信保诚
   category: 黄金
@@ -484,6 +510,26 @@ funds:
     name: ''
   future_hedging: []
   position: 95.0
+- code: '164824'
+  name: 工银印度
+  category: 纯ETF
+  trade_etf: INDA
+  trade_future: ''
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: INDA
+    weight: 100.0
+    anchor: US
+    name: 印度孟买SENSEX指数
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: sector
 - code: '162415'
   name: 美国消费
   category: 纯ETF
@@ -502,6 +548,26 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
+- code: '161126'
+  name: 标普医疗
+  category: 纯ETF
+  trade_etf: RSPH
+  trade_future: ''
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: RSPH
+    weight: 100.0
+    anchor: US
+    name: ''
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: sector
 - code: '161127'
   name: 标普生物科技
   category: 纯ETF
@@ -521,6 +587,26 @@ funds:
   holdings_portfolio: []
   future_hedging: []
   position: 94.0
+- code: '164906'
+  name: 交银中概互联
+  category: 纯ETF
+  trade_etf: KWEB
+  trade_future: ''
+  holdings:
+    equity_ratio: 93.0
+    cash_ratio: 7.0
+  valuation_portfolio:
+  - symbol: KWEB
+    weight: 100.0
+    anchor: US
+    name: 港股实时
+    currency: USD
+    exchange: SMART
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: sector
 - code: '161125'
   name: 易方达标普500
   category: 指数

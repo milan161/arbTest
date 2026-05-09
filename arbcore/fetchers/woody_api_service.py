@@ -2,8 +2,8 @@
 # woody_api_service.py - 统一的 Woody API 数据获取、备份与因子解析服务
 
 import os
-import os # 确保 os 模块被导入
 import json
+import time  # 🌟 新增：用于重试机制的延时
 from datetime import datetime
 import pandas as pd
 import logging
@@ -25,14 +25,8 @@ class WoodyAPIService:
         today_str = datetime.now().strftime('%Y-%m-%d')
         sync_key = f"{source_id}_batch"
         
-        force_update = os.environ.get("FORCE_WOODY_UPDATE", "0") == "1"
-
         # 1. 防刷检查
-        if force_update:
-            logger.warning(f"⚠️ FORCE_WOODY_UPDATE 环境变量已设置，强制重新拉取 {source_id} 数据...")
-            # 强制更新前，先移除旧的同步状态，确保新的成功同步能被记录
-            db.remove_access_sync_status(today_str, sync_key)
-        elif db.is_access_synced_today(today_str, sync_key):
+        if db.is_access_synced_today(today_str, sync_key):
             logger.info(f"✅ 今日已成功拉取过 {source_id}，防刷机制启动，跳过网络请求...")
             raw_content = db.get_raw_api_data(today_str, source_id)
             if not raw_content:
@@ -53,14 +47,26 @@ class WoodyAPIService:
         symbols_str = ",".join(set(symbols))
         logger.info(f"📡 正在向 Woody API 发起批量请求: {symbols_str}")
         
-        try:
-            result = FetchPalmmicroData(symbols_str)
-        except Exception as e:
-            logger.error(f"❌ 调用 FetchPalmmicroData 崩溃: {e}")
-            return None
+        # 🌟 优化：引入带指数退避的重试机制 (最多尝试 3 次)
+        max_retries = 3
+        result = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = FetchPalmmicroData(symbols_str)
+                if result and 'text' in result:
+                    break  # 获取成功，跳出重试循环
+                else:
+                    logger.warning(f"⚠️ 第 {attempt} 次请求成功，但返回数据格式异常或为空。")
+            except Exception as e:
+                logger.warning(f"⚠️ 第 {attempt} 次请求 Woody API 失败: {e}")
+            
+            if attempt < max_retries:
+                sleep_time = 2 ** attempt  # 指数退避: 第1次失败等2秒，第2次等4秒
+                logger.info(f"⏳ 等待 {sleep_time} 秒后进行第 {attempt + 1} 次重试...")
+                time.sleep(sleep_time)
 
         if not result or 'text' not in result:
-            logger.error("❌ Woody API 返回为空或不包含 text 节点。")
+            logger.error("❌ Woody API 历经多次重试后依然返回为空或请求失败。")
             return None
 
         api_data = result['text']
@@ -116,8 +122,7 @@ class WoodyAPIService:
         except Exception as e:
             logger.error(f"⚠️ 生成备份文件失败: {e}")
 
-        # 5. 调用之前 011 中的提纯入库逻辑 (代码过长，复用了原处理大一统因子及ETF变种权重的逻辑，直接集成于后台)
-        # == 此处省略提取 fund_daily_factors 和 etf_prices 的纯享逻辑实现，详见完整代码 ==
+        # 5. 调用之前 011 中的提纯入库逻辑 
         if isinstance(api_data, dict):
             for sym, f_data in api_data.items():
                 if not isinstance(f_data, dict): continue
