@@ -1165,7 +1165,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                                     <select id="trade-broker-{code}-etf" style="font-size:11px; padding:1px; border:1px solid #ffcdd2; border-radius:3px; background:#fff; color:#d32f2f; font-weight:bold; cursor:pointer;" title="选择实盘交易通道">
                                         <option value="yinhe_qmt">银河QMT (8888)</option>
                                         <option value="guojin_qmt">国金QMT (原生)</option>
-                                        <option value="tdx">通达信(暂无下单功能)</option>
+                                        <option value="tdx">通达信</option>
                                     </select>
                                     <span style="font-weight:bold; color:#d32f2f; font-size:11px;">{name}:</span>
                                     <span style="color:#666; font-size: 11px;">数量:</span>
@@ -2863,11 +2863,6 @@ def generate(futures_data=None, ib_data=None):
             window.executeTrade = function(code, action, sandboxType) {
                 var brokerEl = document.getElementById('trade-broker-' + code + '-' + sandboxType);
                 var broker = brokerEl ? brokerEl.value : 'yinhe_qmt';
-
-                if (broker === 'tdx') {
-                    alert('通达信下单功能因API存在Bug已禁用，请选择其他通道。');
-                    return;
-                }
 
                 // 使用 Emoji 模拟原生系统弹窗的颜色警示效果
                 var brokerNameDisplay = broker === 'yinhe_qmt' ? '🔵【银河QMT】' : (broker === 'guojin_qmt' ? '🟡【国金QMT】' : '🔴【通达信】');

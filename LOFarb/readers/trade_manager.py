@@ -3,11 +3,20 @@ import sys
 import time
 import socket
 
+# 导入本地敏感配置
+try:
+    from config_local import GJS_ACCOUNT
+except ImportError:
+    print("WARNING: config_local.py 不存在，请复制 config_local.example.py 并填入真实账号")
+    GJS_ACCOUNT = None
+
 class TradeManager:
     """A股/LOF统一交易接口管理器"""
     def __init__(self):
         self.tdx_available = False
         self.tq = None
+        self.tqconst = None
+        self.tdx_account_id = None
         
         self.xtquant_available = False
         self.xt_trader = None
@@ -20,15 +29,34 @@ class TradeManager:
 
     def _init_tdx(self):
         try:
-            tdx_api_path = r'D:\new_tdx64\PYPlugins\user'
-            if os.path.exists(tdx_api_path) and tdx_api_path not in sys.path:
-                sys.path.append(tdx_api_path)
-            from tqcenter import tq
+            # 新版 tqcenter 路径（请根据实际路径修改）
+            tdx_api_paths = [
+                r'D:\new_tdx_test\PYPlugins\user',  # 新版路径
+                r'D:\new_tdx64\PYPlugins\user',      # 旧版路径备选
+            ]
+            
+            for tdx_api_path in tdx_api_paths:
+                if os.path.exists(tdx_api_path) and tdx_api_path not in sys.path:
+                    sys.path.insert(0, tdx_api_path)
+            
+            from tqcenter import tq, tqconst
             self.tq = tq
-            self.tdx_available = True
-            print("SUCCESS: [TradeManager] 已挂载【通达信】交易与极速行情模块")
+            self.tqconst = tqconst
+            
+            # 初始化并获取账户句柄
+            tq.initialize(__file__)
+            self.tdx_account_id = tq.stock_account()
+            
+            if self.tdx_account_id and self.tdx_account_id > 0:
+                self.tdx_available = True
+                print(f"SUCCESS: [TradeManager] 已挂载【通达信】交易通道 (账户句柄: {self.tdx_account_id})")
+            else:
+                print("WARNING: [TradeManager] 通达信账户句柄获取失败")
+                
+        except ImportError as e:
+            print(f"INFO: [TradeManager] 未检测到新版通达信环境(tqcenter): {e}")
         except Exception as e:
-            print("INFO: [TradeManager] 未检测到通达信环境，已跳过")
+            print(f"INFO: [TradeManager] 通达信模块跳过加载: {e}")
 
     def _init_guojin_qmt(self):
         try:
@@ -47,7 +75,7 @@ class TradeManager:
                 qmt_path = os.path.join(QMT_INSTALL_PATH, 'userdata_mini')
                 session_id = int(time.time())
                 self.xt_trader = xttrader.XtQuantTrader(qmt_path, session_id)
-                self.xt_account = StockAccount('66655836')
+                self.xt_account = StockAccount(GJS_ACCOUNT)
                 self.xtconstant = xtconstant
                 
                 self.xt_trader.start()
@@ -90,9 +118,29 @@ class TradeManager:
         elif broker == 'tdx':
             if not self.tdx_available: return False, "通达信接口未就绪"
             try:
-                direction = 0 if action == 'BUY' else 1
-                res = self.tq.send_order(stock_code=symbol, price=price, volume=volume, direction=direction)
-                return True, f"通达信返回: {res}"
+                # 转换买卖方向: BUY=0(买入), SELL=1(卖出)
+                order_type = self.tqconst.STOCK_BUY if action == 'BUY' else self.tqconst.STOCK_SELL
+                
+                # 调用通达信下单接口
+                result = self.tq.order_stock(
+                    account_id=self.tdx_account_id,
+                    stock_code=symbol,        # 动态基金代码，如 "162411.SZ"
+                    order_type=order_type,
+                    order_volume=int(volume),
+                    price_type=self.tqconst.PRICE_MY,  # 限价单
+                    price=float(price)
+                )
+                
+                # 解析返回结果
+                error_id = result.get('ErrorId', -1)
+                msg = result.get('Msg', '未知')
+                
+                if result.get('Value') in [1, 2] or error_id == 0:
+                    wtbh = result.get('Wtbh', '')
+                    return True, f"通达信下单成功，委托编号: {wtbh}"
+                else:
+                    return False, f"通达信下单失败: {msg}"
+                    
             except Exception as e:
                 return False, f"通达信下单异常: {str(e)}"
                 

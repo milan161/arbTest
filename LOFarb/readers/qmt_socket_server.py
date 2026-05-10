@@ -6,6 +6,15 @@ import socket
 import threading
 import time
 
+# 尝试导入本地敏感配置
+try:
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from config_local import YH_ACCOUNT as QMT_ACCOUNT
+except ImportError:
+    print("[警告] config_local.py 不存在，使用默认账号")
+    QMT_ACCOUNT = "您的银河QMT账号"
+
 g_context = None
 g_api_lock = threading.Lock()
 g_account_id = "" 
@@ -102,7 +111,7 @@ def broadcast_message(msg):
 def init(ContextInfo):
     global g_account_id, g_context
     print("\n[策略日志] 加载 v4.2 沙盘推演版 Socket 策略 (防崩溃版)...")
-    g_account_id = '230500059288'
+    g_account_id = QMT_ACCOUNT
     g_context = ContextInfo
     ContextInfo.set_account(g_account_id)
     
