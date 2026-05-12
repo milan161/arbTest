@@ -19,11 +19,9 @@ env/
 Thumbs.db
 
 # === 私密配置（不上传Gitee）===
-# 私用基金配置
-lof_config_private.yaml
-arb_config_private.yaml
-
-# 本地敏感配置（账号密码等）
+# 包含账号密码等隐私的配置文件
+LOFarb/lof_config.yaml
+arb_config.yaml
 config_local.py
 *.local.py
 
