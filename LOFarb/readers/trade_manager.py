@@ -5,9 +5,9 @@ import socket
 
 # 导入本地敏感配置
 try:
-    from config_local import GJS_ACCOUNT
+    from account_private import GJS_ACCOUNT
 except ImportError:
-    print("WARNING: config_local.py 不存在，请复制 config_local.example.py 并填入真实账号")
+    print("WARNING: account_private.py 不存在，请复制 account_example.py 并填入真实账号")
     GJS_ACCOUNT = None
 
 class TradeManager:

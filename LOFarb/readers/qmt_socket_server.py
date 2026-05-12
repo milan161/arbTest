@@ -10,9 +10,9 @@ import time
 try:
     import sys, os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from config_local import YH_ACCOUNT as QMT_ACCOUNT
+    from account_private import YH_ACCOUNT as QMT_ACCOUNT
 except ImportError:
-    print("[警告] config_local.py 不存在，使用默认账号")
+    print("[警告] account_private.py 不存在，使用默认账号")
     QMT_ACCOUNT = "您的银河QMT账号"
 
 g_context = None

@@ -38,9 +38,9 @@
 
 ### 操作步骤：
 1. 进入 `LOFarb` 文件夹
-2. 找到 **`config_local.example.py`** 文件
-3. **右键 → 重命名**，改成 `config_local.py`
-4. 双击打开 `config_local.py`，填入你自己的账号：
+2. 找到 **`account_example.py`** 文件
+3. **右键 → 重命名**，改成 `account_private.py`
+4. 双击打开 `account_private.py`，填入你自己的账号：
    ```python
    # 国金证券 MiniQMT 账号
    GJS_ACCOUNT = "你的国金QMT账号"
@@ -54,13 +54,13 @@
 
 | 文件 | 说明 | 是否上传到 Git |
 |------|------|---------------|
-| `config_local.example.py` | 模板文件（含占位符） | ✅ 是 |
-| `config_local.py` | 你的真实账号 | ❌ 否（由模板改名而来） |
+| `account_example.py` | 模板文件（含占位符） | ✅ 是 |
+| `account_private.py` | 你的真实账号 | ❌ 否（由模板改名而来） |
 
-> ⚠️ **注意**：克隆代码后只有 `config_local.example.py`，需要手动重命名为 `config_local.py` 并填入账号。
+> ⚠️ **注意**：克隆代码后只有 `account_example.py`，需要手动重命名为 `account_private.py` 并填入账号。
 
 ### 如果不配置会怎样？
-如果不创建 `config_local.py`，程序启动时会显示警告，但交易功能（通达信/QMT下单）将无法使用。行情监控功能仍然正常。
+如果不创建 `account_private.py`，程序启动时会显示警告，但交易功能（通达信/QMT下单）将无法使用。行情监控功能仍然正常。
 
 ---
 
