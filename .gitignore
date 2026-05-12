@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# === 私密配置（不上传Gitee）===
+# 包含账号密码的配置文件
+arb_config.yaml
+config_local.py
+*.local.py
+
+# === 私密目录（不上传Gitee）===
+LOFarb/ibapi/
+LOFarb/logs/
+LOFarb/my-ai/
+LOFarb/test/
+LOFarb/data/
+.gemini/
+ETFRotate/
+jsl/
+scripts/
+test_read_data/
+woodyAPI/
+公众号/
+
+# === 数据库文件（不上传Gitee）===
+database/*.db
+database/*.db-shm
+database/*.db-wal
+
+# === 日志文件 ===
+*.log
+logs/
+
+# === 临时文件 ===
+test_bom.bat

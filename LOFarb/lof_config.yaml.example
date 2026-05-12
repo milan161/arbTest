@@ -1,0 +1,48 @@
+# LOF 基金套利系统配置文件
+# 使用前请复制此文件为 lof_config.yaml，并填写你的账号密码等私密信息
+
+# ============ 私密信息（必须修改）============
+ib_account: "你的IB账号"
+ib_password: "你的IB密码"
+qmt_account: "你的QMT账号"
+qmt_password: "你的QMT密码"
+trade_password: "你的交易密码"
+
+# ============ 基金配置（根据需要修改）============
+funds:
+  - code: "161226"
+    name: "易基黄金主题LOF"
+    category: "商品"
+    valuation_portfolio:
+      - symbol: "GLD"
+        weight: 50
+      - symbol: "AG"
+        weight: 50
+    hedging_portfolio:
+      - symbol: "^GLD-EU"
+        weight: 50
+      - symbol: "^GLD-JP"
+        weight: 50
+
+  - code: "501018"
+    name: "南方新兴消费LOF"
+    category: "指数"
+    trade_etf: "XLE"
+    valuation_portfolio:
+      - symbol: "XLE"
+        weight: 100
+    hedging_portfolio:
+      - symbol: "CL"
+        weight: 100
+
+# ============ 货币配置 ============
+currencies:
+  - code: "USDCNH"
+    name: "美元兑人民币"
+    weight: 1.0
+
+# ============ 其他配置 ============
+app:
+  host: "0.0.0.0"
+  port: 5000
+  refresh_interval: 60
