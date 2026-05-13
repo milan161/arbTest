@@ -64,26 +64,17 @@ class StaticValuationCalculator:
             etf_symbols.append(sym)
             
             # 匹配价格 (优先使用netvalue，否则降级到price)
-            price_col = 'netvalue'  # 默认尝试净值字段
-            etf_df = pd.read_sql(f'SELECT date, price, netvalue FROM usa_etf_daily_prices WHERE symbol = ?', conn, params=(sym,))
-            if not etf_df.empty and etf_df['netvalue'].notna().any() and (etf_df['netvalue'] > 0).any():
-                etf_df.rename(columns={'netvalue': sym}, inplace=True)
-                price_col = 'netvalue'
-            else:
-                etf_df.rename(columns={'price': sym}, inplace=True)
+            # 使用COALESCE逐行处理：有净值用净值，没净值用价格
+            etf_df = pd.read_sql(f'SELECT date, COALESCE(NULLIF(netvalue, 0), price) as "{sym}" FROM usa_etf_daily_prices WHERE symbol = ?', conn, params=(sym,))
             df = pd.merge(df, etf_df[['date', sym]], on='date', how='left')
             
             # 匹配每日动态变化的真实仓位权重
             weight_df = pd.read_sql(f'SELECT date, weight as "{sym}权重" FROM fund_basket_weights WHERE fund_code = ? AND underlying_symbol = ?', conn, params=(fund_code, sym))
             df = pd.merge(df, weight_df, on='date', how='left')
             
-        # 确保魔法锚点 ETF 也被拉入计算基座 (同样优先netvalue)
+        # 确保魔法锚点 ETF 也被拉入计算基座 (同样优先netvalue，兜底price)
         if primary_sym and primary_sym not in df.columns:
-            primary_df = pd.read_sql(f'SELECT date, price, netvalue FROM usa_etf_daily_prices WHERE symbol = ?', conn, params=(primary_sym,))
-            if not primary_df.empty and primary_df['netvalue'].notna().any() and (primary_df['netvalue'] > 0).any():
-                primary_df.rename(columns={'netvalue': primary_sym}, inplace=True)
-            else:
-                primary_df.rename(columns={'price': primary_sym}, inplace=True)
+            primary_df = pd.read_sql(f'SELECT date, COALESCE(NULLIF(netvalue, 0), price) as "{primary_sym}" FROM usa_etf_daily_prices WHERE symbol = ?', conn, params=(primary_sym,))
             df = pd.merge(df, primary_df[['date', primary_sym]], on='date', how='left')
 
         # 5. 匹配大宗期货结算价行情
@@ -210,15 +201,18 @@ class StaticValuationCalculator:
             
             # 🌟 魔法捷径：Woody 常量折叠极简推演
             # 逻辑：仅限单一纯净ETF(如XOP/SPY)使用单一代入。多区域组合(黄金/原油)必须强制走矩阵兜底。
+            used_magic = False
             if pd.notna(b_hedge) and b_hedge > 0 and primary_sym and primary_sym in row and len(portfolio) == 1:
                 c_price = row.get(primary_sym)
                 if pd.notna(c_price) and c_price > 0:
                     val = calculate_magic_valuation(base_nav, position, c_price, cur_fx, b_hedge)
                     if val is not None:
                         net_ratio = (val / base_nav) - 1
+                        used_magic = True
+                        logger.info(f"  🌟 [{fund.get('name','?')}] 使用魔法公式: base_nav={base_nav:.4f}, pos={position}, price={c_price:.2f}, fx={cur_fx:.4f}, hedge={b_hedge:.2f} -> val={val:.4f}")
             
             # 🌟 降级兜底：传统的矩阵推演
-            # 逻辑：万一昨天的 Woody API 挂了没抓到因子，自动退回“一篮子ETF+权重”的安全矩阵算法
+            # 逻辑：万一昨天的 Woody API 挂了没抓到因子，自动退回"一篮子ETF+权重"的安全矩阵算法
             if val is None:
                 etf_factor, has_cur_etfs, valid_weight = 0.0, True, 0.0
                 for sym in etf_symbols:

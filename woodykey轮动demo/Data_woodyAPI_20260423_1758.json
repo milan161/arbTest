@@ -1,0 +1,27 @@
+{
+  "QQQ": {
+    "calibration": "41.109654",
+    "date": "2026-04-21",
+    "netvalue": "644.118067",
+    "position": "1",
+    "symbol_hedge": "^NDX"
+  },
+  "SZ161130": {
+    "calibration": "44905.380073",
+    "date": "2026-04-21",
+    "netvalue": "4.0448",
+    "symbol_hedge": "QQQ",
+    "hedge": "1149.822889",
+    "CNY": "6.865",
+    "position": "0.95"
+  },
+  "SZ162411": {
+    "calibration": "1284.143890",
+    "date": "2026-04-22",
+    "netvalue": "0.8992",
+    "symbol_hedge": "XOP",
+    "hedge": "1351.730411",
+    "CNY": "6.865",
+    "position": "0.95"
+  }
+}

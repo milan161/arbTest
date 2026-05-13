@@ -7,8 +7,8 @@ def calculate_magic_valuation(base_nav: float, position: float, current_asset_pr
     
     数学推导：
     传统公式: 估值 = T-1净值 * (1 + 仓位 * ((T日价格 * T日汇率) / (T-1价格 * T-1汇率) - 1))
-    由于 Hedge = (T-1价格 * T-1汇率) / (T-1净值 * 仓位)
-    代入化简后: 估值 = T-1净值 * (1 - 仓位) + (T日价格 * T日汇率) / Hedge
+    由于 Hedge = (T-1价格 * T-1汇率) / T-1净值
+    代入化简后: 估值 = T-1净值 * (1 - 仓位) + (T日价格 * T日汇率) * 仓位 / Hedge
     
     适用场景：
     1. 纯ETF实时估值:     current_asset_price = T日ETF现价,        hedge_value = API_Hedge
@@ -22,8 +22,8 @@ def calculate_magic_valuation(base_nav: float, position: float, current_asset_pr
     if not current_fx or current_fx <= 0:
         return None
         
-    # 大一统魔法公式
-    return base_nav * (1.0 - position) + (current_asset_price * current_fx) / hedge_value
+    # 大一统魔法公式（修正版：第二项需乘以仓位）
+    return base_nav * (1.0 - position) + (current_asset_price * current_fx) * position / hedge_value
 
 def calculate_base_denominator(base_nav: float, position: float, hedge_value: float) -> float:
     """

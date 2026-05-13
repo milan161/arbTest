@@ -653,7 +653,7 @@ class LOFPriceReader:
         if self.use_qmt: return "银河QMT (Socket极速)"
         if self.use_tdx: return "通达信 (内存直连)"
         # if self.use_guojin: return "国金QMT (原生直连)"
-        return "新浪API (轮询兜底)"
+        return "新浪轮询兜底"
 
     def reconnect(self):
         print("🔄 [手动触发] 尝试重新挂载 A股 LOF 极速行情通道...")
