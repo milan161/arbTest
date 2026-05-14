@@ -26,9 +26,25 @@ class DatabaseManager:
         self.init_db()
         
     def _get_conn(self):
-        conn = sqlite3.connect(self.db_path, timeout=15.0)
-        conn.execute('PRAGMA journal_mode=WAL;') # 开启 WAL 模式，支持高并发读写不锁死
-        return conn
+        try:
+            logger.info(f"Attempting to connect to database: {self.db_path}")
+            logger.info(f"Database directory exists: {os.path.exists(os.path.dirname(self.db_path))}")
+            if os.path.exists(self.db_path):
+                logger.info(f"Database file size: {os.path.getsize(self.db_path)} bytes")
+            
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            
+            try:
+                conn.execute('PRAGMA journal_mode=WAL;')
+                logger.info("WAL mode enabled successfully")
+            except Exception as wal_error:
+                logger.warning(f"Failed to enable WAL mode: {wal_error}. Falling back to default journal mode.")
+            
+            return conn
+        except Exception as e:
+            logger.error(f"Failed to connect to database: {e}")
+            logger.error(f"Database path: {self.db_path}")
+            raise
     
     def init_db(self):
         with self.lock:

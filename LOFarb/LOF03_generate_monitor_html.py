@@ -1731,8 +1731,9 @@ def generate(futures_data=None, ib_data=None):
 
         if base_date and base_nav:
             position = fund.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
-            if position > 1: position = position / 100.0
-            hedging_portfolio = fund.get('hedging_portfolio', [])
+            if position > 1: position = position / 100.0 # 兼容 95 和 0.95 两种写法
+            # 兼容新旧版配置：优先使用 valuation_portfolio，若无则回退到 hedging_portfolio
+            hedging_portfolio = fund.get('valuation_portfolio', [])
             hedging_portfolio = fund.get('valuation_portfolio', [])
             
             # 在这里同样标准化注入的符号

@@ -88,7 +88,7 @@ def init_trade_manager():
             tq = None
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # 基础目录与状态文件
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -289,9 +289,16 @@ class FutuReader:
         try:
             # 限制重连频率，避免富途OpenD未启动时狂刷错误
             if self.ctx is None:
-                if time.time() - self.last_connect_time < 10:
+                if time.time() - self.last_connect_time < 60:
                     return False, "富途OpenD未连接 (等待重连...)", self.prices
                 self.last_connect_time = time.time()
+                
+                # 静音富途底层日志
+                try:
+                    import futu
+                    futu.SysConfig.set_client_info('LOFarb')
+                except: pass
+                
                 self.ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
                 self.subscribed_codes = set()
             
@@ -302,6 +309,7 @@ class FutuReader:
             if new_codes:
                 ret, data = self.ctx.subscribe(new_codes, [SubType.QUOTE], session=Session.ALL)
                 if ret != 0:
+                    self.close()  # 必须关闭失效的上下文，否则底层线程会无限重连导致控制台刷屏
                     return False, f"订阅失败: {data}", self.prices
                 self.subscribed_codes.update(new_codes)
             
@@ -357,6 +365,7 @@ class FutuReader:
                         
                 return True, "成功获取富途夜盘价格", self.prices
             else:
+                self.close()  # 接口返回错误时立即销毁上下文，切断底层的死亡重连循环
                 return False, f"获取数据失败: {data}", self.prices
                 
         except Exception as e:
@@ -1302,7 +1311,11 @@ if __name__ == "__main__":
     threading.Thread(target=delayed_trade_init, daemon=True).start()
     try:
         # 使用socketio.run()替代app.run()以支持WebSocket
-        socketio.run(app, debug=False, host='0.0.0.0', port=5000)
+        try:
+            # 兼容新版 Flask 强制要求确认安全参数，否则 threading 模式在开发服务器下会报错
+            socketio.run(app, debug=False, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+        except TypeError:
+            socketio.run(app, debug=False, host='0.0.0.0', port=5000)
     except OSError as e:
         if "10048" in str(e) or "Address already in use" in str(e):
             print("\n" + "❌"*20)

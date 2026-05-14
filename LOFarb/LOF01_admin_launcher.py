@@ -14,7 +14,7 @@ import socket
 import threading
 import subprocess
 from datetime import datetime
-from flask import Flask, jsonify, redirect, request
+from flask import Flask, jsonify, redirect, request, Response
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
@@ -117,6 +117,7 @@ def _run_script_async(script_name, task_key, force_woody=False, extra_args=None)
             with open(log_path, "w", encoding="utf-8-sig") as logf:
                 header = f"--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} START {task_key} ---\n"
                 logf.write(header)
+                        logf.flush()
                 cmd = [sys.executable, "-u", "-X", "utf8", script_path]
                 if extra_args:
                     cmd.extend(extra_args)
@@ -179,21 +180,20 @@ def admin_log(task):
 def admin_logtext(task):
     log_path = ADMIN_LOGS.get(task, os.path.join(LOGS_DIR, f"admin_{task}.log"))
     if not os.path.exists(log_path):
-        return ("日志不存在或尚未运行该任务。\n", 200, {"Content-Type": "text/plain; charset=utf-8"})
+        return Response("日志不存在或尚未运行该任务。\n", status=200, mimetype="text/plain")
     try:
         with open(log_path, "rb") as f:
             data = f.read()
-        # 优先UTF-8，失败则尝试GBK/CP936，最后replace
-        try: # 修正：此try块应嵌套在外部try块中
+        try: 
             text = data.decode("utf-8-sig")
-        except Exception: # 修正：此except块应与内部try块对齐
+        except Exception: 
             try:
                 text = data.decode("gbk")
             except Exception:
                 text = data.decode("utf-8", errors="replace")
-        return (text, 200, {"Content-Type": "text/plain; charset=utf-8"}) # 修正：此return语句应与内部try块对齐
+        return Response(text, status=200, mimetype="text/plain")
     except Exception as e:
-        return (f"读取日志失败: {e}\n", 200, {"Content-Type": "text/plain; charset=utf-8"})
+        return Response(f"读取日志失败: {e}\n", status=200, mimetype="text/plain")
 
 @app.route("/admin/stream/<task>", methods=["GET"])
 def admin_stream(task):
@@ -206,7 +206,7 @@ def admin_stream(task):
         <title>[运行中] {task} - 实时日志回显</title>
         <style>
             body {{ background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', 'Courier New', monospace; padding: 15px; margin: 0; }}
-            #log-container {{ white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.5; }}
+            #log-container {{ white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.5; padding-bottom: 50px; }}
         </style>
     </head>
     <body>
@@ -216,16 +216,21 @@ def admin_stream(task):
                 try {{
                     // 加时间戳防止浏览器缓存
                     const res = await fetch('/admin/logtext/{task}?nocache=' + new Date().getTime());
+                    if (!res.ok) throw new Error('HTTP Error: ' + res.status);
                     const text = await res.text();
                     const container = document.getElementById('log-container');
                     
-                    // 判断滚动条是否在最底部附近，如果是，更新后自动滚到底部
-                    const isScrolledToBottom = document.documentElement.scrollHeight - window.innerHeight <= window.scrollY + 50;
-                    container.textContent = text;
-                    if (isScrolledToBottom) {{
-                        window.scrollTo(0, document.documentElement.scrollHeight);
+                    if (text && text.trim().length > 0) {{
+                        // 判断滚动条是否在最底部附近，如果是，更新后自动滚到底部
+                        const isScrolledToBottom = document.documentElement.scrollHeight - window.innerHeight <= window.scrollY + 50;
+                        container.textContent = text;
+                        if (isScrolledToBottom) {{
+                            window.scrollTo(0, document.documentElement.scrollHeight);
+                        }}
                     }}
-                }} catch (e) {{}}
+                }} catch (e) {{
+                    document.getElementById('log-container').textContent = '连接日志流异常: ' + e.message + '\\n尝试重连中...';
+                }}
             }}
             setInterval(fetchLog, 1000); // 每1秒刷新一次屏幕
             fetchLog();

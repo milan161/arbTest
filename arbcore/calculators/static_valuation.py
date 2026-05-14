@@ -144,6 +144,8 @@ class StaticValuationCalculator:
             w_col = f"{sym}权重"
             if w_col in df.columns:
                 df[w_col] = df[w_col].bfill().fillna(item.get('weight', 0))
+            else:
+                df[w_col] = item.get('weight', 0)
                 
         # 3. 仓位终极兜底转换 (仅在连历史最老一天都没有API数据时才触发)
         default_pos = fund.get('holdings', {}).get('equity_ratio', 100)
