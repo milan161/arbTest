@@ -4,20 +4,30 @@ import sys
 import logging
 from datetime import datetime
 
-# 统一路径管理：将项目根目录(arbTest)添加到 sys.path
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.append(BASE_DIR)
+# 🚀 强制全局禁用系统代理 (关键优化)
+# 解决矛盾：Gemini CLI 需要梯子，但 Woody/新浪 API 探测到梯子 IP 会反爬或报错
+os.environ['NO_PROXY'] = '*'
 
-# 导入公共基座（假定 arbcore 已在 sys.path 中）
+# 明确路径管理
+# 当前文件: D:\Study\arbTest\LOFarb\readers\base_app.py
+READER_DIR = os.path.dirname(os.path.abspath(__file__))
+LOFARB_DIR = os.path.dirname(READER_DIR)
+ROOT_DIR = os.path.dirname(LOFARB_DIR)  # 指向 D:\Study\arbTest
+
+# 将项目根目录添加到 sys.path，确保 arbcore 可被导入
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+# 导入公共基座
 from arbcore.database.db_manager import DatabaseManager
 from arbcore.config.config_loader import load_config
 
 def setup_logging(name, log_file_prefix="app"):
     """
-    统一日志配置，支持文件和控制台输出
+    统一日志配置
     """
-    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+    # 日志统一放在 LOFarb/logs 目录下
+    log_dir = os.path.join(LOFARB_DIR, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"{log_file_prefix}_{datetime.now().strftime('%Y%m%d')}.log")
 
@@ -38,12 +48,13 @@ def setup_logging(name, log_file_prefix="app"):
 
 class BaseApp:
     """
-    应用基类，处理通用的配置加载和数据库连接
+    应用基类
     """
     def __init__(self, name, config_name="lof_config.yaml"):
         self.logger = setup_logging(name, log_file_prefix=name)
         self.db = DatabaseManager()
-        self.config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), config_name)
+        # 配置文件路径: D:\Study\arbTest\LOFarb\lof_config.yaml
+        self.config_path = os.path.join(LOFARB_DIR, config_name)
         self.config = self._load_config()
         self.logger.info(f"🚀 {name} 启动，配置文件: {self.config_path}")
 

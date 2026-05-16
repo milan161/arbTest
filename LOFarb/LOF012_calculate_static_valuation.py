@@ -77,8 +77,11 @@ class LofValuationApp(BaseApp):
         name = fund.get('name', '')
         conn = self.db._get_conn()
         try:
-            # 修改表名为 fund_daily_factors (参考 GEMINI.md)
+            # 兼容性查询：先查新表 fund_daily_factors，再查旧表 fund_factor
             pos_df = pd.read_sql(f"SELECT date, position FROM fund_daily_factors WHERE fund_code='{code}' ORDER BY date DESC LIMIT 1", conn)
+            if pos_df.empty:
+                pos_df = pd.read_sql(f"SELECT date, position FROM fund_factor WHERE fund_code='{code}' ORDER BY date DESC LIMIT 1", conn)
+            
             pos_info = f"仓位={pos_df.iloc[0]['position']*100}%" if not pos_df.empty else "仓位因子缺失"
 
             # 读取 fund_data，不管有没有 nav，直接把最近3天的原始记录全拉出来看
@@ -89,7 +92,7 @@ class LofValuationApp(BaseApp):
             for i, row in raw_df.iterrows():
                 self.logger.info(f"      📍 日期: {row['date']} | 净值(nav)={row['nav']} | 收盘价(price)={row['price']} | 溢价(premium)={row['premium']}")
         except Exception as e:
-            pass
+            self.logger.warning(f"诊断基金 {code} 时发生非致命异常: {e}")
         finally:
             conn.close()
 
@@ -108,7 +111,12 @@ class LofValuationApp(BaseApp):
 
             try:
                 self.pre_diagnose_fund(fund)
-                self.calculator.process_fund(fund)
+                # 执行核心计算逻辑
+                success = self.calculator.process_fund(fund)
+                if success:
+                    self.logger.info(f"  ✅ [{fund.get('code')}] 静态估值更新成功")
+                else:
+                    self.logger.warning(f"  ⚠️ [{fund.get('code')}] 静态估值计算跳过（可能缺失必要前置数据）")
                 self.diagnose_fund(fund)
             except Exception as e:
                 self.logger.error(f"❌ 处理基金 {fund.get('code')} 时出错: {e}")
@@ -118,14 +126,17 @@ class LofValuationApp(BaseApp):
         self.logger.info("🎉 静态估值计算流水线全部完成！")
 
     def clean_duplicate_db(self):
+        """
+        大一统后的极简清理逻辑：仅针对 fund_data 表进行去重
+        """
         conn = self.db._get_conn()
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fund_history_%'")
-            for (table,) in cursor.fetchall():
-                cursor.execute(f"DELETE FROM {table} WHERE rowid NOT IN (SELECT MAX(rowid) FROM {table} GROUP BY date)")
+            # 仅清理核心表 fund_data
+            self.logger.info("🧹 正在执行 fund_data 表深度去重...")
+            cursor.execute("DELETE FROM fund_data WHERE rowid NOT IN (SELECT MAX(rowid) FROM fund_data GROUP BY date, fund_code)")
             conn.commit()
-            self.logger.info("🧹 已自动执行底层表冗余数据清理。")
+            self.logger.info("✅ fund_data 表去重完成。")
         except Exception as e:
             self.logger.warning(f"清理重复数据失败: {e}")
         finally:

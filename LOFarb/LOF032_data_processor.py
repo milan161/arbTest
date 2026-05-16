@@ -43,94 +43,38 @@ class DataProcessor:
         return df
     
     def read_lof_data(self, fund_code):
-        """读取LOF基金数据"""
-        # 尝试读取扩展后的LOF历史数据文件（包含静态官方估值）
-        filename = f"LOF_{fund_code}_history.csv"
-        file_path = os.path.join(self.data_dir, filename)
-        table_name = f"fund_history_{fund_code}"
+        """
+        读取基金历史数据 (大一统版本)
+        从核心宽表 fund_data 中提取该基金的所有历史记录
+        """
         df = pd.DataFrame()
-        
         try:
             conn = sqlite3.connect(SHARED_DB_PATH)
-            df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
+            # 核心 SQL：从 fund_data 提取数据，并进行字段名映射以保持 UI 兼容
+            sql = f"""
+                SELECT 
+                    date, 
+                    nav, 
+                    price as close, 
+                    static_val as static_valuation, 
+                    static_premium as premium,
+                    val_error
+                FROM fund_data 
+                WHERE fund_code = '{fund_code}'
+                ORDER BY date DESC
+            """
+            df = pd.read_sql(sql, conn)
             conn.close()
+            
+            if not df.empty:
+                df = self._normalize_date_column(df, 'date')
+                # 过滤掉日期为空的行
+                df = df[df['date'].notna()]
+                return df.reset_index(drop=True)
+            
         except Exception as e:
-            if os.path.exists(file_path):
-                try:
-                    df = pd.read_csv(file_path, encoding='utf-8-sig')
-                except Exception as e2:
-                    print(f"读取文件 {filename} 失败: {e2}")
-                    
-        if not df.empty:
-            try:
-                # 确保日期列存在
-                if 'date' not in df.columns:
-                    # 尝试其他可能的日期列名
-                    for col in ['Date', '日期']:
-                        if col in df.columns:
-                            df.rename(columns={col: 'date'}, inplace=True)
-                            break
-                
-                if 'date' in df.columns:
-                    df = self._normalize_date_column(df, 'date')
-                    
-                    # 确保必要的列存在
-                    if 'nav' not in df.columns:
-                        for col in ['NAV', '净值', 'LOF净值']:
-                            if col in df.columns:
-                                df.rename(columns={col: 'nav'}, inplace=True)
-                                break
-                    
-                    if 'close' not in df.columns:
-                        for col in ['Close', '收盘价', 'LOF交易价格', 'LOF交易价']:
-                            if col in df.columns:
-                                df.rename(columns={col: 'close'}, inplace=True)
-                                break
-                    
-                    if 'static_valuation' not in df.columns:
-                        # 兼容新旧版字段命名
-                        for col in ['ETF静态估值', '静态官方估值']:
-                            if col in df.columns:
-                                df.rename(columns={col: 'static_valuation'}, inplace=True)
-                                break
-                    
-                    # 提取纯指数估值数据
-                    if 'index_valuation' not in df.columns:
-                        for col in ['指数静态估值']:
-                            if col in df.columns:
-                                df.rename(columns={col: 'index_valuation'}, inplace=True)
-                                break
-                                
-                    # 处理纯指数估值列中的无效值
-                    if 'index_valuation' in df.columns:
-                        df['index_valuation'] = df['index_valuation'].replace(['n', '无', 'N/A', 'NA'], pd.NA)
-                    
-                    # 处理静态官方估值列中的无效值
-                    if 'static_valuation' in df.columns:
-                        # 将'n'和'无'等无效值转换为NaN
-                        df['static_valuation'] = df['static_valuation'].replace(['n', '无', 'N/A', 'NA'], pd.NA)
-                        # 尝试将列转换为数值类型
-                        try:
-                            df['static_valuation'] = pd.to_numeric(df['static_valuation'], errors='coerce')
-                        except Exception as e:
-                            pass
-                    
-                    if 'exchange_rate' not in df.columns:
-                        for col in ['人民币中间价']:
-                            if col in df.columns:
-                                df.rename(columns={col: 'exchange_rate'}, inplace=True)
-                                break
-                    
-                    # 过滤掉日期为空的行
-                    df = df[df['date'].notna()]
-                    
-                    if len(df) > 0:
-                        return df.sort_values('date', ascending=False).reset_index(drop=True)
-            except Exception as e:
-                print(f"读取文件 {filename} 失败: {e}")
-        else:
-            print(f"警告: 找不到LOF历史数据文件: {file_path}")
-            print(f"读取 SQLite 表 {table_name} 失败: {e}")
+            print(f"❌ [DataProcessor] 读取基金 {fund_code} 历史数据失败: {e}")
+            
         return pd.DataFrame()
     
     def read_basic_data(self):

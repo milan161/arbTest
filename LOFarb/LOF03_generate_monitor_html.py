@@ -42,18 +42,33 @@ silver_fund_data = None
 # 辅助函数
 
 def read_fund_history_from_db(code):
-    """直接从 SQLite 数据库读取历史对账表，不再使用旧的 CSV Processor"""
+    """
+    【重构：大一统版本】直接从核心宽表 fund_data 读取基金的所有历史记录
+    """
     try:
         conn = sqlite3.connect(SHARED_DB_PATH)
-        df = pd.read_sql(f"SELECT * FROM fund_history_{code} ORDER BY date DESC", conn)
+        # 从 fund_data 提取该基金的数据，并进行字段映射以适配原有逻辑
+        sql = f"""
+            SELECT 
+                date, 
+                nav, 
+                price as close, 
+                static_val as static_valuation, 
+                static_premium as premium,
+                val_error
+            FROM fund_data 
+            WHERE fund_code = '{code}'
+            ORDER BY date DESC
+        """
+        df = pd.read_sql(sql, conn)
         conn.close()
-        if 'date' in df.columns:
+        if not df.empty and 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
-            # 自动去重，防止多个相同日期的数据导致后续 loc[] 得到 DataFrame 从而引起 Series 的布尔判定报错
+            # 自动去重
             df = df.drop_duplicates(subset=['date']).reset_index(drop=True)
         return df
     except Exception as e:
-        print(f"读取数据库 fund_history_{code} 失败: {e}")
+        print(f"❌ 读取 fund_data 表中基金 {code} 的数据失败: {e}")
         return pd.DataFrame()
 
 def get_exchange_rate():
@@ -351,25 +366,22 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         # 从数据中读取ETF静态溢价、ETF静态估值误差
         etf_premium_str = "-"
         etf_premium_cls = ""
-        if 'ETF静态溢价' in df_idx.columns:
-            etf_premium_val = df_idx.loc[d_T].get('ETF静态溢价', '无')
-            if etf_premium_val != '无' and pd.notna(etf_premium_val):
-                try:
-                    etf_premium_num = float(str(etf_premium_val).replace('%', ''))
-                    etf_premium_cls, etf_premium_str = html_generator.format_color(etf_premium_num)
-                except:
-                    pass
+        # 核心修复：适配大一统后的字段名
+        ep_val = df_idx.loc[d_T].get('premium', df_idx.loc[d_T].get('ETF静态溢价', '无'))
+        if ep_val != '无' and pd.notna(ep_val):
+            try:
+                etf_premium_num = float(str(ep_val).replace('%', ''))
+                etf_premium_cls, etf_premium_str = html_generator.format_color(etf_premium_num)
+            except: pass
         
         etf_val_err_str = "-"
         etf_val_err_cls = ""
-        if 'ETF静态估值误差' in df_idx.columns:
-            etf_val_err_val = df_idx.loc[d_T].get('ETF静态估值误差', '无')
-            if etf_val_err_val != '无' and pd.notna(etf_val_err_val):
-                try:
-                    etf_val_err_num = float(str(etf_val_err_val).replace('%', ''))
-                    etf_val_err_cls, etf_val_err_str = html_generator.format_color(etf_val_err_num)
-                except:
-                    pass
+        ee_val = df_idx.loc[d_T].get('val_error', df_idx.loc[d_T].get('ETF静态估值误差', '无'))
+        if ee_val != '无' and pd.notna(ee_val):
+            try:
+                etf_val_err_num = float(str(ee_val).replace('%', ''))
+                etf_val_err_cls, etf_val_err_str = html_generator.format_color(etf_val_err_num)
+            except: pass
         
         # 从数据中读取期货静态估值、期货静态估值误差
         future_static_val = '无'
@@ -1542,55 +1554,23 @@ def check_and_update_historical_data():
         if not code:
             continue
         
-        table_name = f"fund_history_{code}"
+        # 【重构：大一统版本】检查核心宽表 fund_data
         try:
             conn = sqlite3.connect(SHARED_DB_PATH)
-            df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
+            # 检查是否有该基金的最新记录且 static_val 不为空
+            df = pd.read_sql(f"SELECT date, static_val FROM fund_data WHERE fund_code='{code}' AND static_val IS NOT NULL ORDER BY date DESC LIMIT 1", conn)
             conn.close()
             
-            # 确保日期列存在
-            if 'date' not in df.columns:
-                # 尝试其他可能的日期列名
-                for col in ['Date', '日期']:
-                    if col in df.columns:
-                        df.rename(columns={col: 'date'}, inplace=True)
-                        break
-            
-            if 'date' in df.columns:
-                # 尝试转换日期列
-                try:
-                    # 检查日期列的格式
-                    sample_date = str(df['date'].iloc[0]) if len(df) > 0 else ''
-                    if '-' in sample_date and len(sample_date) == 10 and sample_date.startswith('2026'):
-                        # 已经是完整日期格式（2026-02-25）
-                        df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d', errors='coerce')
-                    else:
-                        # 尝试将月-日格式转换为完整日期（假设2026年）
-                        df['date'] = pd.to_datetime('2026-' + df['date'], format='%Y-%m-%d', errors='coerce')
-                except Exception as e:
-                    print(f"日期转换失败: {e}")
-                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-                
-                # 过滤掉日期为空的行
-                df = df[df['date'].notna()]
-                
-                if len(df) > 0:
-                    # 获取最新日期
-                    latest_date = df['date'].max().date()
-                    
-                    if latest_date < today:
-                        print(f"提示: 基金 {code} 的 SQLite 数据日期({latest_date})小于今天，需要更新")
-                        need_update = True
-                else:
-                    print(f"警告: 基金 {code} 的 SQLite 表为空，需要更新")
+            if not df.empty:
+                latest_date = pd.to_datetime(df['date'].iloc[0]).date()
+                if latest_date < today:
+                    print(f"提示: 基金 {code} 的数据库记录日期({latest_date})落后于今日，需要更新")
                     need_update = True
-                    break
             else:
-                print(f"警告: 基金 {code} 的 SQLite 表没有日期列，需要更新")
+                print(f"警告: 基金 {code} 在 fund_data 中尚无静态估值记录，需要更新")
                 need_update = True
-                break
         except Exception as e:
-            print(f"读取基金 {code} 的 SQLite 表失败: {e}")
+            print(f"读取基金 {code} 的 fund_data 表失败: {e}")
             need_update = True
             break
     
