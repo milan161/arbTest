@@ -952,12 +952,16 @@ class LOFPriceReader:
                 
                 # 优雅启动：系统启动前 15 秒绝对不触发新浪兜底，给 QMT 充足的建连和推流时间！
                 if current_time - getattr(self, 'start_time', 0) > 15 and current_time - last_sina_time > 20:
-                    missing_codes = [c for c in self.lof_codes if self.get_price(c.split('.')[0] if '.' in c else c) == 0]
+                    # 如果新浪是主数据源（QMT和通达信均未启用），则必须持续轮询所有基金
+                    if not self.use_qmt and not self.use_tdx:
+                        missing_codes = self.lof_codes
+                    else:
+                        missing_codes = [c for c in self.lof_codes if self.get_price(c.split('.')[0] if '.' in c else c) == 0]
                     if missing_codes:
-                        qs = [f"{'sh' if c.startswith('5') else 'sz'}{c}" for c in missing_codes]
+                        qs = [f"{'sh' if c.startswith('5') else 'sz'}{c.split('.')[0] if '.' in c else c}" for c in missing_codes]
                         for i in range(0, len(qs), 40):
                             try:
-                                res = requests.get(f"https://hq.sinajs.cn/list={','.join(qs[i:i+40])}", headers=self.headers, timeout=10, proxies={"http": None, "https": None})
+                                res = requests.get(f"http://hq.sinajs.cn/list={','.join(qs[i:i+40])}", headers=self.headers, timeout=10, proxies={"http": None, "https": None})
                                 res.encoding = 'gbk'
                                 for line in res.text.strip().split('\n'):
                                     match = re.search(r'hq_str_[a-z]{2}(\d{6})="([^"]+)"', line)
@@ -1237,6 +1241,29 @@ def api_ib_cancel_all():
         return jsonify({"status": "success", "message": "指令已发送: 仅撤销沙盘产生的挂单"})
     except Exception as e:
         return jsonify({"status": "error", "message": f"撤单异常: {str(e)}"})
+
+@app.route('/api/export_fund/<code>')
+def export_fund_data(code):
+    try:
+        import sys
+        if BASE_DIR not in sys.path:
+            sys.path.append(BASE_DIR)
+        import LOF005_output
+        
+        root_dir = os.path.dirname(BASE_DIR)
+        success, msg, csv_content = LOF005_output.generate_fund_excel_csv(code, root_dir)
+        
+        if success:
+            # utf-8-sig 的 BOM 编码完美解决直接双击 Excel 打开时中文乱码的问题
+            return Response(
+                csv_content.encode('utf-8-sig'),
+                mimetype="text/csv",
+                headers={"Content-disposition": f"attachment; filename=fund_{code}_export.csv"}
+            )
+        else:
+            return jsonify({"status": "error", "message": msg}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/sse/futures')
 def sse_futures():

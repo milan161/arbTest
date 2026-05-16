@@ -37,8 +37,8 @@ funds:
   name: 南方原油
   category: 原油
   holdings:
-    equity_ratio: 80.6
-    cash_ratio: 19.4
+    equity_ratio: 80.32
+    cash_ratio: 19.68
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -50,23 +50,23 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 50.83
+    weight: 48.57
     anchor: EU
   - symbol: USO
-    weight: 37.57
+    weight: 47.11
     anchor: US
   - symbol: USO-JP
-    weight: 11.6
+    weight: 4.32
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 80.6
+  position: 80.32
 - code: '160723'
   name: 嘉实原油
   category: 原油
   holdings:
-    equity_ratio: 78.61
-    cash_ratio: 21.39
+    equity_ratio: 78.97
+    cash_ratio: 21.03
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -113,23 +113,23 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 42.44
+    weight: 43.9
     anchor: US
   - symbol: USO-EU
-    weight: 48.56
+    weight: 46.79
     anchor: EU
   - symbol: USO-JP
-    weight: 5.33
+    weight: 4.34
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 78.61
+  position: 78.97
 - code: '161129'
   name: 易方达原油
   category: 原油
   holdings:
-    equity_ratio: 78.18
-    cash_ratio: 21.82
+    equity_ratio: 79.22
+    cash_ratio: 20.78
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -171,20 +171,20 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 51.48
+    weight: 42.44
     anchor: EU
   - symbol: USO-JP
     weight: 0.95
     anchor: US
   - symbol: USO
-    weight: 32.36
+    weight: 40.27
     anchor: US
   - symbol: USO-HK
-    weight: 16.16
+    weight: 17.29
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 78.18
+  position: 79.22
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金
@@ -257,8 +257,8 @@ funds:
   name: 嘉实黄金
   category: 黄金
   holdings:
-    equity_ratio: 96.18
-    cash_ratio: 3.82
+    equity_ratio: 96.37
+    cash_ratio: 3.63
   holdings_portfolio:
   - symbol: GLD
     weight: 19.02
@@ -300,31 +300,31 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 55.85
+    weight: 53.48
     anchor: US
   - symbol: GLD-EU
-    weight: 44.15
+    weight: 46.52
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 96.18
+  position: 96.37
 - code: '161116'
   name: 易方达黄金
   category: 黄金
   trade_etf: GLD
   trade_future: MGC
   holdings:
-    equity_ratio: 93.48
-    cash_ratio: 6.52
+    equity_ratio: 93.57
+    cash_ratio: 6.43
   valuation_portfolio:
   - symbol: GLD
-    weight: 79.75
+    weight: 78.83
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
   - symbol: GLD-EU
-    weight: 20.25
+    weight: 21.17
     anchor: EU
     name: ''
     currency: USD
@@ -368,7 +368,7 @@ funds:
     currency: USD
     exchange: SMART
     name: ''
-  position: 93.48
+  position: 93.57
 - code: '164701'
   name: 汇添富贵金属
   category: 黄金
@@ -454,8 +454,8 @@ funds:
   name: 中信保诚
   category: 黄金
   holdings:
-    equity_ratio: 88.64
-    cash_ratio: 11.36
+    equity_ratio: 88.45
+    cash_ratio: 11.55
   holdings_portfolio: []
   future_hedging:
   - symbol: MGC
@@ -467,26 +467,26 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 93.34
+    weight: 93.35
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
   - symbol: GLD-EU
-    weight: 4.46
+    weight: 5.37
     anchor: EU
     name: ''
     currency: USD
     exchange: SMART
   - symbol: GLD-JP
-    weight: 2.2
+    weight: 1.28
     anchor: JP
     name: ''
     currency: USD
     exchange: SMART
   trade_etf: GLD
   trade_future: MGC
-  position: 88.64
+  position: 88.45
 - code: '162411'
   name: 华宝油气
   category: 纯ETF

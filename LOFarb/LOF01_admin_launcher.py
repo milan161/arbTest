@@ -117,7 +117,7 @@ def _run_script_async(script_name, task_key, force_woody=False, extra_args=None)
             with open(log_path, "w", encoding="utf-8-sig") as logf:
                 header = f"--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} START {task_key} ---\n"
                 logf.write(header)
-                        logf.flush()
+                logf.flush()
                 cmd = [sys.executable, "-u", "-X", "utf8", script_path]
                 if extra_args:
                     cmd.extend(extra_args)
