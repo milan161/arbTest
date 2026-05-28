@@ -1,0 +1,47 @@
+# === 私密配置 ===
+account_private.py
+arb_config.yaml
+*.local.py
+
+# === 禁止上传的指定文件 ===
+LOFarb/LOF004_sandbox.py
+LOFarb/LOF005_output.py
+LOFarb/LOF006_create_student_db.py
+
+# === 禁止上传的目录 ===
+LOFarb/ibapi/
+LOFarb/logs/
+LOFarb/my-ai/
+LOFarb/test/
+LOFarb/data/
+
+.gemini/
+ETFRotate/
+jsl/
+scripts/
+test_read_data/
+woodyAPI/
+公众号/
+woodykey轮动demo/
+
+# === 压缩包/临时文件 ===
+ETFRotate*.zip
+GEMINI.md
+LOFarb/Gemini-Proxy.bat
+
+# === 数据库（只保留这两个） ===
+database/*
+!database/arb_master_share.db
+!database/readme.txt
+
+# === 编辑器/系统垃圾 ===
+.vscode/
+.idea/
+.git.bak/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.DS_Store
+Thumbs.db
