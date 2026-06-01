@@ -3,6 +3,7 @@
 
 import threading
 import time
+import re
 from datetime import datetime
 import yaml
 import random
@@ -167,11 +168,16 @@ class IBReader(EWrapper, EClient):
                     for fund in cfg.get('funds', []):
                         for h in fund.get('valuation_portfolio', []):
                             sym = h.get('symbol', '').split('-')[0].replace('^', '')
-                            if sym: syms.add(sym)
+                            # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
+                            is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
+                            if sym and not is_a_share: syms.add(sym)
                         trade_etf = fund.get('trade_etf', '')
                         if trade_etf:
                             for s in str(trade_etf).replace('，', ',').split(','):
-                                if s.strip(): syms.add(s.strip().upper())
+                                s = s.strip().upper()
+                                # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
+                                is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', s, re.IGNORECASE))
+                                if s and not is_a_share: syms.add(s)
                     self.symbols = list(syms)
             except: pass
             

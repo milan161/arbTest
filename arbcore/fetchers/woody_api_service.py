@@ -122,33 +122,66 @@ class WoodyAPIService:
         except Exception as e:
             logger.error(f"⚠️ 生成备份文件失败: {e}")
 
-        # 5. 调用之前 011 中的提纯入库逻辑 
-        if isinstance(api_data, dict):
-            for sym, f_data in api_data.items():
-                if not isinstance(f_data, dict): continue
-                fund_code = sym.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '')
-                
-                raw_date = f_data.get('date', '')
-                b_date = pd.to_datetime(str(raw_date).strip()).strftime('%Y-%m-%d') if raw_date else today_str
-                pos = f_data.get('position')
-                pos = float(pos)/100.0 if pos and float(pos) > 2 else (float(pos) if pos else 1.0)
-                cal = float(f_data['calibration']) if 'calibration' in f_data else None
-                hed = float(f_data['hedge']) if 'hedge' in f_data else None
-                nav_val = float(f_data['netvalue']) if f_data.get('netvalue') else None
-                
-                db.upsert_fund_factor(date=b_date, fund_code=fund_code, calibration=cal, hedge=hed, position=pos, nav=nav_val)
-                
-                sh_data = f_data.get('symbol_hedge')
-                if isinstance(sh_data, dict):
-                    for etf_sym, etf_info in sh_data.items():
-                        clean_etf = etf_sym
-                        if ('-JP' in clean_etf or '-EU' in clean_etf or '-HK' in clean_etf) and not clean_etf.startswith('^'): clean_etf = f"^{clean_etf}"
-                        price = float(etf_info.get('price', 0))
-                        ratio = float(etf_info.get('ratio', 0))
-                        
-                        if price > 0 and clean_etf.startswith('^'): db.upsert_usa_etf_price(date=b_date, symbol=clean_etf, price=price)
-                        if ratio != 0: db.upsert_fund_basket_weight(date=b_date, fund_code=fund_code, underlying_symbol=clean_etf, weight=ratio)
+        # 5. 调用提纯入库逻辑
+        WoodyAPIService.process(db, api_data, source_id)
 
         db.mark_access_synced(today_str, sync_key)
         logger.info(f"✅ [{source_id}] 因子提纯入库与双备份完毕！")
+        return api_data
+
+    @staticmethod
+    def process(db, api_data: dict, source_id: str = 'woody_lof'):
+        """
+        核心数据提纯入库解析逻辑，支持解析最新的估值日数据 (est_date, est_price)
+        """
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        if not isinstance(api_data, dict):
+            return None
+            
+        for sym, f_data in api_data.items():
+            if not isinstance(f_data, dict): continue
+            fund_code = sym.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '')
+            
+            raw_date = f_data.get('date', '')
+            b_date = pd.to_datetime(str(raw_date).strip()).strftime('%Y-%m-%d') if raw_date else today_str
+            
+            # --- 解析最新的估值日 (est_date) ---
+            est_date_raw = f_data.get('est_date', '')
+            e_date = pd.to_datetime(str(est_date_raw).strip()).strftime('%Y-%m-%d') if est_date_raw else None
+            
+            pos = f_data.get('position')
+            pos = float(pos)/100.0 if pos and float(pos) > 2 else (float(pos) if pos else 1.0)
+            cal = float(f_data['calibration']) if 'calibration' in f_data else None
+            hed = float(f_data['hedge']) if 'hedge' in f_data else None
+            nav_val = float(f_data['netvalue']) if f_data.get('netvalue') else None
+            
+            db.upsert_fund_factor(date=b_date, fund_code=fund_code, calibration=cal, hedge=hed, position=pos, nav=nav_val)
+            
+            # 保存 Woody 提供的估值日汇率 (CNYest) 到汇率表 (可选的增强)
+            if e_date and f_data.get('CNYest'):
+                try:
+                    cny_est = float(f_data['CNYest'])
+                    db.upsert_exchange_rate(e_date, usd_cny_mid=cny_est)
+                except Exception:
+                    pass
+            
+            sh_data = f_data.get('symbol_hedge')
+            if isinstance(sh_data, dict):
+                for etf_sym, etf_info in sh_data.items():
+                    clean_etf = etf_sym
+                    if ('-JP' in clean_etf or '-EU' in clean_etf or '-HK' in clean_etf) and not clean_etf.startswith('^'): clean_etf = f"^{clean_etf}"
+                    price = float(etf_info.get('price', 0))
+                    est_price = float(etf_info.get('est_price', 0)) if etf_info.get('est_price') else 0.0
+                    ratio = float(etf_info.get('ratio', 0))
+                    
+                    # 1. 存入基准日价格
+                    if price > 0 and clean_etf.startswith('^'): 
+                        db.upsert_usa_etf_price(date=b_date, symbol=clean_etf, price=price)
+                    
+                    # 2. 存入估值日价格 (直接替代爬虫的数据)
+                    if est_price > 0 and e_date and clean_etf.startswith('^'):
+                        db.upsert_usa_etf_price(date=e_date, symbol=clean_etf, price=est_price)
+                        
+                    if ratio != 0: db.upsert_fund_basket_weight(date=b_date, fund_code=fund_code, underlying_symbol=clean_etf, weight=ratio)
+                    
         return api_data

@@ -265,12 +265,16 @@ def get_active_etf_symbols():
                 for fund in cfg.get('funds', []):
                     for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
                         sym = item.get('symbol', '').replace('^', '').split('-')[0].upper()
-                        if sym and sym not in ['GC', 'CL', 'NQ', 'ES', 'AG', 'AG0', 'MGC', 'MCL', 'MES', 'MNQ']:
+                        # 过滤A股和港股代码（5-6位数字）
+                        is_chinese_fund = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
+                        if sym and not is_chinese_fund and sym not in ['GC', 'CL', 'NQ', 'ES', 'AG', 'AG0', 'MGC', 'MCL', 'MES', 'MNQ']:
                             symbols.add(sym)
                     if fund.get('trade_etf'):
                         for s in str(fund.get('trade_etf')).replace('，', ',').split(','):
                             s = s.strip().upper()
-                            if s and s not in ['GC', 'CL', 'NQ', 'ES', 'AG', 'AG0', 'MGC', 'MCL', 'MES', 'MNQ']:
+                            # 过滤A股和港股代码（5-6位数字）
+                            is_chinese_fund = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', s, re.IGNORECASE))
+                            if s and not is_chinese_fund and s not in ['GC', 'CL', 'NQ', 'ES', 'AG', 'AG0', 'MGC', 'MCL', 'MES', 'MNQ']:
                                 symbols.add(s)
     except:
         pass
@@ -667,7 +671,7 @@ class LOFPriceReader:
                 for fund in cfg_data.get('funds', []):
                     for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
                         sym = item.get('symbol', '').replace('^', '').split('-')[0]
-                        m = re.match(r'^(?:sh|sz)?([0-9]{6})$', sym, re.IGNORECASE)
+                        m = re.match(r'^(?:sh|sz)?([0-9]{5,6})$', sym, re.IGNORECASE)
                         if m: self.lof_codes.append(m.group(1))
             self.lof_codes = list(set(self.lof_codes))
         except: pass
@@ -678,9 +682,11 @@ class LOFPriceReader:
         }
 
     def _get_tdx_code(self, code):
+        if len(code) == 5 and code.isdigit(): return f"{code}.HK"
         return f"{code}.SH" if code.startswith('5') else f"{code}.SZ"
     
     def _get_qmt_code(self, code):
+        if len(code) == 5 and code.isdigit(): return f"{code}.HK"
         return f"{code}.SH" if code.startswith('5') else f"{code}.SZ"
         
     def get_source_name(self):
@@ -878,7 +884,7 @@ class LOFPriceReader:
                             for fund in cfg_data.get('funds', []):
                                 for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
                                     sym = item.get('symbol', '').replace('^', '').split('-')[0]
-                                    m = re.match(r'^(?:sh|sz)?([0-9]{6})$', sym, re.IGNORECASE)
+                                    m = re.match(r'^(?:sh|sz)?([0-9]{5,6})$', sym, re.IGNORECASE)
                                     if m: current_codes.append(m.group(1))
                         
                         if current_codes: self.lof_codes = list(set(current_codes))
@@ -993,20 +999,35 @@ class LOFPriceReader:
                     else:
                         missing_codes = [c for c in self.lof_codes if self.get_price(c.split('.')[0] if '.' in c else c) == 0]
                     if missing_codes:
-                        qs = [f"{'sh' if c.startswith('5') else 'sz'}{c.split('.')[0] if '.' in c else c}" for c in missing_codes]
+                        qs = []
+                        for c in missing_codes:
+                            clean_c = c.split('.')[0] if '.' in c else c
+                            if len(clean_c) == 5 and clean_c.isdigit(): qs.append(f"rt_hk{clean_c}")
+                            else: qs.append(f"{'sh' if clean_c.startswith('5') else 'sz'}{clean_c}")
+                            
                         for i in range(0, len(qs), 40):
                             try:
                                 res = requests.get(f"http://hq.sinajs.cn/list={','.join(qs[i:i+40])}", headers=self.headers, timeout=10, proxies={"http": None, "https": None})
                                 res.encoding = 'gbk'
                                 for line in res.text.strip().split('\n'):
-                                    match = re.search(r'hq_str_[a-z]{2}(\d{6})="([^"]+)"', line)
-                                    if match:
-                                        code = match.group(1)
-                                        parts = match.group(2).split(',')
+                                    match_a = re.search(r'hq_str_[a-z]{2}(\d{6})="([^"]+)"', line)
+                                    match_hk = re.search(r'hq_str_rt_hk(\d{5})="([^"]+)"', line)
+                                    
+                                    if match_a:
+                                        code = match_a.group(1)
+                                        parts = match_a.group(2).split(',')
                                         if len(parts) > 7:
                                             ask_price = float(parts[7])
                                             last_price = float(parts[3])
                                             new_price = ask_price if ask_price > 0 else last_price
+                                            if new_price > 0:
+                                                self.lof_prices[code] = new_price
+                                                socketio.emit('lof_price_update', {'code': code, 'price': new_price, 'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]})
+                                    elif match_hk:
+                                        code = match_hk.group(1)
+                                        parts = match_hk.group(2).split(',')
+                                        if len(parts) > 6:
+                                            new_price = float(parts[6]) # 新浪港股的索引6是现价
                                             if new_price > 0:
                                                 self.lof_prices[code] = new_price
                                                 socketio.emit('lof_price_update', {'code': code, 'price': new_price, 'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]})

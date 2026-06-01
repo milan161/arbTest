@@ -617,6 +617,10 @@ def save():
         for i in range(len(syms)):
             sym = (syms[i] or '').strip()
             if sym:
+                # 自动为带区域后缀的ETF添加^前缀（如INDA-EU -> ^INDA-EU）
+                # 纯ETF代码（如INDA、SOXX）保持原样
+                if not sym.startswith('^') and ('-EU' in sym or '-JP' in sym or '-HK' in sym or '-CN' in sym):
+                    sym = f'^{sym}'
                 w = to_float(ws[i] or 0, f"估值权重[{sym}]", errors)
                 if w < 0: errors.append(f"估值权重[{sym}] 不能为负")
                 res.append({"symbol": sym, "weight": w, "anchor": a_s[i], "name": ns[i], "currency": "USD", "exchange": "SMART"})

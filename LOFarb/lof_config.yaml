@@ -12,27 +12,27 @@ funds:
   trade_etf: USO
   trade_future: MCL
   holdings:
-    equity_ratio: 93.22
-    cash_ratio: 6.78
+    equity_ratio: 94.04
+    cash_ratio: 5.96
   valuation_portfolio:
   - symbol: XLE
-    weight: 94.73
+    weight: 95.08
     anchor: US
   - symbol: USO
-    weight: 5.27
+    weight: 4.92
     anchor: US
   sina_index_url: ''
   rate_type: midpoint
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 93.22
+  position: 94.04
 - code: '501018'
   name: 南方原油
   category: 原油
   holdings:
-    equity_ratio: 78.7
-    cash_ratio: 21.3
+    equity_ratio: 78.87
+    cash_ratio: 21.13
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -43,21 +43,21 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
-    weight: 60.85
+  - symbol: ^USO-EU
+    weight: 57.93
     anchor: EU
   - symbol: USO
-    weight: 39.15
+    weight: 42.07
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 78.7
+  position: 78.87
 - code: '160723'
   name: 嘉实原油
   category: 原油
   holdings:
-    equity_ratio: 73.61
-    cash_ratio: 26.39
+    equity_ratio: 73.67
+    cash_ratio: 26.33
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -103,21 +103,21 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
-    weight: 62.8
+  - symbol: ^USO-EU
+    weight: 64.75
     anchor: EU
   - symbol: USO
-    weight: 37.2
+    weight: 35.25
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 73.61
+  position: 73.67
 - code: '161129'
   name: 易方达原油
   category: 原油
   holdings:
-    equity_ratio: 75.23
-    cash_ratio: 24.77
+    equity_ratio: 76.32
+    cash_ratio: 23.68
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -158,40 +158,40 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
-    weight: 64.27
+  - symbol: ^USO-EU
+    weight: 61.84
     anchor: EU
   - symbol: USO
-    weight: 28.21
+    weight: 28.35
     anchor: US
-  - symbol: USO-HK
-    weight: 7.52
+  - symbol: ^USO-HK
+    weight: 9.8
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 75.23
+  position: 76.32
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 76.27
-    cash_ratio: 23.73
+    equity_ratio: 76.97
+    cash_ratio: 23.03
   valuation_portfolio:
   - symbol: SLV
-    weight: 61.03
+    weight: 53.85
     anchor: US
   - symbol: USO
-    weight: 35.75
+    weight: 30.99
     anchor: US
   - symbol: CPER
-    weight: 3.21
+    weight: 15.16
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 76.27
+  position: 76.97
 - code: '161815'
   name: 银华抗通胀
   category: 黄金
@@ -204,7 +204,7 @@ funds:
   - symbol: GLD
     weight: 73.34
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 26.66
     anchor: EU
   sina_index_url: ''
@@ -272,7 +272,7 @@ funds:
   - symbol: GLD
     weight: 54.12
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 45.88
     anchor: EU
   trade_etf: GLD
@@ -290,7 +290,7 @@ funds:
   - symbol: GLD
     weight: 79.9
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 20.1
     anchor: EU
   sina_index_url: ''
@@ -337,8 +337,8 @@ funds:
   name: 汇添富贵金属
   category: 黄金
   holdings:
-    equity_ratio: 98.52
-    cash_ratio: 1.48
+    equity_ratio: 98.62
+    cash_ratio: 1.38
   holdings_portfolio:
   - symbol: UGL
     weight: 33.165
@@ -400,20 +400,20 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 99.49
+    weight: 99.52
     anchor: US
   - symbol: SLV
-    weight: 0.51
+    weight: 0.48
     anchor: US
   trade_etf: GLD
   trade_future: MGC
-  position: 98.52
+  position: 98.62
 - code: '165513'
   name: 中信保诚
   category: 黄金
   holdings:
-    equity_ratio: 89.48
-    cash_ratio: 10.52
+    equity_ratio: 89.53
+    cash_ratio: 10.47
   holdings_portfolio: []
   future_hedging:
   - symbol: MGC
@@ -425,14 +425,14 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 90.06
+    weight: 90.01
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 9.99
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 89.48
+  position: 89.53
 - code: '162411'
   name: 华宝油气
   category: 纯ETF
@@ -457,44 +457,6 @@ funds:
     name: ''
   future_hedging: []
   position: 95.0
-- code: '164824'
-  name: 工银印度
-  category: 混合跨境
-  trade_etf: INDA
-  trade_future: ''
-  holdings:
-    equity_ratio: 89.17
-    cash_ratio: 10.829999999999998
-  valuation_portfolio:
-  - symbol: INDA
-    weight: 59.4
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: INDA-EU
-    weight: 34.78
-    anchor: EU
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: INDA-JP
-    weight: 4.84
-    anchor: JP
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: INDA-HK
-    weight: 0.98
-    anchor: HK
-    name: ''
-    currency: USD
-    exchange: SMART
-  sina_index_url: ''
-  rate_type: midpoint
-  holdings_portfolio: []
-  future_hedging: []
-  val_tab_type: multi
 - code: '162415'
   name: 美国消费
   category: 纯ETF
@@ -572,106 +534,6 @@ funds:
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: sector
-- code: '501225'
-  name: 景顺半导体芯片
-  category: 混合跨境
-  trade_etf: ''
-  trade_future: ''
-  holdings:
-    equity_ratio: 98.0
-    cash_ratio: 2.0
-  valuation_portfolio:
-  - symbol: SOXX
-    weight: 81.36
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: sz159560
-    weight: 18.64
-    anchor: US
-    name: A股收盘
-    currency: USD
-    exchange: SMART
-  sina_index_url: ''
-  rate_type: midpoint
-  holdings_portfolio: []
-  future_hedging: []
-  val_tab_type: multi
-- code: '501312'
-  name: 华宝海外科技
-  category: 混合跨境
-  trade_etf: ''
-  trade_future: ''
-  holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
-  valuation_portfolio:
-  - symbol: arkk
-    weight: 20.85
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: arkg
-    weight: 17.08
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: arkq
-    weight: 12.9
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: SOXX
-    weight: 10.58
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: aiq
-    weight: 8.74
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: qqq
-    weight: 8.29
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: botz
-    weight: 8.28
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: xlk
-    weight: 7.17
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: smh
-    weight: 4.77
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: finx
-    weight: 1.34
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  sina_index_url: ''
-  rate_type: midpoint
-  holdings_portfolio: []
-  future_hedging: []
-  val_tab_type: multi
 - code: '161125'
   name: 易方达标普500
   category: 指数
@@ -739,72 +601,36 @@ funds:
     currency: USD
     exchange: SMART
     name: 上海期货交易所主连
-- code: '160644'
-  name: 鹏华港美互联
+- code: '164824'
+  name: 工银印度
   category: 混合跨境
-  trade_etf: ''
+  trade_etf: INDA
   trade_future: ''
   holdings:
-    equity_ratio: 90.0
-    cash_ratio: 10.0
+    equity_ratio: 89.17
+    cash_ratio: 10.829999999999998
   valuation_portfolio:
-  - symbol: TSM
-    weight: 14.79
+  - symbol: INDA
+    weight: 59.4
     anchor: US
     name: ''
     currency: USD
     exchange: SMART
-  - symbol: nvda
-    weight: 14.73
-    anchor: US
+  - symbol: ^INDA-EU
+    weight: 34.78
+    anchor: EU
     name: ''
     currency: USD
     exchange: SMART
-  - symbol: mu
-    weight: 12.19
-    anchor: US
+  - symbol: ^INDA-JP
+    weight: 4.84
+    anchor: JP
     name: ''
     currency: USD
     exchange: SMART
-  - symbol: googl
-    weight: 9.26
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: avgo
-    weight: 5.68
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: asml
-    weight: 4.64
-    anchor: US
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: '00700'
-    weight: 10.71
+  - symbol: ^INDA-HK
+    weight: 0.98
     anchor: HK
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: 09988
-    weight: 7.63
-    anchor: HK
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: 00883
-    weight: 6.44
-    anchor: HK
-    name: ''
-    currency: USD
-    exchange: SMART
-  - symbol: sndk
-    weight: 13.94
-    anchor: US
     name: ''
     currency: USD
     exchange: SMART
@@ -813,6 +639,116 @@ funds:
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
+- code: '501225'
+  name: 景顺半导体芯片
+  category: 混合跨境
+  trade_etf: ''
+  trade_future: ''
+  holdings:
+    equity_ratio: 86.11
+    cash_ratio: 13.89
+  valuation_portfolio:
+  - symbol: SOXX
+    weight: 81.36
+    anchor: US
+  - symbol: SZ159560
+    weight: 18.64
+    anchor: US
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: multi
+  position: 86.11
+- code: '501312'
+  name: 华宝海外科技
+  category: 混合跨境
+  trade_etf: ''
+  trade_future: ''
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio:
+  - symbol: ARKK
+    weight: 20.85
+    anchor: US
+  - symbol: ARKG
+    weight: 17.08
+    anchor: US
+  - symbol: ARKQ
+    weight: 12.9
+    anchor: US
+  - symbol: SOXX
+    weight: 10.58
+    anchor: US
+  - symbol: AIQ
+    weight: 8.74
+    anchor: US
+  - symbol: QQQ
+    weight: 8.29
+    anchor: US
+  - symbol: BOTZ
+    weight: 8.28
+    anchor: US
+  - symbol: XLK
+    weight: 7.17
+    anchor: US
+  - symbol: SMH
+    weight: 4.77
+    anchor: US
+  - symbol: FINX
+    weight: 1.34
+    anchor: US
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: multi
+- code: '160644'
+  name: 鹏华港美互联
+  category: 混合跨境
+  trade_etf: ''
+  trade_future: ''
+  holdings:
+    equity_ratio: 98.0
+    cash_ratio: 2.0
+  valuation_portfolio:
+  - symbol: TSM
+    weight: 14.79
+    anchor: US
+  - symbol: NVDA
+    weight: 14.73
+    anchor: US
+  - symbol: SNDK
+    weight: 13.94
+    anchor: US
+  - symbol: MU
+    weight: 12.19
+    anchor: US
+  - symbol: '00700'
+    weight: 10.71
+    anchor: HK
+  - symbol: GOOGL
+    weight: 9.26
+    anchor: US
+  - symbol: 09988
+    weight: 7.63
+    anchor: HK
+  - symbol: 00883
+    weight: 6.44
+    anchor: HK
+  - symbol: AVGO
+    weight: 5.68
+    anchor: US
+  - symbol: ASML
+    weight: 4.64
+    anchor: US
+  sina_index_url: ''
+  rate_type: midpoint
+  holdings_portfolio: []
+  future_hedging: []
+  val_tab_type: multi
+  position: 98.0
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
 future_oil_calibration: .nan

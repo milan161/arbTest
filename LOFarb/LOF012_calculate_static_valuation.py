@@ -14,6 +14,8 @@ class LofValuationApp(BaseApp):
     def __init__(self):
         super().__init__("LOF012_calculate_static_valuation")
         self.calculator = StaticValuationCalculator(self.db)
+        # 🛡️ 屏蔽静态估值计算器内部大量的推演刷屏日志，保持控制台清爽
+        logging.getLogger('arbcore.calculators.static_valuation').setLevel(logging.WARNING)
 
     def diagnose_global_environment(self):
         """在开始计算前，先打印全局的汇率环境"""

@@ -4,13 +4,15 @@ class JsGenerator:
     """生成繁杂的前端交互代码，将其从业务逻辑核心中剥离以保持整洁"""
     
     @staticmethod
-    def generate_js_code(active_etfs, js_fund_base_data, calibrations_dict):
+    def generate_js_code(active_etfs, js_fund_base_data, calibrations_dict, ib_night_prices=None):
+        ib_prices_json = json.dumps(ib_night_prices) if ib_night_prices else "{}"
         return r'''
         <script>
             // 注入Python预先计算的基金基准数据，彻底抛弃前端读CSV
             window.activeEtfs = ''' + json.dumps(active_etfs) + r''';
             window.fundBaseData = ''' + json.dumps(js_fund_base_data, ensure_ascii=False) + r''';
             window.calibData = ''' + json.dumps(calibrations_dict) + r''';
+            window.latestIbPrices = ''' + ib_prices_json + r''';
 
             // WebSocket连接
             var socket = io();
@@ -280,7 +282,7 @@ class JsGenerator:
                 for (var i = 0; i < baseData.hedgingPortfolio.length; i++) {
                     var item = baseData.hedgingPortfolio[i];
                     var sym = item.symbol;
-                    var isAshare = /^[0-9]{6}$/.test(sym) || /^(sh|sz)[0-9]{6}$/i.test(sym);
+                    var isAshare = /^[0-9]{5,6}$/.test(sym) || /^(sh|sz)[0-9]{6}$/i.test(sym);
                     
                     var currentPrice = 0;
                     if (isAshare) {
@@ -332,7 +334,7 @@ class JsGenerator:
                     var priceEl = document.getElementById('sb-rt-price-' + code + '-' + sanitizedSym);
                     if (priceEl) {
                         var cleanSymForPriceLookup = sym.replace(/^(sh|sz)/i, '').replace(/\^/g, '').split('-')[0].toUpperCase();
-                        var isAshare = /^[0-9]{6}$/.test(sym) || /^(sh|sz)[0-9]{6}$/i.test(sym);
+                        var isAshare = /^[0-9]{5,6}$/.test(sym) || /^(sh|sz)[0-9]{6}$/i.test(sym);
                         var price = 0;
                         if (isAshare) {
                             cleanSymForPriceLookup = cleanSymForPriceLookup.replace(/^(sh|sz)/i, '');
@@ -672,7 +674,20 @@ class JsGenerator:
                 }
 
                 window.currentEtfPrices = {};
-                window.activeEtfs.forEach(function(sym) {
+                
+                // 🌟 核心修复：提取全市场所需的标的，而不是局限于表格里硬编码的 activeEtfs
+                var allNeededSyms = new Set(window.activeEtfs);
+                Object.values(window.fundBaseData).forEach(function(baseData) {
+                    if (baseData.hedgingPortfolio) {
+                        baseData.hedgingPortfolio.forEach(function(item) {
+                            var sym = item.symbol.replace('^', '').split('-')[0].toUpperCase();
+                            var isAshare = /^[0-9]{5,6}$/.test(sym) || /^(sh|sz)[0-9]{6}$/i.test(sym);
+                            if (!isAshare) allNeededSyms.add(sym);
+                        });
+                    }
+                });
+
+                allNeededSyms.forEach(function(sym) {
                     var price = 0;
                     if (isIb) {
                         if (window.latestIbPrices && window.latestIbPrices[sym] && window.latestIbPrices[sym].bid) {
@@ -688,8 +703,7 @@ class JsGenerator:
                         if (manualEl) price = parseFloat(manualEl.value);
                     }
                     if (!price || isNaN(price)) {
-                        var prevEl = document.getElementById('prev-val-' + sym.toLowerCase());
-                        if (prevEl) price = parseFloat(prevEl.textContent);
+                    price = 0; // 🛑 坚决拒绝昨收价兜底：没有最新实时数据就记为 0，触发异常熔断白屏，拒绝误导
                     }
                     window.currentEtfPrices[sym] = price;
                 });

@@ -4,6 +4,7 @@
 requests==2.31.0
 pandas==2.1.4
 numpy==1.26.2
+paramiko==3.4.0   # 用于云端 VPS 数据拉取
 Flask==2.1.3
 Werkzeug==2.0.3
 dash

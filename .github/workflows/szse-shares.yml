@@ -1,0 +1,54 @@
+name: 深交所基金份额定时获取
+
+on:
+  schedule:
+    # 每个交易日 16:00 (北京时间) 运行
+    # UTC+8 = UTC + 8 小时，所以 16:00 北京时间 = 08:00 UTC
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  fetch-shares:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests
+
+      - name: 创建数据库目录
+        run: mkdir -p jsl
+
+      - name: 运行份额获取脚本
+        env:
+          GITHUB_ACTIONS: true
+        run: |
+          cd jsl
+          python 04_eod_shares.py
+
+      - name: 上传结果文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: szse-shares-data
+          path: jsl/*.db
+          retention-days: 7
+
+      - name: 提交数据库更新
+        env:
+          GIT_USER_NAME: "GitHub Actions"
+          GIT_USER_EMAIL: "actions@github.com"
+        run: |
+          git config --global user.name "$GIT_USER_NAME"
+          git config --global user.email "$GIT_USER_EMAIL"
+          git add jsl/jsl_monitor.db
+          git commit -m "Auto update SZSE fund shares $(date -u '+%Y-%m-%d')"
+          git push
+        continue-on-error: true

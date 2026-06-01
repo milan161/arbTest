@@ -150,16 +150,6 @@ def generate(futures_data=None, ib_data=None):
     else:
         ib_night_prices, ib_prev_closes, ib_status_message = ib_data
         
-    try:
-        import requests
-        lof_resp = requests.get("http://localhost:5000/api/lof", timeout=2)
-        if lof_resp.status_code == 200:
-            lof_data = lof_resp.json()
-            for code, info in lof_data.items():
-                ib_night_prices[code] = {'bid': info.get('price', 0)}
-    except:
-        pass
-        
     if futures_data is None:
         futures_data = get_futures_data()
     print(f"获取到的期货数据: {futures_data}")
@@ -551,7 +541,7 @@ def generate(futures_data=None, ib_data=None):
     active_etfs = ['XOP', 'GLD', 'KWEB', 'QQQ', 'RSPH', 'SLV', 'SPY', 'XBI', 'XLY', 'USO', 'XLE']
 
     # 从独立的模块生成前端巨量的 JavaScript 与 Admin 面板交互逻辑
-    js_code = JsGenerator.generate_js_code(active_etfs, js_fund_base_data, calibrations)
+    js_code = JsGenerator.generate_js_code(active_etfs, js_fund_base_data, calibrations, ib_night_prices)
     
     admin_js = JsGenerator.generate_admin_js()
     
@@ -600,7 +590,7 @@ def generate(futures_data=None, ib_data=None):
             import pandas as pd
             conn = sqlite3.connect(SHARED_DB_PATH)
             # 修正：直接从 usa_etf_daily_prices 精准查询，不再依赖旧的宽表 basic_data
-            df = pd.read_sql(f"SELECT price FROM usa_etf_daily_prices WHERE symbol = ? ORDER BY date DESC LIMIT 1", conn, params=(symbol,))
+            df = pd.read_sql(f"SELECT price FROM usa_etf_daily_prices WHERE symbol = '{symbol}' ORDER BY date DESC LIMIT 1", conn)
             conn.close()
             if not df.empty and pd.notna(df.iloc[0]['price']):
                 return f"{df.iloc[0]['price']:.2f}"

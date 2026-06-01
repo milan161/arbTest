@@ -179,25 +179,35 @@ class DataFetcher:
                 
                 logger.info(f"找到 {len(records)} 条汇率记录")
                 
-                # 遍历所有记录，查找美元兑人民币汇率
+                # 遍历所有记录，查找美元和港币兑人民币汇率
+                res_rates = {}
                 for record in records:
                     if 'vrtName' in record and 'price' in record:
                         currency_name = record['vrtName']
                         rate = record['price']
                         if '美元' in currency_name or 'USD' in currency_name:
-                            logger.info(f"国家外汇管理局 - {currency_name}: {rate}")
-                            # 规范化日期格式为 YYYY-MM-DD
-                            raw_date = date_info.split(' ')[0]
-                            try:
-                                dt = datetime.strptime(raw_date, '%Y-%m-%d')
-                                normalized_date = dt.strftime('%Y-%m-%d')
-                            except:
-                                normalized_date = raw_date  # 回退
-                            return {
-                                '日期': normalized_date, 
-                                '人民币中间价': float(rate),
-                                '来源': '国家外汇管理局'
-                            }
+                            res_rates['usd'] = float(rate)
+                        elif '港' in currency_name or 'HKD' in currency_name:
+                            res_rates['hkd'] = float(rate)
+
+                if 'usd' in res_rates:
+                    logger.info(f"国家外汇管理局 - USD: {res_rates.get('usd')}, HKD: {res_rates.get('hkd')}")
+                    # 规范化日期格式为 YYYY-MM-DD
+                    raw_date = date_info.split(' ')[0]
+                    try:
+                        dt = datetime.strptime(raw_date, '%Y-%m-%d')
+                        normalized_date = dt.strftime('%Y-%m-%d')
+                    except:
+                        normalized_date = raw_date  # 回退
+
+                    return {
+                        '日期': normalized_date,
+                        '人民币中间价': res_rates.get('usd'),
+                        'usd_cny_mid': res_rates.get('usd'),
+                        'hkd_cny_mid': res_rates.get('hkd'),
+                        '来源': '国家外汇管理局'
+                    }
+
             logger.error(f"国家外汇管理局获取汇率数据失败，状态码: {response.status_code}")
         except Exception as e:
             logger.error(f"国家外汇管理局获取汇率数据失败: {e}")

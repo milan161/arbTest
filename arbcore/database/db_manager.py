@@ -80,9 +80,15 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS exchange_rate (
                     date TEXT PRIMARY KEY,
                     usd_cny_mid REAL,
+                    hkd_cny_mid REAL,
                     updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
                 )
             ''')
+            # 热更新：添加 hkd_cny_mid 字段
+            try:
+                conn.execute('ALTER TABLE exchange_rate ADD COLUMN hkd_cny_mid REAL')
+            except sqlite3.OperationalError:
+                pass
 
             # 新增：底层 ETF/指数 每日收盘价格表 (取代 basic.csv 里的各类 ETF 列)
             conn.execute('''
@@ -209,16 +215,6 @@ class DatabaseManager:
                     PRIMARY KEY (lof_code, etf_code)
                 )
             ''')
-            
-            # 新增：JSL 模块专属 - 基金监控配置池 (隔离原 LOF/ETF 业务)
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS jsl_fund_list (
-                    category TEXT,
-                    fund_code TEXT PRIMARY KEY,
-                    fund_name TEXT,
-                    related_index TEXT
-                )
-            ''')
 
             # 新增：JSL 模块专属 - AKShare 全市场基金申赎状态缓存表
             conn.execute('''
@@ -256,14 +252,29 @@ class DatabaseManager:
             conn.close()
         
     # ================= 规范化基础数据写入 (Macro & ETF) =================
-    def upsert_exchange_rate(self, date: str, usd_cny_mid: float):
-        """插入或覆盖人民币中间价"""
+    def upsert_exchange_rate(self, date: str, usd_cny_mid: float = None, hkd_cny_mid: float = None):
+        """插入或覆盖人民币中间价 (支持 USD 和 HKD)"""
         with self.lock:
             conn = self._get_conn()
-            query = "INSERT OR REPLACE INTO exchange_rate (date, usd_cny_mid, updated_at) VALUES (?, ?, (datetime('now', 'localtime')))"
-            conn.execute(query, (date, usd_cny_mid))
+            cursor = conn.cursor()
+            # 1. 尝试先获取已有记录
+            cursor.execute("SELECT usd_cny_mid, hkd_cny_mid FROM exchange_rate WHERE date = ?", (date,))
+            row = cursor.fetchone()
+            
+            exist_usd = row[0] if row else None
+            exist_hkd = row[1] if row else None
+            
+            new_usd = usd_cny_mid if usd_cny_mid is not None else exist_usd
+            new_hkd = hkd_cny_mid if hkd_cny_mid is not None else exist_hkd
+            
+            query = "INSERT OR REPLACE INTO exchange_rate (date, usd_cny_mid, hkd_cny_mid, updated_at) VALUES (?, ?, ?, (datetime('now', 'localtime')))"
+            conn.execute(query, (date, new_usd, new_hkd))
             conn.commit()
             conn.close()
+
+    def upsert_hkd_exchange_rate(self, date: str, hkd_cny_mid: float):
+        """便捷方法：仅更新港币中间价"""
+        self.upsert_exchange_rate(date, hkd_cny_mid=hkd_cny_mid)
             
     def upsert_futures_daily(self, date: str, symbol: str, settle_price: float = None, calibration: float = None):
         """插入或更新大宗商品每日历史结算价及校准值"""

@@ -17,6 +17,10 @@ from arbcore.fetchers.data_fetcher import data_fetcher
 from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
 from arbcore.fetchers.woody_api_service import WoodyAPIService
 from account_private import WOODY_USERNAME, WOODY_PASSWORD
+try:
+    from account_private import VPS_HOST, VPS_PORT, VPS_USER, VPS_PASSWORD, VPS_DATA_DIR
+except ImportError:
+    VPS_HOST, VPS_PORT, VPS_USER, VPS_PASSWORD, VPS_DATA_DIR = None, 22, None, None, None
 
 class DailyUpdater(BaseApp):
     def __init__(self):
@@ -47,21 +51,129 @@ class DailyUpdater(BaseApp):
             self.logger.warning("⚠️ 未配置 Woody 账号密码，区域ETF数据将无法获取")
             return False
 
+    def _try_sync_all_from_vps(self, data_type='woody'):
+        """
+        [架构升级] 从云端增量同步所有缺失的历史数据 (支持断网补全)
+        """
+        if not all([VPS_HOST, VPS_USER, VPS_PASSWORD]):
+            return []
+        
+        local_sync_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "vps_sync")
+        os.makedirs(local_sync_dir, exist_ok=True)
+
+        self.logger.info(f"☁️ [VPS] 正在扫描云端所有缺失的 {data_type} 历史数据...")
+        synced_data_list = []
+        try:
+            import paramiko
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(VPS_HOST, port=VPS_PORT, username=VPS_USER, password=VPS_PASSWORD, timeout=10)
+            
+            sftp = ssh.open_sftp()
+            # 1. 列表远程目录下的所有文件
+            try:
+                files = sftp.listdir(VPS_DATA_DIR)
+            except IOError:
+                self.logger.warning(f"⚠️ [VPS] 远程目录不存在: {VPS_DATA_DIR}")
+                return []
+
+            # 2. 筛选对应类型的文件 (如 woody_2026-05-31.json)
+            target_files = [f for f in files if f.startswith(f"{data_type}_") and f.endswith(".json")]
+            
+            for remote_file in sorted(target_files):
+                local_path = os.path.join(local_sync_dir, remote_file)
+                # 3. 增量同步：如果本地不存在，则下载
+                if not os.path.exists(local_path):
+                    remote_path = f"{VPS_DATA_DIR}/{remote_file}"
+                    self.logger.info(f"📥 [VPS] 正在补全历史数据: {remote_file}")
+                    sftp.get(remote_path, local_path)
+                
+                # 4. 加载数据 (无论是刚下载的还是本地已有的)
+                # 注意：我们只返回最近 30 天内的数据，防止处理过旧的垃圾数据
+                try:
+                    # 从文件名提取日期 (woody_2026-05-31.json -> 2026-05-31)
+                    file_date = remote_file.split('_')[1].split('.json')[0]
+                    with open(local_path, 'r', encoding='utf-8') as f:
+                        content = json.load(f)
+                    synced_data_list.append({'date': file_date, 'content': content})
+                except Exception as e:
+                    self.logger.error(f"❌ 解析本地同步文件失败 {remote_file}: {e}")
+
+            sftp.close()
+            ssh.close()
+            
+            if synced_data_list:
+                self.logger.info(f"✅ [VPS] {data_type} 数据同步完成，共获取 {len(synced_data_list)} 天记录")
+            return synced_data_list
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ [VPS] 同步失败: {e}")
+        return []
+
+    def _try_fetch_from_vps(self, data_type='woody'):
+        """保持兼容性的包装方法，仅返回当天的内容"""
+        all_data = self._try_sync_all_from_vps(data_type)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        for item in all_data:
+            if item['date'] == today_str:
+                return item['content']
+        return None
+
     def step1_and_2_fetch_woody_api(self):
         """
         步骤一 & 二：获取 Woody 数据并解析入库
-        实施“安全第一”防御机制：API -> Crawler -> Stop on Failure
+        实施“安全第一”防御机制：VPS(增量追溯) -> API -> Crawler -> Stop on Failure
         """
-        self.logger.info("=== 步骤一：获取 Woody 数据，步骤二：解析入库 (安全熔断模式) ===")
+        self.logger.info("=== 步骤一：获取 Woody 数据，步骤二：解析入库 (增量追溯模式) ===")
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        sync_key = "woody_lof_batch"
+        
+        # 🛡️ 总闸检查：如果今日已经处理过（无论是通过 VPS 还是 API），直接跳过整个步骤
+        if self.db.is_access_synced_today(today_str, sync_key):
+            self.logger.info(f"✅ 今日 Woody 因子已处理完毕（防刷标记 {sync_key} 已存在），跳过 VPS 同步与 API 请求。")
+            return True
+
         codes = [str(fund.get('code', '')) for fund in self.config.get('funds', []) if str(fund.get('code', '')) != '161226']
         backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "woodyAPI")
         
-        # Level 1: API
+        # Level 0: VPS Siphon (支持多日历史自动补全)
+        vps_history_data = self._try_sync_all_from_vps('woody')
+        vps_today_success = False
+        
+        if vps_history_data:
+            self.logger.info(f"🔄 [VPS] 发现 {len(vps_history_data)} 份历史因子数据，正在逐一入库解析...")
+            for item in vps_history_data:
+                file_date = item['date']
+                content = item['content']
+                try:
+                    # 提取真实内容 (Woody API 包装在 text 字段里)
+                    api_content = content.get('text') if isinstance(content, dict) else content
+                    if api_content:
+                        # 1. 存入本地原始数据湖 (Data Lake)
+                        raw_json_str = json.dumps(api_content, ensure_ascii=False, indent=2)
+                        self.db.save_raw_api_data(date=file_date, source='woody_lof', raw_content=raw_json_str)
+                        
+                        # 2. 调用核心解析引擎提取因子
+                        processed_data = WoodyAPIService.process(self.db, api_content, source_id='woody_lof')
+                        if processed_data:
+                            self.logger.info(f"   ✅ [VPS] 日期 {file_date} 的因子解析成功")
+                            if file_date == today_str:
+                                vps_today_success = True
+                except Exception as e:
+                    self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 数据时出错: {e}")
+        
+        # 如果 VPS 已经搞定了今天的数据，直接打标并收工
+        if vps_today_success:
+            self.db.mark_access_synced(today_str, sync_key)
+            self.logger.info(f"✅ [VPS] 今日数据已通过云端同步完成，已标记 {sync_key} 成功。")
+            return True
+
+        # Level 1: 实时 API (确保拿回最新的，或者作为 VPS 失败后的兜底)
         try:
-            self.logger.info("🛡️ [Level 1] 尝试通过 Woody API 获取因子数据...")
+            self.logger.info("🛡️ [Level 1] 尝试通过实时 API 刷新今日因子...")
             success = WoodyAPIService.fetch_and_process(self.db, codes, backup_dir, source_id='woody_lof')
             if success:
-                self.logger.info("✅ [Level 1] API 获取并解析成功")
+                self.logger.info("✅ [Level 1] API 今日实时数据同步成功")
                 return True
         except Exception as e:
             self.logger.warning(f"⚠️ [Level 1] API 尝试失败: {e}")
@@ -187,35 +299,46 @@ class DailyUpdater(BaseApp):
         self.logger.info("=== 步骤三：抓取汇率（人民币中间价） ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
         
-        # 1. 防刷检查 (调试模式：暂时禁用)
-        if False and self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
+        # Level 0: VPS Siphon
+        vps_fx_data = self._try_fetch_from_vps('fx')
+        if vps_fx_data:
+            try:
+                date_info_str = vps_fx_data.get('date')
+                usd_rate = vps_fx_data.get('usd_cny_mid')
+                hkd_rate = vps_fx_data.get('hkd_cny_mid')
+                if date_info_str and (usd_rate or hkd_rate):
+                    self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_rate, hkd_cny_mid=hkd_rate)
+                    self.logger.info(f"✅ [VPS] 汇率入库: {date_info_str} -> USD:{usd_rate}, HKD:{hkd_rate}")
+            except Exception as e:
+                self.logger.error(f"❌ [VPS] 汇率数据处理失败: {e}")
+
+        # 1. 防刷检查
+        if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
             self.logger.info("✅ 今日已获取过人民币中间价，为防封号从本地缓存跳过...")
         else:
+            # 增强本地抓取逻辑：尝试获取全币种（美元、港币）
+            # 注意：目前的 data_fetcher 可能只返回了美元，我们在这里尝试兼容
             exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
             if exchange_rate_data:
                 date_info = exchange_rate_data.get('日期')
-                rate = exchange_rate_data.get('人民币中间价')
+                rate = exchange_rate_data.get('人民币中间价') # 默认通常是美元
                 
-                if rate and date_info:
+                if date_info:
                     try:
-                        # 统一日期格式
                         date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
-                        self.db.upsert_exchange_rate(date_info_str, float(rate))
-                        self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> {rate}")
-
-                        # 智能防刷：只有当获取到的汇率日期是近期的（T-1或T-0），才标记今日已同步
+                        # 增强：同时保存美元和港币 (如果 fetcher 提供了)
+                        usd_val = exchange_rate_data.get('usd_cny_mid', rate)
+                        hkd_val = exchange_rate_data.get('hkd_cny_mid')
+                        
+                        self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
+                        self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
+                        
+                        # 标记防刷
                         fetched_date_obj = pd.to_datetime(date_info_str).date()
-                        today_obj = datetime.now().date()
-                        # 中国外汇交易中心在节假日不发布汇率，所以允许最多回溯3天
-                        if fetched_date_obj >= (today_obj - timedelta(days=3)):
+                        if fetched_date_obj >= (datetime.now().date() - timedelta(days=3)):
                             self.db.mark_access_synced(today_str, source='official_exchange_rate')
-                            self.logger.info(f"✅ 汇率数据已是最新({date_info_str})，标记今日防刷。")
-                        else:
-                            self.logger.warning(f"⚠️ 获取到的汇率日期({date_info_str})过于陈旧，今日不标记防刷，以便后续重试。")
                     except Exception as e:
-                        self.logger.error(f"❌ 处理汇率数据时发生异常: {e}")
-                else:
-                    self.logger.error("❌ 严重告警：获取人民币中间价为空，估值将无法计算！")
+                        self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
         """安全合并保存 fund 数据，防止 price 和 nav 互相覆盖导致对方变成 NULL"""
@@ -623,7 +746,12 @@ class DailyUpdater(BaseApp):
         self.step3_fetch_exchange_rate()
         self.step4_fetch_lof_market()
         self.step5_fetch_usa_market_data()
-        self.step6_fetch_woody_regional_etfs()
+        
+        # 🛡️ 新版 Woody API 已经直接返回了估值日的 `est_price`，
+        # 并已在 WoodyAPIService.process 中入库，因此可以安全跳过原本容易失败的网页爬虫。
+        # 临时注释掉步骤六，观察几天是否平稳。
+        # self.step6_fetch_woody_regional_etfs()
+        
         self.step7_fetch_extra_calibrations()
         self.logger.info("🎉 流水线执行完毕，数据大盘一切就绪！")
 

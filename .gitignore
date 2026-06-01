@@ -7,6 +7,7 @@ arb_config.yaml
 LOFarb/LOF004_sandbox.py
 LOFarb/LOF005_output.py
 LOFarb/LOF006_create_student_db.py
+LOFarb/deploy_vps.py
 
 # === 禁止上传的目录 ===
 LOFarb/ibapi/
@@ -28,6 +29,8 @@ woodykey轮动demo/
 ETFRotate*.zip
 GEMINI.md
 LOFarb/Gemini-Proxy.bat
+Gemini-Proxy
+
 
 # === 数据库（只保留这两个） ===
 database/*

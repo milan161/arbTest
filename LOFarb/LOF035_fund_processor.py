@@ -76,6 +76,10 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
     
     if calibrations is None:
         calibrations = {'GC': 10.9067, 'CL': 0.8227}
+    
+    # 过滤etf_prices中的国内LOF基金代码（6位数字）
+    if etf_prices:
+        etf_prices = {k: v for k, v in etf_prices.items() if not (k.isdigit() and len(k) == 6)}
 
     # 初始化配置管理器
     config_manager = ConfigManager(os.path.join(SCRIPT_DIR, "lof_config.yaml"))
@@ -108,6 +112,24 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
     # === 核心修复：动态提取基准日 (T-1) 的真实仓位和权重，彻底覆盖 YAML 默认值 ===
     _, _, base_row = data_processor.get_base_date_info(lof_df)
             
+    # 补充：从 usa_etf_daily_prices 获取ETF基准价格
+    if base_row is not None:
+        base_date = base_row.get('date')
+        if base_date:
+            try:
+                import sqlite3
+                conn = sqlite3.connect(SHARED_DB_PATH)
+                # 将日期转换为字符串格式
+                date_str = str(base_date)[:10]
+                etf_query = f"SELECT symbol, price FROM usa_etf_daily_prices WHERE date = '{date_str}'"
+                etf_df = pd.read_sql(etf_query, conn)
+                conn.close()
+                for _, row in etf_df.iterrows():
+                    sym = row['symbol']
+                    base_row[sym] = row['price']  # 存储原始符号（如^INDA-EU）
+            except Exception as e:
+                print(f"⚠️ 基金 {code} 补充ETF基准价格失败: {e}")
+    
     if base_row is not None:
         db_pos = base_row.get('position', base_row.get('仓位'))
         if pd.notna(db_pos) and db_pos != '无' and db_pos != '':
@@ -344,15 +366,18 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         
         etf_val_err_str = "-"
         etf_val_err_cls = ""
-        ee_val = df_idx.loc[d_T].get('val_error', df_idx.loc[d_T].get('ETF静态估值误差', '无'))
-        if ee_val != '无' and pd.notna(ee_val):
-            try:
-                etf_val_err_num = float(str(ee_val).replace('%', ''))
-                etf_val_err_cls, etf_val_err_str = html_generator.format_color(etf_val_err_num)
-            except: pass
-        elif can_calc and isinstance(cur_est_val, (int, float)) and cur_est_val > 0 and n_T > 0:
+        # 🌟 修复：直接用最新公布的净值和算好的估值动态反算，忽略数据库可能被默认填充为0的 val_error
+        if can_calc and isinstance(cur_est_val, (int, float)) and cur_est_val > 0 and n_T > 0:
             etf_val_err_num = (cur_est_val / n_T - 1) * 100
             etf_val_err_cls, etf_val_err_str = html_generator.format_color(etf_val_err_num)
+        else:
+            ee_val = df_idx.loc[d_T].get('val_error', df_idx.loc[d_T].get('ETF静态估值误差', '无'))
+            if ee_val != '无' and pd.notna(ee_val):
+                try:
+                    etf_val_err_num = float(str(ee_val).replace('%', ''))
+                    if abs(etf_val_err_num) > 0.0001:  # 过滤掉无意义的绝对0.00
+                        etf_val_err_cls, etf_val_err_str = html_generator.format_color(etf_val_err_num)
+                except: pass
         
         # 从LOF历史数据中读取期货结算价
         future_settle_str = "-"
@@ -411,29 +436,32 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 
         future_val_err_str = "-"
         future_val_err_cls = ""
-        if '期货静态估值误差' in df_idx.columns:
+        # 🌟 修复：期货误差同样优先动态计算
+        if future_static_val_num > 0 and n_T > 0:
+            fv_err_num = (future_static_val_num / n_T - 1) * 100
+            future_val_err_cls, future_val_err_str = html_generator.format_color(fv_err_num)
+        elif '期货静态估值误差' in df_idx.columns:
             fv_err_val = df_idx.loc[d_T].get('期货静态估值误差', '无')
             if fv_err_val != '无' and pd.notna(fv_err_val):
                 try:
                     fv_err_num = float(str(fv_err_val).replace('%', ''))
-                    future_val_err_cls, future_val_err_str = html_generator.format_color(fv_err_num)
+                    if abs(fv_err_num) > 0.0001:
+                        future_val_err_cls, future_val_err_str = html_generator.format_color(fv_err_num)
                 except: pass
-        if future_val_err_str == "-" and future_static_val_num > 0 and n_T > 0:
-            fv_err_num = (future_static_val_num / n_T - 1) * 100
-            future_val_err_cls, future_val_err_str = html_generator.format_color(fv_err_num)
             
         future_premium_str = "-"
         future_premium_cls = ""
-        if '期货静态估值溢价' in df_idx.columns:
+        if future_static_val_num > 0 and c_T > 0:
+            fp_num = (c_T / future_static_val_num - 1) * 100
+            future_premium_cls, future_premium_str = html_generator.format_color(fp_num)
+        elif '期货静态估值溢价' in df_idx.columns:
             fp_val = df_idx.loc[d_T].get('期货静态估值溢价', '无')
             if fp_val != '无' and pd.notna(fp_val):
                 try:
                     fp_num = float(str(fp_val).replace('%', ''))
-                    future_premium_cls, future_premium_str = html_generator.format_color(fp_num)
+                    if abs(fp_num) > 0.0001:
+                        future_premium_cls, future_premium_str = html_generator.format_color(fp_num)
                 except: pass
-        if future_premium_str == "-" and future_static_val_num > 0 and c_T > 0:
-            fp_num = (c_T / future_static_val_num - 1) * 100
-            future_premium_cls, future_premium_str = html_generator.format_color(fp_num)
         
         # 从数据框中获取ETF值
         etf_td_html = ''
@@ -627,26 +655,53 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         try:
             # 使用传入的futures_data参数
             if futures_data and code not in ['163208', '160216', '161815']:
+                
+                # 统一找到基准日期的汇率和日期
+                base_date = None
+                base_exchange_rate = 0.0
+                for _, row in lof_df_sorted.iterrows():
+                    nav_val = row.get('nav', 0)
+                    fx_val = row.get('exchange_rate', 0)
+                    if pd.notna(nav_val) and nav_val is not None and pd.notna(fx_val) and fx_val is not None:
+                        try:
+                            if float(nav_val) > 0 and float(fx_val) > 0:
+                                base_date = row['date']
+                                base_exchange_rate = float(fx_val)
+                                break
+                        except (ValueError, TypeError):
+                            pass
+
+                # 统一寻找基准日期货收盘价
+                base_future_price = 0.0
+                if base_date is not None and future_symbol:
+                    settle_col = f"{future_symbol}_settle"
+                    for dt_candidate in df_idx.loc[:base_date].index.sort_values(ascending=False):
+                        val = 0
+                        if settle_col in df_idx.columns:
+                            v = df_idx.loc[dt_candidate].get(settle_col)
+                            if pd.notna(v) and v != '无' and v != '':
+                                try: val = float(v)
+                                except: val = 0
+                        if val <= 0 and '期货结算价' in df_idx.columns:
+                            v = df_idx.loc[dt_candidate].get('期货结算价')
+                            if pd.notna(v) and v != '无' and v != '':
+                                try: val = float(v)
+                                except: val = 0
+                        if val > 0:
+                            base_future_price = val
+                            break
+                    if base_future_price <= 0 and futures_history_df is not None and not futures_history_df.empty:
+                        base_date_str = base_date.strftime('%Y-%m-%d') if isinstance(base_date, pd.Timestamp) else str(base_date)[:10]
+                        if base_date_str in futures_history_df.index:
+                            val = futures_history_df.loc[base_date_str].get(f'{future_symbol}_close', 0.0)
+                            if isinstance(val, pd.Series): val = val.iloc[0]
+                            base_future_price = float(val) if pd.notna(val) else 0.0
+
                 # 提取期货价格
                 if category == '黄金' and 'GC' in futures_data:
                     future_price = futures_data['GC']['price']
                     # 计算期货实时估值
                     if future_price > 0 and nav_home > 0:
-                        # 找到基准日期的汇率
-                        base_date = None
-                        base_exchange_rate = 0.0
-                        for _, row in lof_df_sorted.iterrows():
-                            nav_val = row.get('nav', 0)
-                            fx_val = row.get('exchange_rate', 0)
-                            if pd.notna(nav_val) and nav_val is not None and pd.notna(fx_val) and fx_val is not None:
-                                try:
-                                    if float(nav_val) > 0 and float(fx_val) > 0:
-                                        base_date = row['date']
-                                        base_exchange_rate = float(fx_val)
-                                        break
-                                except (ValueError, TypeError):
-                                    pass
-                        
                         if base_exchange_rate <= 0:
                             raise ValueError("没有找到基准汇率，严禁使用固定值，强制熔断")
                         
@@ -712,26 +767,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                         # if latest_valid_close > 0 and future_valuation > 0:
                         #     future_premium = (latest_valid_close / future_valuation - 1) * 100
                         
-                        # 新增：精准期货估值 (利用 T-1 期货收盘价)
-                        base_future_price = 0.0
-                        if base_date is not None:
-                            base_date_str = base_date.strftime('%Y-%m-%d') if isinstance(base_date, pd.Timestamp) else str(base_date)[:10]
-                            
-                            settle_col = f"{future_symbol}_settle" if future_symbol else "GC_settle"
-                            if settle_col in df_idx.columns:
-                                val = df_idx.loc[base_date].get(settle_col)
-                                if pd.notna(val) and val != '无' and val != '':
-                                    base_future_price = float(val)
-                            elif '期货结算价' in df_idx.columns:
-                                val = df_idx.loc[base_date].get('期货结算价')
-                                if pd.notna(val) and val != '无' and val != '':
-                                    base_future_price = float(val)
-
-                            if base_future_price <= 0 and futures_history_df is not None and not futures_history_df.empty and base_date_str in futures_history_df.index:
-                                val = futures_history_df.loc[base_date_str].get('GC_close', 0.0)
-                                if isinstance(val, pd.Series): val = val.iloc[0]
-                                base_future_price = float(val) if pd.notna(val) else 0.0
-
+                        # 针对黄金如果没有直接的期货收盘价，采用反推兜底
                         if base_future_price <= 0 and gold_calib > 0:
                             fallback_etf_price = 0.0
                             for item in h_list:
@@ -829,29 +865,6 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                         # if latest_valid_close > 0 and future_valuation > 0:
                         #     future_premium = (latest_valid_close / future_valuation - 1) * 100
                         
-                        # 新增：精准期货估值 (利用 T-1 期货收盘价)
-                        base_future_price = 0.0
-                        if base_date is not None and future_symbol:
-                            settle_col = f"{future_symbol}_settle"
-                            # 核心修复：从基准日(含)往前找，找到最近一个有期货结算价的交易日
-                            for dt_candidate in df_idx.loc[:base_date].index.sort_values(ascending=False):
-                                val = 0
-                                if settle_col in df_idx.columns:
-                                    v = df_idx.loc[dt_candidate].get(settle_col)
-                                    if pd.notna(v) and v != '无' and v != '':
-                                        try: val = float(v)
-                                        except: val = 0
-                                
-                                if val <= 0 and '期货结算价' in df_idx.columns:
-                                    v = df_idx.loc[dt_candidate].get('期货结算价')
-                                    if pd.notna(v) and v != '无' and v != '':
-                                        try: val = float(v)
-                                        except: val = 0
-                                
-                                if val > 0:
-                                    base_future_price = val
-                                    break
-
                         if base_future_price > 0:
                             future_change_rate = future_price / base_future_price
                             net_value_change_ratio_exact = pos_float * (future_change_rate * exchange_rate_change - 1)
@@ -866,6 +879,8 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                             raise ValueError("没有找到基准汇率，严禁使用固定值，强制熔断")
                         
                         # 严禁降级！获取当期真实汇率，若无则熔断
+                        current_exchange_rate = today_exchange_rate_float
+                        exchange_rate_change = current_exchange_rate / base_exchange_rate
                         if current_exchange_rate <= 0:
                             raise ValueError("没有找到今日汇率，严禁使用固定值，强制熔断")
                         
@@ -1043,7 +1058,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                                 weight = item.get('weight', 0.0)
 
                                 import re
-                                is_a_share = bool(re.match(r'^[0-9]{6}$|^(sh|sz)[0-9]{6}$', clean_sym, re.IGNORECASE))
+                                is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', clean_sym, re.IGNORECASE))
                                 lookup_sym = re.sub(r'^(SH|SZ)', '', clean_sym) if is_a_share else clean_sym
 
                                 cur_p = 0.0
