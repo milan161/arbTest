@@ -702,27 +702,66 @@ class DailyUpdater(BaseApp):
 
     def step7_fetch_extra_calibrations(self):
         """步骤七：从Woody网页补充抓取核心指数/商品的校准值"""
-        self.logger.info("=== 步骤七：抓取Woody网页补充校准值 ===")
+        self.logger.info("=== 步骤七：获取核心指数/商品校准值 (API优先模式) ===")
 
         today_str = datetime.now().strftime('%Y-%m-%d')
         if self.db.is_access_synced_today(today_str, source='woody_extra_calibrations'):
-            self.logger.info("✅ 今日已获取过 Woody 网页补充校准值，为防封号跳过...")
+            self.logger.info("✅ 今日已成功同步校准值，跳过...")
             return
 
-        calibration_values = self.woody_crawler.get_future_calibration_values()
+        # 🌟 优先尝试从刚刚抓取的 API 原始数据湖中提取
+        raw_json_str = self.db.get_raw_api_data(today_str, source='woody_lof')
+        api_success = False
+        
+        if raw_json_str:
+            try:
+                api_data = json.loads(raw_json_str)
+                # Woody API 包装在 text 字段里
+                if 'text' in api_data: api_data = api_data['text']
+                
+                symbol_map = {'GLD': 'GC', 'USO': 'CL', '^GSPC': 'ES', '^NDX': 'NQ'}
+                found_count = 0
+                
+                for api_sym, db_sym in symbol_map.items():
+                    if api_sym in api_data:
+                        item = api_data[api_sym]
+                        calib_val = item.get('calibration')
+                        date_str = item.get('est_date', item.get('date', today_str))
+                        
+                        if calib_val:
+                            self.db.upsert_futures_daily(date=date_str, symbol=db_sym, calibration=float(calib_val))
+                            self.logger.info(f"✅ [API] {db_sym} ({date_str}) -> {calib_val} 同步成功。")
+                            found_count += 1
+                
+                if found_count >= 4:
+                    api_success = True
+                    self.logger.info("🎉 所有核心校准值已从 API 成功同步。")
+            except Exception as e:
+                self.logger.error(f"❌ 从 API 缓存解析校准值失败: {e}")
+
+        if api_success:
+            self.db.mark_access_synced(today_str, source='woody_extra_calibrations')
+            return
+
+        # --- 备选方案：原来的网页爬虫 (已因 Woody 强制登录失效，仅作备份参考) ---
+        self.logger.warning("⚠️ API 未能提供完整校准值，尝试网页备份路径(可能因登录限制失败)...")
+        
+        # calibration_values = self.woody_crawler.get_future_calibration_values()
+        calibration_values = None # 暂时强制禁用爬虫以防封号，如有需要再开启
+        
         if not calibration_values:
-            self.logger.warning("⚠️ 未获取到校准值数据")
+            self.logger.warning("⚠️ 未能通过任何途径获取到今日校准值数据。")
             return
 
-        # symbol_map: {key: db_symbol}
-        symbol_map = {
+        # symbol_map_legacy: {key: db_symbol}
+        symbol_map_legacy = {
             'gold': 'GC',
             'oil': 'CL',
             'sp500': 'ES',
             'nasdaq': 'NQ'
         }
 
-        for key, db_sym in symbol_map.items():
+        for key, db_sym in symbol_map_legacy.items():
             if key not in calibration_values:
                 continue
 
@@ -731,7 +770,7 @@ class DailyUpdater(BaseApp):
 
             if calib_val and calib_val > 0:
                 self.db.upsert_futures_daily(date=date_str, symbol=db_sym, calibration=calib_val)
-                self.logger.info(f"✅ [校准值] {db_sym} ({date_str}) -> {calib_val} 入库成功。")
+                self.logger.info(f"✅ [网页备份] {db_sym} ({date_str}) -> {calib_val} 入库成功。")
             else:
                 self.logger.warning(f"⚠️ [{db_sym}] 获取到的校准值无效，跳过入库。")
                 

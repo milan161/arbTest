@@ -140,6 +140,22 @@ class WoodyAPIService:
             
         for sym, f_data in api_data.items():
             if not isinstance(f_data, dict): continue
+
+            # 🌟 新增：如果是基础标的（如 GLD, USO, ^GSPC, ^NDX），则提取其校准值存入 futures_daily
+            if sym in ['GLD', 'USO', '^GSPC', '^NDX']:
+                future_mapping = {'GLD': 'GC', 'USO': 'CL', '^GSPC': 'ES', '^NDX': 'NQ'}
+                db_sym = future_mapping.get(sym)
+                api_calib = f_data.get('calibration')
+                api_date = f_data.get('est_date', f_data.get('date', today_str))
+                if api_calib:
+                    try:
+                        calib_val = float(api_calib)
+                        if calib_val > 0:
+                            db.upsert_futures_daily(date=api_date, symbol=db_sym, calibration=calib_val)
+                            logging.info(f"✅ 从API同步全局校准值: {db_sym} = {calib_val} (日期: {api_date})")
+                    except Exception as e:
+                        logging.error(f"❌ 解析全局校准值 {sym} 失败: {e}")
+
             fund_code = sym.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '')
             
             raw_date = f_data.get('date', '')

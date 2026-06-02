@@ -227,8 +227,8 @@ funds:
   name: 嘉实黄金
   category: 黄金
   holdings:
-    equity_ratio: 96.3
-    cash_ratio: 3.7
+    equity_ratio: 96.25
+    cash_ratio: 3.75
   holdings_portfolio:
   - symbol: GLD
     weight: 19.02
@@ -270,14 +270,14 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 54.12
+    weight: 55.38
     anchor: US
-  - symbol: ^GLD-EU
-    weight: 45.88
+  - symbol: GLD-EU
+    weight: 44.62
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 96.3
+  position: 96.25
 - code: '161116'
   name: 易方达黄金
   category: 黄金
@@ -645,21 +645,21 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 86.11
-    cash_ratio: 13.89
+    equity_ratio: 87.2
+    cash_ratio: 12.8
   valuation_portfolio:
   - symbol: SOXX
-    weight: 81.36
+    weight: 78.58
     anchor: US
   - symbol: SZ159560
-    weight: 18.64
+    weight: 21.42
     anchor: US
   sina_index_url: ''
   rate_type: midpoint
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 86.11
+  position: 87.2
 - code: '501312'
   name: 华宝海外科技
   category: 混合跨境

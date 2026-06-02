@@ -400,7 +400,10 @@ def generate(futures_data=None, ib_data=None):
             
             # 根据基金类别设置期货校准因子
             latest_calibration_factor = calibrations.get(future_symbol_js, 0.0)
-            if base_row is not None:
+            
+            # 🌟 关键修复：只有当不是“指数”类基金时，才允许用基金自身的 calibration 覆盖全局期货校准
+            # 对于指数基金，fund_data 里的 calibration 是 Index/NAV，而我们需要的是 Future/Index (如 1.002)
+            if category != '指数' and base_row is not None:
                 try:
                     cal = base_row.get('calibration', 0.0)
                     if pd.notna(cal) and cal != '无':
@@ -408,7 +411,7 @@ def generate(futures_data=None, ib_data=None):
                 except:
                     pass
                     
-            # 如果基金自身没有校准值，用全局对应期货校准值兜底
+            # 如果基金自身没有校准值（或者是指数基金），用全局对应期货校准值兜底
             if latest_calibration_factor <= 0:
                 latest_calibration_factor = calibrations.get(future_symbol_js, 0.0)
                 if latest_calibration_factor <= 0: # 最后的兜底

@@ -193,12 +193,29 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             elif code == '161226': future_symbol = 'AG0'
 
     # 根据映射到的期货获取校准因子
+    latest_calibration_factor = 0.0
     if future_symbol and future_symbol in calibrations:
         latest_calibration_factor = calibrations[future_symbol]
     elif category == '黄金':
         latest_calibration_factor = calibrations.get('GC', 10.9067)
     elif category == '原油':
         latest_calibration_factor = calibrations.get('CL', 0.8227)
+    
+    # 🌟 关键修复：只有当不是“指数”类基金时，才允许用基金自身的 calibration 覆盖全局期货校准
+    if category != '指数' and base_row is not None:
+        try:
+            cal = base_row.get('calibration', 0.0)
+            if pd.notna(cal) and cal != '无' and cal != '':
+                latest_calibration_factor = float(cal)
+        except:
+            pass
+            
+    # 如果没取到，再次尝试全局兜底
+    if latest_calibration_factor <= 0:
+        latest_calibration_factor = calibrations.get(future_symbol, 0.0)
+        if latest_calibration_factor <= 0:
+            if category == '黄金': latest_calibration_factor = calibrations.get('GC', 10.9067)
+            elif category == '原油': latest_calibration_factor = calibrations.get('CL', 0.8227)
     
     # 获取人民币中间价（从基金历史数据中获取）
     if not lof_df_sorted.empty:
