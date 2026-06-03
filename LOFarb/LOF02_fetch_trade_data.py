@@ -2,6 +2,10 @@
 # 版本: 2.1.0
 # 最后修改时间: 2026-03-17
 
+import os
+import sys
+# 自动引导路径：确保能找到根目录下的 arbcore
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import requests
 import re
 import os
@@ -22,12 +26,24 @@ import time
 import atexit
 import logging
 
-# 导入 ArbCore 公共基座中的数据库管理器
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 导入 ArbCore 公共基座中的标准化应用类
+from arbcore.base_app import BaseApp, setup_logging
 from arbcore.database.db_manager import DatabaseManager
 from arbcore.fetchers.data_fetcher import data_fetcher as core_fetcher
 from arbcore.calculators.dynamic_valuation import DynamicValuationCalculator
 from arbcore.fetchers.ib_reader import IBReader
+
+# ====== [架构重构] 标准化应用类 ======
+class LofTradeApp(BaseApp):
+    def __init__(self):
+        super().__init__("LOF02_fetch_trade_data")
+        # 兼容旧代码：将 db_manager 赋给 self.db 已在 BaseApp 中完成
+        self.dynamic_calculator = DynamicValuationCalculator(self.db)
+        
+lof_app = LofTradeApp()
+db_manager = lof_app.db
+dynamic_calculator = lof_app.dynamic_calculator
+# ===================================
 
 # 设置ibapi模块的日志级别，避免大量DEBUG信息刷屏
 logging.getLogger('ibapi').setLevel(logging.WARNING)

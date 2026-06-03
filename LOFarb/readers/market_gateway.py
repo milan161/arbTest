@@ -6,7 +6,7 @@ import requests
 import random
 import pandas as pd
 from datetime import datetime
-from readers.base_app import setup_logging
+from arbcore.base_app import setup_logging
 
 # 尝试导入行情库
 try:

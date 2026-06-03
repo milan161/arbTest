@@ -254,7 +254,19 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             seen_symbols.add(column_name)
     
     # 生成ETF列的HTML
-    etf_th_html = ''.join([f"<th class='col-etf-bg-th'>{col}</th>" for col in etf_columns])
+    # 🌟 指数类基金特供：如果配置了 trade_etf，提取出它对应的纯净指数，用于表头展示
+    idx_symbol_for_history = None
+    if category == '指数':
+        trade_etf = str(fund.get('trade_etf', '')).upper()
+        if 'QQQ' in trade_etf: idx_symbol_for_history = 'NDX'
+        elif 'SPY' in trade_etf or 'XBI' in trade_etf: idx_symbol_for_history = 'INX'
+
+    if category == '指数' and idx_symbol_for_history:
+        etf_th_html = f"<th class='col-etf-bg-th'>{idx_symbol_for_history}</th>"
+        # 强制将提取列指向真正的数据库指数列（带前缀 .）
+        etf_columns = [f".{idx_symbol_for_history}"]
+    else:
+        etf_th_html = ''.join([f"<th class='col-etf-bg-th'>{col}</th>" for col in etf_columns])
     
     # ================================================================
     # 第三段：历史数据行生成循环 - 生成最近20个交易日的历史数据行
@@ -480,14 +492,18 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                         future_premium_cls, future_premium_str = html_generator.format_color(fp_num)
                 except: pass
         
-        # 从数据框中获取ETF值
+        # 从数据框中获取ETF或指数值
         etf_td_html = ''
         for col in etf_columns:
             etf_val = df_idx.loc[d_T].get(col, 0) if col in df_idx.columns else 0
             if isinstance(etf_val, (int, float)) and etf_val > 0:
-                etf_td_html += f"<td class='col-etf-bg'>{etf_val:.3f}</td>"
+                if category == '指数':
+                    # 🌟 指数类基金，显示两位小数，不经过任何缩放
+                    etf_td_html += f"<td class='col-etf-bg'>{etf_val:.2f}</td>"
+                else:
+                    etf_td_html += f"<td class='col-etf-bg'>{etf_val:.3f}</td>"
             else:
-                etf_td_html += f"<td class='col-etf-bg'>-</td>"
+                etf_td_html += f"<td class='col-etf-bg'>-</td>" 
         
         # 处理T-1日的ETF值
         etf_td_html_t1 = ''
@@ -495,7 +511,10 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             for col in etf_columns:
                 etf_val_t1 = df_idx.loc[d_T1].get(col, 0) if col in df_idx.columns else 0
                 if isinstance(etf_val_t1, (int, float)) and etf_val_t1 > 0:
-                    etf_td_html_t1 += f"<td>{etf_val_t1:.3f}</td>"
+                    if category == '指数':
+                        etf_td_html_t1 += f"<td>{etf_val_t1:.2f}</td>"
+                    else:
+                        etf_td_html_t1 += f"<td>{etf_val_t1:.3f}</td>"
                 else:
                     etf_td_html_t1 += f"<td>-</td>"
         else:
@@ -519,7 +538,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         # 生成历史数据行
         history_rows += f"""
         <tr class="secondary-page-row"><td class="num-font">{d_T.strftime('%m-%d')}</td><td>{exchange_rate_str}</td><td>{nav_str}</td><td class="secondary-close-price">{secondary_close_str}</td><td class="num-font {premium_cls}"><b>{premium_str}</b></td>{etf_td_html}<td class="num-font col-etf-bg" style="color:#d35400; font-weight:bold">{est_val_str}</td><td class="num-font col-etf-bg {etf_val_err_cls}">{etf_val_err_str}</td>{future_td_html}<td><button class="btn-verify" onclick="toggleVerify('{uid}')">▶ 验算</button></td></tr>
-        <tr id="verify-{uid}" class="verify-row secondary-page-row"><td colspan="{colspan_main}"><div class="verify-wrapper"><table class="check-table"><thead><tr><th>项</th><th>📅 日期</th><th>{rate_header_name}</th><th>净值</th>{etf_th_html}<th class="col-est">ETF静态净值</th>{('<th>期货结算价</th><th class="col-est" style="border-left: 2px solid #bbdefb; background-color: #e3f2fd50; color:#1976d2;">期货静态净值</th>' if has_future else '')}</tr></thead><tbody>
+        <tr id="verify-{uid}" class="verify-row secondary-page-row"><td colspan="{colspan_main}"><div class="verify-wrapper"><table class="check-table"><thead><tr><th>项</th><th>📅 日期</th><th>{rate_header_name}</th><th>净值</th>{etf_th_html}<th class="col-est">ETF静态估值</th>{('<th>期货结算价</th><th class="col-est" style="border-left: 2px solid #bbdefb; background-color: #e3f2fd50; color:#1976d2;">期货静态净值</th>' if has_future else '')}</tr></thead><tbody>
         <tr><td>本期(T)</td><td>{d_T.strftime('%m-%d')}</td><td>{exchange_rate_str}</td><td>{nav_str} {html_generator.pill_html(n_T, n_T1, True)}</td>{etf_td_html}<td class="col-est">{est_val_str} {html_generator.pill_html(cur_est_val, n_T1) if can_calc else ""}</td>{future_verify_td_T_html}</tr>
         <tr><td>基准(T-1)</td><td>{d_T1.strftime('%m-%d') if d_T1 else '无'}</td><td>{t1_exchange_rate_str}</td><td>{t1_nav_str} {html_generator.pill_html(n_T1, n_T2, True) if d_T2 else ""}</td>{etf_td_html_t1}<td>-</td>{future_verify_td_T1_html}</tr>
         </tbody></table></div></td></tr>"""
@@ -1559,7 +1578,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 <table style="width: 100%; border-collapse: collapse;">
                     <thead style="position: sticky; top: 0; background-color: #e3f2fd; z-index: 10;">
                         <tr>
-                                <th>日期</th><th>{rate_header_name}</th><th>净值</th><th>收盘价</th><th>溢价</th>{etf_th_html}<th class="col-etf-bg-th">ETF静态净值</th><th class="col-etf-bg-th">ETF估值误差</th>{future_th_html}<th>验算</th>
+                                <th>日期</th><th>{rate_header_name}</th><th>净值</th><th>收盘价</th><th>溢价</th>{etf_th_html}<th class="col-etf-bg-th">ETF静态估值</th><th class="col-etf-bg-th">ETF估值误差</th>{future_th_html}<th>验算</th>
                         </tr>
                     </thead>
                     <tbody>{history_rows}</tbody>
@@ -1592,9 +1611,35 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 </div>
             </div>"""
             
-        # 生成实时期货校准实时估值面板HTML
+        
+        # --- [工业级] 生成“三列估值推演区” (蓝、橙、绿) ---
+        
+        # 1. ETF实时估值面板 (蓝)
+        etf_panel_html = f"""
+            <div style="background: var(--theme-etf-bg); padding: 10px; border-radius: 8px; border: 1px solid var(--theme-etf-border); box-shadow: var(--shadow-sm); flex: 1; min-width: 360px;">
+                <div style="text-align: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed var(--theme-etf-border);">
+                    <span style="font-size:15px; font-weight:bold; color:var(--theme-etf-text);">ETF实时估值</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;">
+                        {base_inputs_html}
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 16px; justify-content: center;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="color:#666; font-size:13px; font-weight:bold;">估值:</span>
+                            <span id="sb-val-{code}" class="num-font" style="font-size: 18px; font-weight: bold; color: #1565c0;">-</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="color:#666; font-size:13px; font-weight:bold;">预测溢价:</span>
+                            <span id="sb-target-prem-{code}" class="num-font" style="font-size: 14px; font-weight: bold;">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        """
+
+        # 2. 期货校准实时估值面板 (橙)
         future_panel_html = ""
-        pure_future_panel_html = ""
         if future_symbol:
             future_panel_html = f"""
                 <div style="background: var(--theme-fut-bg); padding: 10px; border-radius: 8px; border: 1px solid var(--theme-fut-border); box-shadow: var(--shadow-sm); flex: 1; min-width: 360px;">
@@ -1624,7 +1669,9 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 </div>
             """
             
-            # 生成纯期货实时估值面板HTML
+        # 3. 纯期货实时估值面板 (绿)
+        pure_future_panel_html = ""
+        if future_symbol:
             pure_future_panel_html = f"""
                 <div style="background: var(--theme-pure-bg); padding: 10px; border-radius: 8px; border: 1px solid var(--theme-pure-border); box-shadow: var(--shadow-sm); flex: 1; min-width: 360px;">
                     <div style="text-align: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed var(--theme-pure-border);">
@@ -1648,8 +1695,21 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                     </div>
                 </div>
             """
+
         
-        # 构建完整的基准信息文本（去冗余优化）
+        # --- [工业级] 组装二级面板：实时估值沙盘 (Sandbox) ---
+        
+        # 组装三个面板的容器
+        three_valuation_panels_html = f"""
+            <!-- 【区域名称：三列估值推演区】并排呈现三种核心算法的当前估值与预期溢价率 -->
+            <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; width: 100%; margin-bottom: 12px;">
+                {etf_panel_html}
+                {future_panel_html}
+                {pure_future_panel_html}
+            </div>
+        """
+
+        # 构建完整的基准信息文本
         full_base_info = f'📅 <b>【T-1 基准日】</b> {rt_base_date_str}'
         full_base_info += f' | 💰 <b>净值:</b> <span class="num-font" style="color:var(--primary-dark);">{rt_base_nav:.4f}</span>'
         if rt_base_fx is not None:
@@ -1659,7 +1719,8 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         full_base_info += f' | 📊 <b>ETF收盘价:</b> <span class="num-font">{base_etfs_text}</span>'
         if future_symbol:
             full_base_info += f' | 📊 <b>{future_symbol}结算价:</b> <span class="num-font" style="color:var(--theme-fut-text);">{base_future_price:.2f}</span>'
-        
+
+        # 最终组装到 detail_page
         detail_page += f"""
         <!-- ========== 二级面板：实时估值沙盘（简称"沙盘"） ========== -->
         <div id="page-rt-etf-{code}" class="page-section card secondary-page">
@@ -1671,34 +1732,31 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 <button onclick="goHome()" class="back-btn">⬅ 返回主面板</button>
             </div>
             <div style="padding: 10px 15px;">
-                <!-- 【区域名称：基准数据区】包含基准日、基准净值、基准汇率、基准日ETF收盘价、基准日期货结算价等 -->
-                    <div style="background: var(--theme-base-bg); padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--theme-base-border); font-size: 13px; color: var(--theme-base-text);">
+                <!-- 【区域名称：基准数据区】 -->
+                <div style="background: var(--theme-base-bg); padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--theme-base-border); font-size: 13px; color: var(--theme-base-text);">
                     {full_base_info}
                 </div>
 
-                <!-- 【区域名称：LOF价格区】包含人民币中间价、A股LOF测试单价等 -->
-                    <div style="background: #ffffff; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm);">
+                <!-- 【区域名称：LOF价格区】 -->
+                <div style="background: #ffffff; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm);">
                     <div style="display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap;">
                         <span style="color:#1976d2; font-size:13px; font-weight:bold;">{rate_header_name}:</span>
                         <span class="num-font" id="sb-exchange-rate-{code}" style="font-size: 15px; font-weight: bold; color: #1976d2;">{latest_exchange_rate if latest_exchange_rate > 0 else '-'}</span>
                         <span style="color:#d32f2f; font-size:13px; font-weight:bold;">A股 LOF 测试单价:</span>
-                        <input type="number" id="sb-target-price-{code}" step="0.001" style="width: 95px; padding: 4px; font-size: 14px; font-family:Consolas; border: 1px solid #ccc; border-radius: 4px; color:#d32f2f; font-weight:bold;" title="手动输入测试单价" oninput="window.calcSandbox('{code}'); window.calcFutureSandbox('{code}'); window.calcPureFutureSandbox('{code}')">
+                        <input type="number" id="sb-target-price-{code}" step="0.001" style="width: 95px; padding: 4px; font-size: 14px; font-family:Consolas; border: 1px solid #ccc; border-radius: 4px; color:#d32f2f; font-weight:bold;" oninput="window.calcSandbox('{code}'); window.calcFutureSandbox('{code}'); window.calcPureFutureSandbox('{code}')">
                         <span style="color:#666; font-size:11px;">(该单价会同时用于三个估值计算)</span>
                     </div>
                 </div>
 
-                <!-- 【区域名称：对冲数量区】三套对冲测算并排显示：ETF实时估值对冲数量、期货校准估值对冲数量、纯期货估值对冲数量 -->
-                <!-- 【区域名称：实时盘口区】两个盘口：GLD实时盘口、GC实时盘口 -->
-                <!-- 【区域名称：下单区】两个下单区：QMT/IB ETF下单区、IB期货下单区 -->
-                <!-- 【区域名称：下单按键】两行按键：买入按键（上一行）、卖出按键（下一行） -->
+                {three_valuation_panels_html}
+
+                <!-- 【对冲与交易区】 -->
                 {get_three_hedge_calculations_with_trade()}
 
-                <div style="margin-top: 15px; font-size: 13px; color: #888;">* 提示：面板打开时会自动填入主面板实盘价作为默认测试价。您可以随意修改输入框内的值，点击计算后推演该价位溢价率，不影响主面板自动刷新。也支持国金QMT。</div>
+                <div style="margin-top: 15px; font-size: 13px; color: #888;">* 提示：面板打开时会自动填入主面板实盘价作为默认测试价。</div>
             </div>
         </div>"""
-    
-    # ================================================================
-    # 第十段：函数返回 - 返回主页行、详情页和全局日期
+        # 第十段：函数返回 - 返回主页行、详情页和全局日期
     # ================================================================
     
     # 获取全局日期

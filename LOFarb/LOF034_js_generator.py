@@ -224,69 +224,61 @@ class JsGenerator:
                 if (!baseData || !baseData.position || baseData.hedgingPortfolio.length === 0) {
                     return 0;
                 }
-                
+
                 // 动态获取：如果在岸价要求且后台提供了在岸价，则使用在岸价；否则降级中间价
                 var reqSpot = (baseData.rateType === 'spot');
                 var todayExchangeRate = (reqSpot && window.latestExchangeRates && window.latestExchangeRates.spot) ? window.latestExchangeRates.spot : baseData.todayExchangeRate;
-                
+
                 if (!todayExchangeRate || todayExchangeRate <= 0) {
                     return 0; // 彻底没有有效汇率，强制熔断返回0
                 }
-                
-                // =========================================================================
-                // 💡 概念澄清与双校准参数隔离 (核心备注)
-                // =========================================================================
-                // 1. woody API 的 `hedge` (在前端为 baseData.hedgeValue):
-                //    - 用途：优先作为“魔法公式”用来计算【纯ETF】和【指数】的估值。
-                //    - 规则：如果没能从 woody API 获得有效的 hedge，则不使用替身推导，估值自动降级使用兜底的【矩阵算法】。
-                //
-                // 2. 期货校准 (在前端为 window.calibData 或 latestCalibrationFactor):
-                //    - 用途：专门用来计算“实时的期货校准估值” (即：实时期货价格 / 期货校准)。
-                //    - 规则：只有【黄金】、【原油】类基金和【指数】类基金才会用到；【纯ETF】没有也不使用期货校准估值。千万不要混淆！
-                // =========================================================================
-                
+
                 var position = baseData.position;
                 var hedgeValue = baseData.hedgeValue; // 严格只取 woody API 真实传入的 hedge
                 var etfCalibration = 0;
-                
+
                 // 严格遵循要求：只有获取到了真实 hedge，才能启用魔法公式，如果获取不到则保持 0 以便后续降级矩阵算法
                 if (hedgeValue && hedgeValue > 0 && position > 0) {
                     etfCalibration = hedgeValue * position;
                 }
-                
+
                 function getCurrentPrice(sym) {
-                    var cleanSym = sym.replace('^', '').split('-')[0].toUpperCase();
+                    var upperSym = sym.toUpperCase().replace('^', '');
+                    // 1. 优先尝试完全匹配 (针对 Sandbox 手工输入的 USO-EU 等)
+                    if (window.currentEtfPrices[upperSym] !== undefined && window.currentEtfPrices[upperSym] > 0) {
+                        return window.currentEtfPrices[upperSym];
+                    }
+                    // 2. 降级尝试基础标的匹配 (USO-EU -> USO)
+                    var cleanSym = upperSym.split('-')[0];
                     return window.currentEtfPrices[cleanSym] || 0;
                 }
 
                 // 🌟 核心估值逻辑分叉：
-                // 1. 对于“指数”和“纯ETF”/“其他”类基金，优先使用“魔法公式”（基于 woody hedge 导出的 etfCalibration）。
-                // 2. 对于“黄金”、“原油”类基金，其估值天然基于底层商品ETF的价格，因此直接使用“矩阵算法”。
-                // 3. 当“魔法公式”所需的 woody hedge 因子缺失时，所有基金都会自动降级（兜底）到“矩阵算法”。
-                if (category !== '黄金' && category !== '原油' && etfCalibration > 0 && baseData.hedgingPortfolio.length === 1 && position > 0) {
+                // 1. 优先使用“魔法公式”（基于 woody hedge 导出的 etfCalibration）。支持所有单标的（包括指数）。
+                if (etfCalibration > 0 && baseData.hedgingPortfolio.length === 1 && position > 0) {
                     var primarySym = baseData.hedgingPortfolio[0].symbol;
                     var currentAssetPrice = getCurrentPrice(primarySym);
-                    
+
                     if (currentAssetPrice > 0) {
                         // 魔法公式：实时估值 = 现金底仓 + (仓位 / etfCalibration) * (ETF实时价 * 实时汇率)
                         return baseData.baseNav * (1.0 - position) + (position / etfCalibration) * (currentAssetPrice * todayExchangeRate);
                     }
                 }
-                
-                // 🌟 矩阵兜底：商品多资产组合(黄金/原油)，或魔法因子缺失时，退回 T-1 权重矩阵
+
+                // 🌟 矩阵兜底：多资产组合，或魔法因子缺失时，退回 T-1 权重矩阵
                 var weightedEtfChangeRate = 0;
                 var hasValidData = false;
                 var validWeight = 0;
                 var exchangeRateChange = todayExchangeRate / baseData.baseExchangeRate;
-                
+
                 for (var i = 0; i < baseData.hedgingPortfolio.length; i++) {
                     var item = baseData.hedgingPortfolio[i];
                     var sym = item.symbol;
                     var isAshare = /^[0-9]{5,6}$/.test(sym) || /^(sh|sz)[0-9]{6}$/i.test(sym);
-                    
+
                     var currentPrice = 0;
                     if (isAshare) {
-                        // 🌟 A股资产: 直接从主面板的A股实时流抓取，不吃美股夜盘盲区
+                        // 🌟 A股资产: 直接从主面板的A股实时流抓取
                         var cleanCode = sym.replace(/^(sh|sz)/i, '');
                         currentPrice = (window.latestLofPrices && window.latestLofPrices[cleanCode]) || 0;
                         if (currentPrice === 0) {
@@ -296,22 +288,29 @@ class JsGenerator:
                     } else {
                         currentPrice = getCurrentPrice(sym);
                     }
-                    
-                    var basePrice = baseData.baseEtfPrices[item.symbol];
+
+                    // 🌟 核心：baseEtfPrices 存储的是带 ^ 的原始符号
+                    var basePrice = baseData.baseEtfPrices[sym];
+                    // 兜底尝试去 ^ 匹配
+                    if (!basePrice) basePrice = baseData.baseEtfPrices[sym.replace('^', '')];
+
                     if (basePrice > 0 && currentPrice > 0 && item.weight > 0) {
                         var changeRate = currentPrice / basePrice;
                         // 🌟 核心：如果是美元计价资产，乘汇率；若是A股，免疫汇率！
                         if (!isAshare) {
                             changeRate = changeRate * exchangeRateChange;
                         }
-                        weightedEtfChangeRate += changeRate * item.weight;
-                        validWeight += item.weight;
+                        // 兼容权重的百分比写法 (如果是 95 则除以 100)
+                        var normWeight = item.weight > 2 ? item.weight / 100.0 : item.weight;
+                        weightedEtfChangeRate += changeRate * normWeight;
+                        validWeight += normWeight;
                         hasValidData = true;
                     }
                 }
                 
                 if (!hasValidData) return 0;
-                if (validWeight < 0.98 || validWeight > 1.02) {
+                
+                if (Math.abs(validWeight - 1.0) > 0.01 && validWeight > 0) {
                     weightedEtfChangeRate = weightedEtfChangeRate / validWeight;
                 }
                 

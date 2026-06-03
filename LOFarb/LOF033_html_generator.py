@@ -12,7 +12,7 @@ class HtmlGenerator:
                 --primary-color: #2563eb; --primary-light: #dbeafe; --primary-dark: #1d4ed8;
                 --secondary-color: #64748b; --secondary-light: #f8fafc; --secondary-dark: #334155;
                 --bg-color: #f1f5f9; --card-bg: #ffffff;
-                --pos-color: #16a34a; --pos-light: #dcfce7; --neg-color: #dc2626; --neg-light: #fee2e2;
+                --pos-color: #22c55e; --pos-light: #dcfce7; --neg-color: #ef4444; --neg-light: #fee2e2;
                 --border-color: #cbd5e1; --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
                 --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
                 --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
@@ -228,17 +228,17 @@ class HtmlGenerator:
                 font-size: 13px;
             }
             
-            th {
-                background-color: var(--primary-light);
-                color: var(--primary-dark);
-                font-weight: 600;
-                padding: 10px 6px;
-                text-align: center;
-                border-bottom: 2px solid var(--primary-color);
-                font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
+            
+              th {
+                  background-color: #eef2f6; /* 广益录风格极浅蓝灰 */
+                  color: #1f2937;            /* 高级深灰蓝 */
+                  font-weight: bold;
+                  padding: 12px 6px;
+                  text-align: center;
+                  border-bottom: 2px solid #cbd5e1;
+                  font-size: 12px;
+                  letter-spacing: 1.5px;      /* 增加呼吸感 */
+              }
             
             td {
                 padding: 8px 6px;
@@ -371,14 +371,17 @@ class HtmlGenerator:
                 overflow: hidden;
             }
             
-            .check-table th {
-                background: var(--secondary-light);
-                color: var(--secondary-dark);
-                font-size: 12px;
-                padding: 10px;
-                border: 1px solid var(--border-color);
-                text-align: center;
-            }
+            .check-table 
+              th {
+                  background-color: #eef2f6; /* 广益录风格极浅蓝灰 */
+                  color: #1f2937;            /* 高级深灰蓝 */
+                  font-weight: bold;
+                  padding: 12px 6px;
+                  text-align: center;
+                  border-bottom: 2px solid #cbd5e1;
+                  font-size: 12px;
+                  letter-spacing: 1.5px;      /* 增加呼吸感 */
+              }
             
             .check-table td {
                 padding: 10px;
@@ -487,17 +490,57 @@ class HtmlGenerator:
 
             /* 添加高度区分的主面板列底色 */
             .col-static-bg { background-color: #fffdf5; border-right: 1px dashed #fce3b8; }
-            .col-static-bg-th { background-color: #ffecd2 !important; border-bottom: 2px solid #fb8c00 !important; color: #e65100 !important; }
+            .col-static-bg-
+              th {
+                  background-color: #eef2f6; /* 广益录风格极浅蓝灰 */
+                  color: #1f2937;            /* 高级深灰蓝 */
+                  font-weight: bold;
+                  padding: 12px 6px;
+                  text-align: center;
+                  border-bottom: 2px solid #cbd5e1;
+                  font-size: 12px;
+                  letter-spacing: 1.5px;      /* 增加呼吸感 */
+              }
             
             .col-realtime-bg { background-color: #f0f7ff; }
-            .col-realtime-bg-th { background-color: #e0efff !important; border-bottom: 2px solid #2196f3 !important; color: #1565c0 !important; }
+            .col-realtime-bg-
+              th {
+                  background-color: #eef2f6; /* 广益录风格极浅蓝灰 */
+                  color: #1f2937;            /* 高级深灰蓝 */
+                  font-weight: bold;
+                  padding: 12px 6px;
+                  text-align: center;
+                  border-bottom: 2px solid #cbd5e1;
+                  font-size: 12px;
+                  letter-spacing: 1.5px;      /* 增加呼吸感 */
+              }
 
             /* 历史对账页面的数据区分底色 */
             .col-etf-bg { background-color: #f0fdf4 !important; border-left: 1px dashed #dcfce7; }
-            .col-etf-bg-th { background-color: #dcfce7 !important; border-bottom: 2px solid #22c55e !important; color: #166534 !important;}
+            .col-etf-bg-
+              th {
+                  background-color: #eef2f6; /* 广益录风格极浅蓝灰 */
+                  color: #1f2937;            /* 高级深灰蓝 */
+                  font-weight: bold;
+                  padding: 12px 6px;
+                  text-align: center;
+                  border-bottom: 2px solid #cbd5e1;
+                  font-size: 12px;
+                  letter-spacing: 1.5px;      /* 增加呼吸感 */
+              }
             
             .col-future-bg { background-color: #fdf4ff !important; border-left: 1px dashed #fce7f3; }
-            .col-future-bg-th { background-color: #fce7f3 !important; border-bottom: 2px solid #ec4899 !important; color: #991b1b !important;}
+            .col-future-bg-
+              th {
+                  background-color: #eef2f6; /* 广益录风格极浅蓝灰 */
+                  color: #1f2937;            /* 高级深灰蓝 */
+                  font-weight: bold;
+                  padding: 12px 6px;
+                  text-align: center;
+                  border-bottom: 2px solid #cbd5e1;
+                  font-size: 12px;
+                  letter-spacing: 1.5px;      /* 增加呼吸感 */
+              }
             
             /* 动画效果 */
             @keyframes fadeIn {

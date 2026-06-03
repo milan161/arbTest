@@ -794,6 +794,13 @@ def generate(futures_data=None, ib_data=None):
         final_html += '            </div>\n'
     final_html += '            </div>\n'
 
+    # --- 拆分的表 8：混合跨境 (TAB 8) ---
+    # ...
+    
+    # 🌟 核心修复：从处理器模块提取被修改过的白银数据
+    import LOF035_fund_processor
+    silver_fund_data = LOF035_fund_processor.silver_fund_data
+
     # 添加白银期货单独表格 (TAB 4)
     final_html += '            <div id="tab-4" class="tab-content" style="margin-bottom: 10px;">\n'
     if silver_fund_data:

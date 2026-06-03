@@ -1,137 +1,83 @@
-# 📊 LOF 基金折价套利监控系统
+# 📊 LOF 基金折价套利监控系统 (Architecture V2.2)
 
-本系统是一个半自动化监控跨境基金套利的程序，通过抓取美股ETF/期货的实时价格、人民币汇率、以及历史因子（对冲值、校准值），推演出基金的静态官方估值，进一步预估"实时估值"，指导实盘套利打单。
+本系统是基于 `arbcore` 工业级基座构建的专业级基金套利监控程序。它通过高频抓取全球跨市场行情，结合 `BaseApp` 标准化架构，为投资者提供极致稳定的套利推演看板。
 
 ---
 
-## 📁 目录结构
+## 🏗️ 工业级架构升级 (Industrial加固)
+
+本模块已完成全面重构，核心特性包括：
+
+1. **BaseApp 基座接入**：
+   - 所有的核心脚本（011, 012, 02）现在统一继承自 `BaseApp`。
+   - 实现全局 **NO_PROXY** 强制注入，彻底解决国内行情 API 的网络死锁问题。
+2. **模块化数据库引擎**：
+   - 废弃零散的 CSV 存储，全面转向模块化的 `DatabaseManager`。
+   - 核心数据存储于 `arb_master.db`，支持高并发读写。
+3. **行情网关重构 (LOF02)**：
+   - 重构为标准化基座应用，内建长连接池（QMT/通达信/IB）。
+   - 具备无感降级能力：当主行情源失效时，自动切换至新浪/东财等兜底接口。
+
+---
+
+## 📁 目录结构 (V2.2 标准版)
 
 ```
 LOFarb/
-├── data/                 # 历史数据目录（已废弃，改用数据库）
-├── docs/                 # 技术文档子目录
-├── ibapi/                # IB API接口库
-├── logs/                 # 日志文件
-├── my-ai/                # AI相关文件
-├── readers/              # 数据读取模块
-│   ├── config_manager.py     # 配置管理
-│   ├── data_fetcher.py       # 数据获取
-│   ├── database_manager.py   # 数据库管理
-│   ├── dynamic_data_fetcher.py # 动态数据获取
-│   ├── health_monitor.py     # 健康监控
-│   ├── http_client.py        # HTTP客户端
-│   ├── qmt_socket_client.py  # QMT Socket客户端
-│   ├── qmt_socket_server.py  # QMT Socket服务端（银河QMT策略）
-│   ├── retry_manager.py      # 重试管理
-│   └── trade_manager.py      # 交易管理器
-├── lof_config.yaml       # 配置文件
-├── lof_monitor.html      # 静态监控页面
-├── LOF_start_lof_system.bat  # 一键启动脚本
-├── LOF00_input_LOF_info.py   # 配置管理界面
-├── LOF01_admin_launcher.py   # 管理面板
-├── LOF011_daily_updater.py   # 每日数据更新
-├── LOF012_calculate_valuation.py # 静态估值计算
-├── LOF02_fetch_trade_data.py # 实时数据服务
-├── LOF03_generate_monitor_html.py # 监控页面生成
-├── LOF031_config_manager.py  # 配置管理组件
-├── LOF032_data_processor.py  # 数据处理组件
-└── LOF033_html_generator.py  # HTML生成组件
+├── readers/              # 核心基座适配层
+│   ├── base_app.py           # 【关键】标准化基座
+│   ├── market_gateway.py     # 统一行情网关
+│   └── trade_manager.py      # 交易管理器 (策略模式)
+├── lof_config.yaml       # 全域因子配置中心
+├── LOF_start_lof_system.bat # 一键生命周期管理器
+├── LOF011_daily_updater.py  # 进食：数据大一统采集
+├── LOF012_calculate_valuation.py # 思考：静态估值精算
+├── LOF02_fetch_trade_data.py # 跳动：实时行情服务 (5000端口)
+├── LOF03_*.py 系列        # 颜值：监控页面渲染引擎
+└── logs/                 # 统一日志目录
 ```
 
 ---
 
-## 🚀 快速启动
+## 🚀 快速启动流水线
 
-### 方法一：一键启动（推荐）
-
+### 1. 一键启动 (生产环境推荐)
 ```bash
 cd LOFarb
-LOF_start_lof_system.bat
+./LOF_start_lof_system.bat
 ```
 
-### 方法二：手动启动
-
-```bash
-cd LOFarb
-
-# 1. 数据初始化（首次运行）
-python LOF00_input_LOF_info.py
-
-# 2. 每日数据更新（盘后执行）
-python LOF011_daily_updater.py
-
-# 3. 静态估值计算
-python LOF012_calculate_valuation.py
-
-# 4. 启动实时数据服务（端口5000）
-python LOF02_fetch_trade_data.py
-
-# 5. 启动管理面板（端口5002）
-python LOF01_admin_launcher.py
-
-# 6. 生成监控页面
-python LOF03_generate_monitor_html.py
-```
+### 2. 标准化操作序列 (手动维护)
+1. **数据补全**：`python LOF011_daily_updater.py` (每日盘前)
+2. **算法对齐**：`python LOF012_calculate_valuation.py` (检查数据探针)
+3. **开启监控**：`python LOF02_fetch_trade_data.py` (核心后台)
 
 ---
 
-## 🌐 访问地址
+## 🌐 工业级服务拓扑
 
-| 服务 | 地址 | 说明 |
+| 服务组件 | 端口 | 职能描述 |
 |------|------|------|
-| 监控看板 | http://localhost:5000 | 实时监控套利机会 |
-| 管理后台 | http://localhost:5002 | 系统管理和任务执行 |
-| 配置界面 | http://localhost:5001 | 基金配置管理 |
+| **行情网关** | 5000 | 提供实时 WebSocket 数据流与监控主页 |
+| **管理面板** | 5002 | 异步执行数据维护任务 (011/012) |
+| **配置中心** | 5001 | 图形化修改基金参数与篮子权重 |
 
 ---
 
-## 📋 核心程序说明
+## 🔗 核心逻辑记录
 
-### 1. 数据大一统更新 (LOF011_daily_updater.py)
-- **功能**：按顺序执行完整的数据抓取流水线
-- **数据源**：Woody API、外汇局、新浪、东财
-- **核心特征**：受 `access_sync_status` 表保护，每日单次抓取
+### 1. 跨市场接力 (虚拟后缀替身)
+带有 `-EU`, `-JP`, `-HK` 后缀的标的代表特定时点的“快照价”，用于 T-1 日估值对齐。
 
-### 2. 静态估值计算 (LOF012_calculate_valuation.py)
-- **功能**：启动纯数学计算引擎，计算基金静态官方估值
-- **核心特征**：不访问外网，仅使用数据库数据，执行速度极快
-
-### 3. 实时数据服务 (LOF02_fetch_trade_data.py)
-- **功能**：整合所有实时数据源，提供API服务
-- **行情优先级**：银河QMT(Socket) → 通达信(内存直连) → 国金QMT(xtquant) → 新浪API(兜底)
-- **输出**：REST API、WebSocket、SSE流
-
-### 4. 监控页面生成 (LOF03_generate_monitor_html.py)
-- **功能**：生成静态HTML监控页面
-- **架构**：店长(03)-菜单(031)-厨师(032)-装修(033)-电工(034) 职责分离
+### 2. 实时行情瀑布流 (Priority)
+**银河QMT (Socket)** ➔ **通达信 (内存快照)** ➔ **国金QMT (xtquant)** ➔ **新浪API (备用)**。
 
 ---
 
-## 🔗 交易接口支持
-
-系统支持以下交易通道：
-
-| 通道 | 类型 | 说明 |
-|------|------|------|
-| 银河QMT | Socket | 通过 qmt_socket_server.py 连接 |
-| 国金QMT | xtquant | 原生API直连 |
-| 通达信 | tqcenter | 内存直连 |
-| IB盈透 | IB API | 外盘数据和交易 |
+## 📚 延伸阅读
+- 全局架构：`../docs/002_整体架构设计.md`
+- 数据库字典：`../docs/005_数据库.md`
+- 工业级优化：`../docs/014_Gemin 优化.md`
 
 ---
-
-## 📚 参考文档
-
-- 系统架构：`../docs/002_整体架构设计.md`
-- 数据库设计：`../docs/005_数据库.md`
-- 估值算法：`../docs/009_估值_校准值、对冲值.md`
-- QMT/通达信技术文档：`../docs/012_QMT通达信技术文档.md`
-
----
-
-## ⚠️ 注意事项
-
-1. 首次运行前请确保配置文件 `lof_config.yaml` 正确设置
-2. 运行实时服务前请确保相关交易客户端已启动（如QMT、通达信）
-3. 数据库文件位于 `../database/arb_master.db`
-4. 日志文件位于 `logs/` 目录
+*本文档为 V2.2 工业级版本标准架构指南。*

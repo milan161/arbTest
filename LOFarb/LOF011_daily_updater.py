@@ -2,6 +2,10 @@
 # LOF01_daily_updater.py - 每日数据大一统更新器
 import os
 import sys
+# 自动引导路径：确保能找到根目录下的 arbcore
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import os
+import sys
 import json
 import yaml
 import logging
@@ -12,7 +16,7 @@ import time
 import random
 
 # 引入项目基座
-from readers.base_app import BaseApp, setup_logging
+from arbcore.base_app import BaseApp, setup_logging
 from arbcore.fetchers.data_fetcher import data_fetcher
 from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
 from arbcore.fetchers.woody_api_service import WoodyAPIService
@@ -296,9 +300,15 @@ class DailyUpdater(BaseApp):
 
     def step3_fetch_exchange_rate(self):
         """步骤三：抓取汇率（人民币中间价）存入库"""
-        self.logger.info("=== 步骤三：抓取汇率（人民币中间价） ===")
+        self.logger.info("=== 步骤三：抓取汇率（人民币中间价） [V2.2.1 强力防刷版] ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
-        
+
+        # 🌟 核心修复：必须在任何 VPS 连接之前执行 check
+        if self.db.is_access_synced_today(today_str, source='official_exchange_rate') or \
+           self.db.is_access_synced_today(today_str, source='fx_siphon'):
+            self.logger.info("✅ 今日已获取过人民币中间价 (V2.2.1 拦截成功)，跳过所有抓取流程。")
+            return
+
         # Level 0: VPS Siphon
         vps_fx_data = self._try_fetch_from_vps('fx')
         if vps_fx_data:
@@ -309,36 +319,26 @@ class DailyUpdater(BaseApp):
                 if date_info_str and (usd_rate or hkd_rate):
                     self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_rate, hkd_cny_mid=hkd_rate)
                     self.logger.info(f"✅ [VPS] 汇率入库: {date_info_str} -> USD:{usd_rate}, HKD:{hkd_rate}")
+                    self.db.mark_access_synced(today_str, source='fx_siphon')
+                    return 
             except Exception as e:
                 self.logger.error(f"❌ [VPS] 汇率数据处理失败: {e}")
 
-        # 1. 防刷检查
-        if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
-            self.logger.info("✅ 今日已获取过人民币中间价，为防封号从本地缓存跳过...")
-        else:
-            # 增强本地抓取逻辑：尝试获取全币种（美元、港币）
-            # 注意：目前的 data_fetcher 可能只返回了美元，我们在这里尝试兼容
-            exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
-            if exchange_rate_data:
-                date_info = exchange_rate_data.get('日期')
-                rate = exchange_rate_data.get('人民币中间价') # 默认通常是美元
-                
-                if date_info:
-                    try:
-                        date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
-                        # 增强：同时保存美元和港币 (如果 fetcher 提供了)
-                        usd_val = exchange_rate_data.get('usd_cny_mid', rate)
-                        hkd_val = exchange_rate_data.get('hkd_cny_mid')
-                        
-                        self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
-                        self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
-                        
-                        # 标记防刷
-                        fetched_date_obj = pd.to_datetime(date_info_str).date()
-                        if fetched_date_obj >= (datetime.now().date() - timedelta(days=3)):
-                            self.db.mark_access_synced(today_str, source='official_exchange_rate')
-                    except Exception as e:
-                        self.logger.error(f"❌ 本地汇率解析异常: {e}")
+        # Level 1: 本地抓取
+        exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
+        if exchange_rate_data:
+            date_info = exchange_rate_data.get('日期')
+            rate = exchange_rate_data.get('人民币中间价')
+            if date_info:
+                try:
+                    date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
+                    usd_val = exchange_rate_data.get('usd_cny_mid', rate)
+                    hkd_val = exchange_rate_data.get('hkd_cny_mid')
+                    self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
+                    self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
+                    self.db.mark_access_synced(today_str, source='official_exchange_rate')
+                except Exception as e:
+                    self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
         """安全合并保存 fund 数据，防止 price 和 nav 互相覆盖导致对方变成 NULL"""

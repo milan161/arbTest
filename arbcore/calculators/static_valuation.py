@@ -141,6 +141,10 @@ class StaticValuationCalculator:
         if idx_sym:
             idx_df = pd.read_sql(f'SELECT date, price as "{idx_sym}" FROM index_daily WHERE symbol = ?', conn, params=(idx_sym,))
             df = pd.merge(df, idx_df, on='date', how='left')
+            # 🌟 关键修复：对于“指数”类基金，如果存在纯净指数行情，强制将其作为 primary_sym 的价格来源
+            if category == '指数' and idx_sym in df.columns:
+                primary_sym = idx_sym
+                logger.info(f"  📊 [{name}] 检测为指数类基金，将使用纯净指数 {idx_sym} 进行估值推演")
         
         conn.close()
         
@@ -151,7 +155,13 @@ class StaticValuationCalculator:
         df.drop_duplicates(subset=['date'], keep='first', inplace=True)
         df.reset_index(drop=True, inplace=True)
         
-        # === 核心修复：向下兼容 (bfill)，继承最近一个交易日的真实API因子 ===
+                # === [工业级] 因子继承与指数模式锁定 ===
+        if category == '指数' and idx_sym:
+            primary_sym = idx_sym
+            logger.info(f"  🎯 [指数模式] 锁定 {idx_sym} 为唯一基准分母")
+        elif category == '指数' and not idx_sym:
+            logger.warning(f"  ⚠️ [指数模式] 警告：基金 {name} 缺失相关指数配置")
+
         # 1. 宏观期货校准继承 (注：严禁穿透继承 仓位、hedge 和 calibration)
         for col in ['黄金期货校准', '原油期货校准']:
             if col in df.columns:
@@ -226,7 +236,7 @@ class StaticValuationCalculator:
             # 🌟 魔法捷径：Woody 常量折叠极简推演
             # 逻辑：仅限单一纯净ETF(如XOP/SPY)使用单一代入。多区域组合(黄金/原油)必须强制走矩阵兜底。
             used_magic = False
-            if pd.notna(b_hedge) and b_hedge > 0 and primary_sym and primary_sym in row and len(portfolio) == 1:
+            if pd.notna(b_hedge) and b_hedge > 0 and primary_sym and primary_sym in row and len(portfolio) == 1 and category != '指数':
                 c_price = row.get(primary_sym)
                 if pd.notna(c_price) and c_price > 0:
                     val = calculate_magic_valuation(base_nav, position, c_price, cur_fx, b_hedge)

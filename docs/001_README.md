@@ -1,114 +1,76 @@
-# LOF 基金套利监控系统
+# LOF 基金套利监控系统 (Industrial Grade V2.2)
 
 ## 项目概述
 
-LOF 基金套利监控系统是一个实时监控 LOF 基金折价/溢价机会的系统，通过跟踪 A 股、美股 ETF 和期货数据，实时计算 LOF 基金的估值，帮助投资者发现套利机会。
+LOF 基金套利监控系统是一个实时监控 LOF 基金折价/溢价机会的专业级平台。通过集成 A 股（QMT/通达信）、美股（IB/新浪）及期货（CME）的多维度行情，实现全天候、高精度的实时估值与对冲参考。
 
-系统包含两个主要模块：
-- **LOFarb**：专注于 LOF 基金的折价/溢价套利
-- **ETFrotate**：专注于 ETF 的轮动策略
+系统已全面重构，采用 **BaseApp 标准化基座** 与 **模块化 DatabaseManager**，确保在无人值守环境下的极致稳定性。
 
-## 系统架构
+## 系统架构 (三层金字塔)
 
-系统采用三层架构设计：
-
-1. **核心层** (`arbcore`)：提供通用函数库，包括数据获取、处理和存储等核心功能
-2. **数据层** (`arbcore/database`)：使用 SQLite 数据库存储基金数据、汇率数据和期货数据
-3. **应用层**：
-   - `LOFarb`：聚焦折价套利
-   - `ETFrotate`：聚焦轮动套利
-
-## 核心功能
-
-- **实时估值**：基于多种方法计算 LOF 基金的实时估值
-- **套利机会检测**：自动检测折价/溢价机会
-- **数据自动更新**：定期更新基金净值、价格和相关市场数据
-- **可视化监控**：通过网页界面实时监控套利机会
+1. **核心基座层** (`arbcore`)：提供工业级组件
+   - `BaseApp`：标准化启动器，管理日志、配置与数据库。
+   - `DatabaseManager`：职责分离的数据库管理系统（支持 WAL 并发）。
+   - `Fetchers`：具备熔断与降级保护的数据采集矩阵。
+2. **数据持久层** (`arbcore/database`)：
+   - 统一数据库：`arb_master.db`。
+   - 实现“动静结合”的数据流转，完美记录实时现价与官方净值。
+3. **业务应用层**：
+   - `LOFarb`：跨境与大宗基金折价套利。
+   - `jsl`：全市场 LOF/ETF 监控看板（JSL 风格）。
 
 ## 快速开始
 
-### 环境要求
+### 环境配置
 
-- Python 3.11+
-- 依赖包：见 `requirements.txt`
+- **Python 版本**：3.11+ (推荐使用 Miniconda/Anaconda 管理环境)
+- **依赖安装**：
+  ```bash
+  pip install -r requirements.txt
+  ```
 
-### 启动步骤
+### 启动流程
 
-1. **安装依赖**：
+1. **一键启动 (推荐)**：
    ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **折价套利程序 启动系统**：
-   ```bash
-   # 方法1：使用批处理脚本
    cd LOFarb
    LOF_start_lof_system.bat
-   
-   # 方法2：手动启动
-   cd LOFarb
-   python LOF011_daily_updater.py  # 数据更新
-   python LOF012_calculate_valuation.py  # 估值计算
-   python LOF02_fetch_trade_data.py  # 实时数据服务 (端口 5000)
-   python LOF01_admin_launcher.py  # 管理面板 (端口 5002)
-   python LOF03_generate_monitor_html.py  # 生成监控页面
    ```
 
-3. **访问界面**：
-   - 监控看板：http://localhost:5000/
-   - 管理后台：http://localhost:5002/
+2. **核心脚本职能**：
+   - `LOF011_daily_updater.py`：数据大一统采集（每日盘前执行，支持 VPS 追溯）。
+   - `LOF012_calculate_static_valuation.py`：纯本地静态估值流水线。
+   - `LOF02_fetch_trade_data.py`：实时行情网关（核心服务，5000 端口）。
+   - `LOF01_admin_launcher.py`：管理调度面板（5002 端口）。
 
 ## 目录结构
 
 ```
-├── arbcore/             # 核心函数库
-│   ├── fetchers/        # 数据获取模块
-│   ├── database/        # 数据库模块
-├── LOFarb/              # 折价套利程序
-│   ├── data/            # 数据文件
-│   ├── docs/            # 说明文档
-│   ├── logs/            # 日志
-│   ├── readers/         # 读取数据
-│   └── LOF*.py          # 核心脚本
-├── ETFrotate/           # 轮动套利程序
-├── README.md            # 项目概述
-├── ARCHITECTURE.md      # 系统架构设计
-├── DATABASE.md          # 数据库设计
-└── API.md               # API 数据处理指南
+├── arbcore/             # 工业级核心库
+│   ├── calculators/     # 估值与对冲算法引擎
+│   ├── database/        # 模块化数据库管理 (managers/)
+│   └── fetchers/        # 多源行情采集 (IB, Woody, Sina)
+├── LOFarb/              # 跨境套利主应用
+│   ├── readers/         # 数据接口与基座适配
+│   └── LOF*.py          # 业务主脚本
+├── jsl/                 # 集思录风格全市场看板
+├── docs/                # 技术专题文档
+└── arb_master.db        # 全局唯一数据库
 ```
 
-## 核心脚本
+## 数据源与估值
 
-1. **LOF011_daily_updater.py**：每日数据更新，获取基础数据和基金数据
-2. **LOF012_calculate_valuation.py**：计算基金静态官方估值
-3. **LOF02_fetch_trade_data.py**：实时数据服务，提供 REST API、WebSocket 和 SSE
-4. **LOF03_generate_monitor_html.py**：生成监控页面
-5. **LOF00_input_LOF_info.py**：配置管理界面
-6. **LOF01_admin_launcher.py**：管理面板
-
-## 数据来源
-
-- **A股**：新浪/东财 SSE API
-- **美股**：IB Gateway，新浪财经作为备用
-- **期货**：CME via IB
-- **汇率**：国家外汇管理局、新浪财经
-
-## 估值方法
-
-1. **静态官方估值**：基准日净值 + 估值日 ETF/汇率变化
-2. **ETF实时估值**：基准日净值 + 当然ETF/汇率变化
-3. **期货校准实时估值**：基于期货价格校准为ETF
-4. **期货原生实时估值**：直接使用期货价格
-
-## 技术栈
-
-- Python 3.11+
-- Flask/Dash for web UI
-- SQLite for data storage
-- IB Gateway for real-time market data
+- **A股行情**：首选银河QMT或通达信长连接，新浪API作为降级兜底。
+- **海外行情**：IB Gateway 提供原生美股/期货报价。
+- **估值体系**：
+  - **静态官方**：用于 T-1 日历史复盘。
+  - **动态推演**：提供三种实时模式（ETF/期货校准/期货原生）。
 
 ## 维护与支持
 
-- **日志**：`LOFarb/logs/` 
-- **配置**：`LOFarb/lof_config.yaml`
-- **数据**：`arbcore/database/arb_data.db`
+- **日志监控**：所有 `BaseApp` 脚本日志统一输出至 `logs/` 或标准输出。
+- **数据库维护**：支持 `db.vacuum_database()` 空间优化与自动数据清理。
+- **健康监控**：`system_health` 表实时记录各组件心跳。
+
+---
+*稳健的系统，是套利盈利的基石。*

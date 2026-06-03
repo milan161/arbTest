@@ -2,12 +2,16 @@
 # 012_generate_lof_data.py - 纯享版静态估值计算器
 import os
 import sys
+# 自动引导路径：确保能找到根目录下的 arbcore
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import os
+import sys
 import pandas as pd
 import yaml
 import logging
 
 # 引入项目基座
-from readers.base_app import BaseApp
+from arbcore.base_app import BaseApp
 from arbcore.calculators.static_valuation import StaticValuationCalculator
 
 class LofValuationApp(BaseApp):

@@ -654,10 +654,14 @@ class DataFetcher:
         return futures_data
     
     def fetch_sina_us_stock_historical_data(self, symbol, start_date, end_date):
-        """从新浪美股API获取标准ETF历史数据"""
+        """从新浪美股API获取标准ETF和指数历史数据"""
         logger.info(f"从新浪获取美股历史数据: {symbol}")
         
+        # 兼容处理：确保指数符号以点开头且为小写 (如 .inx)
         symbol_lower = str(symbol).lower()
+        if symbol_lower.startswith('inx') or symbol_lower.startswith('ndx'):
+            symbol_lower = f".{symbol_lower}"
+            
         # 抛弃 JSONP 接口，改用稳定纯 JSON 日线接口
         url = f"https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getDailyK?symbol={symbol_lower}"
         
