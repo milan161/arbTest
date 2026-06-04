@@ -276,9 +276,26 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
     # 确保按日期降序排序，这样最新的数据在前面
     lof_df_sorted = lof_df.sort_values('date', ascending=False).reset_index(drop=True)
     sub = lof_df_sorted.head(20)
+    etf_history_table_rows = ""
     for i in range(len(sub)):
         d_T = sub.iloc[i]['date']
         uid = f"{code}-{d_T.strftime('%Y%m%d')}"
+        
+        def format_chg_html(val, prev_val):
+            if not prev_val or prev_val <= 0 or not val or val <= 0:
+                return ""
+            chg = (val / prev_val - 1) * 100
+            color = "#d32f2f" if chg >= 0 else "#388e3c"
+            prefix = "+" if chg >= 0 else ""
+            return f'<span style="font-size:11px; color:{color}; margin-left:4px; font-weight:normal;">{prefix}{chg:.2f}%</span>'
+
+        # 获取 T-1 日收盘价（用于计算涨跌幅）
+        c_T1_for_chg = 0.0
+        if i + 1 < len(lof_df_sorted):
+            c_T1_for_chg = lof_df_sorted.iloc[i+1].get('close', 0)
+            if isinstance(c_T1_for_chg, pd.Series): c_T1_for_chg = c_T1_for_chg.iloc[0]
+            try: c_T1_for_chg = float(c_T1_for_chg)
+            except: c_T1_for_chg = 0.0
         
         # 获取前一天和前两天的数据（必须是有净值的有效交易日）
         d_T1 = None
@@ -318,6 +335,14 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             except (ValueError, TypeError):
                 return 0.0
                 
+        def format_chg_html(val, prev_val):
+            if not prev_val or prev_val <= 0 or not val or val <= 0:
+                return ""
+            chg = (val / prev_val - 1) * 100
+            color = "#d32f2f" if chg >= 0 else "#388e3c"
+            prefix = "+" if chg >= 0 else ""
+            return f'<span style="font-size:11px; color:{color}; margin-left:4px; font-weight:normal;">{prefix}{chg:.2f}%</span>'
+
         # 获取基金净值
         n_T = safe_float(df_idx.loc[d_T].get('nav', 0))
         n_T1 = safe_float(df_idx.loc[d_T1].get('nav', 0)) if d_T1 else 0.0
@@ -325,6 +350,10 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         
         # 获取收盘价
         c_T = safe_float(df_idx.loc[d_T].get('close', 0))
+        # 获取 T-1 日收盘价（用于计算涨跌幅）
+        c_T1_for_chg = 0.0
+        if i + 1 < len(lof_df_sorted):
+            c_T1_for_chg = safe_float(lof_df_sorted.iloc[i+1].get('close', 0))
         
         # 重置静态官方估值和计算标志
         cur_est_val = '无'
@@ -375,17 +404,18 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             est_home_date = d_T.strftime('%m-%d')
             print(f"成功: 更新最新估值: {est_home} (日期: {est_home_date})")
         
-        est_val_str = f"{cur_est_val:.4f}" if can_calc and cur_est_val != '无' and pd.notna(cur_est_val) and cur_est_val > 0 else "无"
+        # 🌟 修正：即便 can_calc 为 False（缺少部分ETF数据），只要数据库里有估值就显示
+        est_val_str = f"{cur_est_val:.4f}" if isinstance(cur_est_val, (int, float)) and cur_est_val > 0 else "无"
         
         # 获取汇率数据
         exchange_rate = df_idx.loc[d_T].get('exchange_rate', 0)
-        exchange_rate_str = f"{exchange_rate:.4f}" if isinstance(exchange_rate, (int, float)) and exchange_rate > 0 else "无"
-        
         t1_exchange_rate = 0
         if d_T1:
             t1_exchange_rate = df_idx.loc[d_T1].get('exchange_rate', 0)
-        t1_exchange_rate_str = f"{t1_exchange_rate:.4f}" if isinstance(t1_exchange_rate, (int, float)) and t1_exchange_rate > 0 else "无"
 
+        exchange_rate_str = f"{exchange_rate:.4f}{format_chg_html(exchange_rate, t1_exchange_rate)}" if isinstance(exchange_rate, (int, float)) and exchange_rate > 0 else "无"
+
+        t1_exchange_rate_str = f"{t1_exchange_rate:.4f}" if isinstance(t1_exchange_rate, (int, float)) and t1_exchange_rate > 0 else "无"
         # 计算 T-1 溢价：T日收盘价 / T-1日净值 - 1
         premium_str = "-"
         premium_cls = ""
@@ -496,12 +526,19 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         etf_td_html = ''
         for col in etf_columns:
             etf_val = df_idx.loc[d_T].get(col, 0) if col in df_idx.columns else 0
+            # 获取上一个交易日的价格（用于计算涨跌幅）
+            etf_val_prev = 0.0
+            if i + 1 < len(lof_df_sorted):
+                prev_date = lof_df_sorted.iloc[i+1]['date']
+                etf_val_prev = df_idx.loc[prev_date].get(col, 0) if col in df_idx.columns else 0
+            
             if isinstance(etf_val, (int, float)) and etf_val > 0:
+                chg_html = format_chg_html(etf_val, etf_val_prev)
                 if category == '指数':
                     # 🌟 指数类基金，显示两位小数，不经过任何缩放
-                    etf_td_html += f"<td class='col-etf-bg'>{etf_val:.2f}</td>"
+                    etf_td_html += f"<td class='col-etf-bg'>{etf_val:.2f}{chg_html}</td>"
                 else:
-                    etf_td_html += f"<td class='col-etf-bg'>{etf_val:.3f}</td>"
+                    etf_td_html += f"<td class='col-etf-bg'>{etf_val:.3f}{chg_html}</td>"
             else:
                 etf_td_html += f"<td class='col-etf-bg'>-</td>" 
         
@@ -521,8 +558,8 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             etf_td_html_t1 = ''.join([f"<td>-</td>" for _ in etf_columns])
         
         # 处理收盘价和净值，避免显示nan
-        secondary_close_str = f"{c_T:.3f}" if isinstance(c_T, (int, float)) and c_T > 0 else "-"
-        nav_str = f"{n_T:.4f}" if isinstance(n_T, (int, float)) and n_T > 0 else "无"
+        secondary_close_str = f"{c_T:.3f}{format_chg_html(c_T, c_T1_for_chg)}" if isinstance(c_T, (int, float)) and c_T > 0 else "-"
+        nav_str = f"{n_T:.4f}{format_chg_html(n_T, n_T1)}" if isinstance(n_T, (int, float)) and n_T > 0 else "无"
         t1_nav_str = f"{n_T1:.4f}" if d_T1 and isinstance(n_T1, (int, float)) and n_T1 > 0 else "无"
         
         colspan_main = 9 + len(etf_columns) + (4 if has_future else 0)
@@ -542,6 +579,23 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         <tr><td>本期(T)</td><td>{d_T.strftime('%m-%d')}</td><td>{exchange_rate_str}</td><td>{nav_str} {html_generator.pill_html(n_T, n_T1, True)}</td>{etf_td_html}<td class="col-est">{est_val_str} {html_generator.pill_html(cur_est_val, n_T1) if can_calc else ""}</td>{future_verify_td_T_html}</tr>
         <tr><td>基准(T-1)</td><td>{d_T1.strftime('%m-%d') if d_T1 else '无'}</td><td>{t1_exchange_rate_str}</td><td>{t1_nav_str} {html_generator.pill_html(n_T1, n_T2, True) if d_T2 else ""}</td>{etf_td_html_t1}<td>-</td>{future_verify_td_T1_html}</tr>
         </tbody></table></div></td></tr>"""
+        
+        # 🌟 同步构建 ETF 历史价格表（用于沙盘“明细”按钮）
+        etf_row_html = f"<tr><td class='num-font'>{d_T.strftime('%m-%d')}</td>"
+        for col in etf_columns:
+            val = df_idx.loc[d_T].get(col, 0) if col in df_idx.columns else 0
+            val_prev = 0.0
+            if i + 1 < len(lof_df_sorted):
+                p_date = lof_df_sorted.iloc[i+1]['date']
+                val_prev = df_idx.loc[p_date].get(col, 0) if col in df_idx.columns else 0
+            
+            if isinstance(val, (int, float)) and val > 0:
+                chg = format_chg_html(val, val_prev)
+                etf_row_html += f"<td class='num-font'>{val:.3f}{chg}</td>"
+            else:
+                etf_row_html += "<td>-</td>"
+        etf_row_html += "</tr>"
+        etf_history_table_rows += etf_row_html
         
         # 生成期货历史数据行
         if future_symbol and futures_history_df is not None and not futures_history_df.empty:
@@ -1614,11 +1668,69 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         
         # --- [工业级] 生成“三列估值推演区” (蓝、橙、绿) ---
         
+        # 0. 准备 ETF 历史明细弹窗内容 (Sandbox 专用)
+        etf_history_table_rows = ""
+        
+        # 内部辅助：处理 nan 情况
+        def format_chg_safe(val, prev_val):
+            try:
+                v, pv = float(val), float(prev_val)
+                if pd.isna(v) or pd.isna(pv) or pv <= 0: return ""
+                return format_chg_html(v, pv)
+            except: return ""
+
+        # 复用 sub (最近20个交易日)
+        for idx in range(len(sub)):
+            d_H = sub.iloc[idx]['date']
+            d_H_str = d_H.strftime('%m-%d')
+            
+            # 计算该日相对于其前一交易日的涨跌幅
+            row_html = f"<tr><td class='num-font' style='position:sticky; left:0; background:#f9f9f9; z-index:5; border-right:2px solid #eee;'>{d_H_str}</td>"
+            for col in etf_columns:
+                val_H = df_idx.loc[d_H].get(col, 0) if col in df_idx.columns else 0
+                val_H_prev = 0.0
+                if idx + 1 < len(lof_df_sorted):
+                    prev_date_H = lof_df_sorted.iloc[idx+1]['date']
+                    val_H_prev = df_idx.loc[prev_date_H].get(col, 0) if col in df_idx.columns else 0
+                
+                if isinstance(val_H, (int, float)) and val_H > 0:
+                    chg_H = format_chg_safe(val_H, val_H_prev)
+                    prec = 2 if category == '指数' else 3
+                    row_html += f"<td>{val_H:.{prec}f}{chg_H}</td>"
+                else:
+                    row_html += "<td>-</td>"
+            row_html += "</tr>"
+            etf_history_table_rows += row_html
+
+        etf_history_modal_html = f"""
+        <div id="sb-etf-history-modal-{code}" class="modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:2000; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
+            <div class="modal-content card" style="width: 95%; max-width: 1400px; max-height: 85vh; overflow: hidden; background:white; padding: 20px; border-radius: 12px; position:relative; display:flex; flex-direction:column; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom:1px solid #eee; padding-bottom:10px; flex-shrink:0;">
+                    <h3 style="margin:0; color:#1565c0; display:flex; align-items:center; gap:8px;">📊 {name} ({code}) - 底层 ETF 历史价格明细 <span style="font-size:12px; font-weight:normal; color:#666;">(最近20个交易日)</span></h3>
+                    <button onclick="document.getElementById('sb-etf-history-modal-{code}').style.display='none'" style="border:none; background:#eee; width:32px; height:32px; border-radius:50%; font-size:20px; cursor:pointer; color:#666; display:flex; align-items:center; justify-content:center;">&times;</button>
+                </div>
+                <div style="overflow: auto; flex: 1; border: 1px solid #eee; border-radius: 8px;">
+                    <table class="check-table" style="width:100%; border-collapse: separate; border-spacing: 0;">
+                        <thead style="position: sticky; top: 0; z-index: 10;">
+                            <tr>
+                                <th style="position:sticky; left:0; background:#e3f2fd; z-index:11; border-right:2px solid #eee;">日期</th>
+                                {''.join([f'<th style="background:#e3f2fd; min-width:110px;">{c}</th>' for c in etf_columns])}
+                            </tr>
+                        </thead>
+                        <tbody>{etf_history_table_rows}</tbody>
+                    </table>
+                </div>
+                <div style="margin-top:10px; font-size:12px; color:#999; text-align:right;">* 提示：按住 Shift + 滚轮可快速左右滑动表格</div>
+            </div>
+        </div>
+        """
+
         # 1. ETF实时估值面板 (蓝)
         etf_panel_html = f"""
             <div style="background: var(--theme-etf-bg); padding: 10px; border-radius: 8px; border: 1px solid var(--theme-etf-border); box-shadow: var(--shadow-sm); flex: 1; min-width: 360px;">
-                <div style="text-align: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed var(--theme-etf-border);">
+                <div style="text-align: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed var(--theme-etf-border); display: flex; justify-content: center; align-items: center; gap: 10px;">
                     <span style="font-size:15px; font-weight:bold; color:var(--theme-etf-text);">ETF实时估值</span>
+                    <button onclick="document.getElementById('sb-etf-history-modal-{code}').style.display='flex'" style="font-size:12px; padding:2px 8px; cursor:pointer; background:var(--theme-etf-text); color:white; border:none; border-radius:4px; opacity:0.8;">明细</button>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 8px; align-items: center;">
                     <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;">
@@ -1754,8 +1866,12 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
                 {get_three_hedge_calculations_with_trade()}
 
                 <div style="margin-top: 15px; font-size: 13px; color: #888;">* 提示：面板打开时会自动填入主面板实盘价作为默认测试价。</div>
+                </div>
+                </div>
+                {etf_history_modal_html}
             </div>
-        </div>"""
+        </div>
+        """
         # 第十段：函数返回 - 返回主页行、详情页和全局日期
     # ================================================================
     
