@@ -764,103 +764,87 @@ class LOFPriceReader:
                 source_priority = ['qmt', 'tongdaxin', 'sina']
             else:  # sina
                 source_priority = ['sina']
-            
-            # 【通达信新版】(优先级取决于用户选择)
-            if 'tongdaxin' in source_priority:
-                init_trade_manager()
-                if TDX_AVAILABLE and tq:
-                    try:
-                        tq.initialize(__file__)
-                        self.use_tdx = True
-                        print("  🚀 [引擎启动] 【通达信新版】已成功挂载！")
-                        print("  💡 [系统提示] 请确保您的通达信客户端已登录并保持运行。")
-                    except Exception as e:
-                        self.use_tdx = False
-                        print(f"  ⚠️ [引擎降级] 通达信新版初始化失败({e})，尝试下一通道...")
-            
-            # 【银河QMT Socket】(仅当首选或通达信失败时)
-            if not self.use_tdx and 'qmt' in source_priority:
+
+            def on_qmt_price_update(code, raw_price):
+                # 健壮性修复：检查 raw_price 是否为有效数字，过滤掉时间戳等异常数据
                 try:
-                    def on_qmt_price_update(code, raw_price):
-                        # 健壮性修复：检查 raw_price 是否为有效数字，过滤掉时间戳等异常数据
-                        try:
-                            # 尝试将 raw_price 转换为浮点数。如果失败，说明不是价格数据，直接忽略。
-                            price_from_raw = float(raw_price)
-                        except (ValueError, TypeError):
-                            return # 静默忽略非价格数据
+                    price_from_raw = float(raw_price)
+                except (ValueError, TypeError):
+                    return
 
-                        clean_code = code.split('.')[0] if '.' in code else code
-                        
-                        # 尝试从 qmt_client 提取完整五档盘口字典
-                        order_book = None
-                        if hasattr(self, 'qmt_client') and self.qmt_client:
-                            order_book = self.qmt_client.get_order_book(clean_code)
-                            
-                        # 严格遵循"卖一价"原则，如果卖一价为0（如涨停封板），则兜底使用 raw_price (通常是最新成交价)
-                        price = price_from_raw # 使用已经验证过的数字
-                        if order_book:
-                            ask1 = float(order_book.get('ask1_p', order_book.get('ask_p1', 0)))
-                            if ask1 > 0:
-                                price = ask1
-                                
-                        old_price = self.lof_prices.get(clean_code, 0)
-                        self.lof_prices[clean_code] = price
-                        
-                        if not hasattr(self, '_qmt_success_logged') and price > 0:
-                            print("  ✅ [行情状态] 银河QMT数据接收成功，行情链路畅通！")
-                            self._qmt_success_logged = True
-                            
-                        # 1. 满足你在黑窗口看日志的需求 (为了防止刷屏太快，只在首次或价格变动时打印)
-                        log_flag = f'_tick_logged_{clean_code}'
-                        if order_book and (old_price != price or not hasattr(self, log_flag)):
-                            ask1_print = order_book.get('ask1_p', order_book.get('ask_p1', price_from_raw))
-                            last_p = order_book.get('last_price', price_from_raw)
-                            print(f"⚡ [银河] {clean_code} 价格更新: {price:.3f} (卖一: {float(ask1_print):.3f}, 最新: {float(last_p):.3f})")
-                            setattr(self, log_flag, True)
-
-                        # 2. 将五档盘口打包，通过 WebSocket 穿透推送到前端自留地
-                        payload = {
-                            'code': clean_code,
-                            'price': price,
-                            'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]
-                        }
-                        if order_book:
-                            payload['order_book'] = order_book # 附加五档数据
-                            # 额外发送沙盘专属深度数据事件
-                            socketio.emit('lof_order_book_update', {'code': clean_code, 'data': order_book})
-
-                        # 只要价格变动或者带有盘口数据，就推送给前端
-                        if old_price != price or order_book:
-                            socketio.emit('lof_price_update', payload)
+                clean_code = code.split('.')[0] if '.' in code else code
+                
+                order_book = None
+                if hasattr(self, 'qmt_client') and self.qmt_client:
+                    order_book = self.qmt_client.get_order_book(clean_code)
                     
-                    self.qmt_client = QmtSocketClient(on_price_update=on_qmt_price_update)
-                    if self.qmt_client.connect():
-                        self.qmt_client.start_long_connection()
-                        qmt_codes = [self._get_qmt_code(c) for c in self.lof_codes]
-                        self.qmt_client.subscribe(qmt_codes)
+                price = price_from_raw
+                if order_book:
+                    ask1 = float(order_book.get('ask1_p', order_book.get('ask_p1', 0)))
+                    if ask1 > 0:
+                        price = ask1
                         
-                        self.use_qmt = True
-                        print("  🚀 [引擎启动] 【银河QMT Socket】已成功挂载！")
-                    else:
-                        print("  ⚠️ [引擎降级] 银河QMT Socket(8888端口)连接被拒绝，请确认QMT内是否已运行Server端！")
-                except Exception as e:
-                    print(f"  ⚠️ [引擎降级] 银河QMT初始化失败({e})，尝试下一通道...")
-                    self.use_qmt = False
-                    if self.qmt_client:
-                        self.qmt_client.stop()
-                        self.qmt_client = None
-            
-            # 【国金QMT已注释】用户不使用
-            # if not self.use_qmt and not self.use_tdx:
-            #     try:
-            #         from xtquant import xtdata
-            #         _ = xtdata.get_full_tick(['510300.SH'])
-            #         self.use_guojin = True
-            #         print("  🚀 [引擎启动] 备用引擎【国金QMT (xtquant)】已成功挂载！")
-            #         print("  💡 [系统提示] 请确保您的国金QMT/miniQMT已登录并保持运行。")
-            #     except Exception as e:
-            #         self.use_guojin = False
-            #         print(f"  ⚠️ [引擎降级] 国金QMT初始化失败({e})，退回至新浪API模式")
+                old_price = self.lof_prices.get(clean_code, 0)
+                self.lof_prices[clean_code] = price
+                
+                if not hasattr(self, '_qmt_success_logged') and price > 0:
+                    print("  ✅ [行情状态] 银河QMT数据接收成功，行情链路畅通！")
+                    self._qmt_success_logged = True
+                    
+                log_flag = f'_tick_logged_{clean_code}'
+                if order_book and (old_price != price or not hasattr(self, log_flag)):
+                    ask1_print = order_book.get('ask1_p', order_book.get('ask_p1', price_from_raw))
+                    last_p = order_book.get('last_price', price_from_raw)
+                    print(f"⚡ [银河] {clean_code} 价格更新: {price:.3f} (卖一: {float(ask1_print):.3f}, 最新: {float(last_p):.3f})")
+                    setattr(self, log_flag, True)
+
+                payload = {
+                    'code': clean_code,
+                    'price': price,
+                    'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                }
+                if order_book:
+                    payload['order_book'] = order_book
+                    socketio.emit('lof_order_book_update', {'code': clean_code, 'data': order_book})
+
+                if old_price != price or order_book:
+                    socketio.emit('lof_price_update', payload)
+
+            for source in source_priority:
+                if source == 'tongdaxin':
+                    init_trade_manager()
+                    if TDX_AVAILABLE and tq:
+                        try:
+                            tq.initialize(__file__)
+                            self.use_tdx = True
+                            print("  🚀 [引擎启动] 【通达信新版】已成功挂载！")
+                            print("  💡 [系统提示] 请确保您的通达信客户端已登录并保持运行。")
+                            break  # 成功连接，跳出重试循环
+                        except Exception as e:
+                            self.use_tdx = False
+                            print(f"  ⚠️ [引擎降级] 通达信新版初始化失败({e})，尝试下一通道...")
+                elif source == 'qmt':
+                    try:
+                        self.qmt_client = QmtSocketClient(on_price_update=on_qmt_price_update)
+                        if self.qmt_client.connect():
+                            self.qmt_client.start_long_connection()
+                            qmt_codes = [self._get_qmt_code(c) for c in self.lof_codes]
+                            self.qmt_client.subscribe(qmt_codes)
+                            
+                            self.use_qmt = True
+                            print("  🚀 [引擎启动] 【银河QMT Socket】已成功挂载！")
+                            break  # 成功连接，跳出重试循环
+                        else:
+                            print("  ⚠️ [引擎降级] 银河QMT Socket(8888端口)连接被拒绝，请确认QMT内是否已运行Server端！")
+                            if self.qmt_client:
+                                self.qmt_client.stop()
+                                self.qmt_client = None
+                    except Exception as e:
+                        print(f"  ⚠️ [引擎降级] 银河QMT初始化失败({e})，尝试下一通道...")
+                        self.use_qmt = False
+                        if self.qmt_client:
+                            self.qmt_client.stop()
+                            self.qmt_client = None
 
             if not self.use_qmt and not self.use_tdx:
                 print("  🐌 [引擎启动] 最终兜底引擎【新浪轮询爬虫】已启用 (间隔20秒)")

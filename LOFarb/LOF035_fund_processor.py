@@ -154,7 +154,7 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
     
     # 准备数据
     lof_df_sorted = lof_df.sort_values('date', ascending=False).reset_index(drop=True)
-    df_idx = lof_df_sorted.set_index('date').sort_index()
+    df_idx = lof_df_sorted.set_index('date').sort_index(ascending=False)
     history_rows = ""
     est_home = 0.0
     est_home_date = ""
@@ -653,8 +653,20 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
         l_r = lof_df_sorted.iloc[0]
         h_p_cls, h_p_txt = "", "-"
         close_price = l_r.get('close', 0)
-        if isinstance(est_home, (int, float)) and est_home > 0 and isinstance(close_price, (int, float)) and close_price > 0:
-            h_p_cls, h_p_txt = html_generator.format_color((close_price / est_home - 1) * 100)
+        
+        # [核心修正] 这里的 A 股涨跌幅逻辑：拿最新 A 股收盘价 / 前一交易日 A 股收盘价
+        if isinstance(close_price, (int, float)) and close_price > 0 and len(lof_df_sorted) > 1:
+            # 找到前一个有价格的交易日
+            prev_close = 0.0
+            for k in range(1, len(lof_df_sorted)):
+                pc = lof_df_sorted.iloc[k].get('close', 0)
+                if isinstance(pc, (int, float)) and pc > 0:
+                    prev_close = pc
+                    break
+            
+            if prev_close > 0:
+                chg_num = (close_price / prev_close - 1) * 100
+                h_p_cls, h_p_txt = html_generator.format_color(chg_num)
         
         tag_html = f'<span class="type-tag tag-gold">{category}</span>' if category == "黄金" else \
                    f'<span class="type-tag tag-oil">{category}</span>' if category == "原油" else \
@@ -710,10 +722,17 @@ def generate_fund_data(fund, data_processor, html_generator, futures_data, futur
             else:
                 close_str = "无"
         
-        # 计算T-1溢价，使用实时价除以静态官方估值 - 使用与 est_home 同日期的 close
+        # [核心修正] 这里的 A 股涨跌幅逻辑：
+        # 如果数据库里的最新价格日期就是今天，则显示 A 股今日涨跌幅 (T vs T-1)
+        # 如果还没到收盘或还没入库（即最新日期是昨天），则初始显示 "-"，等前端 JS 实时计算
         h_p_cls, h_p_txt = "", "-"
-        if isinstance(est_home, (int, float)) and est_home > 0 and latest_valid_close > 0:
-            h_p_cls, h_p_txt = html_generator.format_color((latest_valid_close / est_home - 1) * 100)
+        today_str = datetime.date.today().strftime('%m-%d')
+        if isinstance(latest_valid_close, (int, float)) and latest_valid_close > 0 and price_date == today_str:
+            if len(valid_closes_from_history) > 1:
+                prev_close = valid_closes_from_history.iloc[1]['close']
+                if prev_close > 0:
+                    chg_num = (latest_valid_close / prev_close - 1) * 100
+                    h_p_cls, h_p_txt = html_generator.format_color(chg_num)
         
         # 计算估值误差比例（只有同一天的数据才进行计算）
         h_err_cls, h_err_txt = "", "-"

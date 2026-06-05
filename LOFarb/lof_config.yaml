@@ -12,27 +12,27 @@ funds:
   trade_etf: USO
   trade_future: MCL
   holdings:
-    equity_ratio: 83.67
-    cash_ratio: 16.33
+    equity_ratio: 84.62
+    cash_ratio: 15.38
   valuation_portfolio:
   - symbol: XLE
-    weight: 80.41
+    weight: 83.86
     anchor: US
   - symbol: USO
-    weight: 19.59
+    weight: 16.14
     anchor: US
   sina_index_url: ''
   rate_type: midpoint
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 83.67
+  position: 84.62
 - code: '501018'
   name: 南方原油
   category: 原油
   holdings:
-    equity_ratio: 76.09
-    cash_ratio: 23.91
+    equity_ratio: 75.51
+    cash_ratio: 24.49
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -44,20 +44,20 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 63.67
+    weight: 59.54
     anchor: EU
   - symbol: USO
-    weight: 36.33
+    weight: 40.46
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 76.09
+  position: 75.51
 - code: '160723'
   name: 嘉实原油
   category: 原油
   holdings:
-    equity_ratio: 80.63
-    cash_ratio: 19.37
+    equity_ratio: 75.57
+    cash_ratio: 24.43
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -104,23 +104,20 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 42.48
+    weight: 57.22
     anchor: US
   - symbol: USO-EU
-    weight: 38.51
+    weight: 42.78
     anchor: EU
-  - symbol: USO-HK
-    weight: 19.01
-    anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 80.63
+  position: 75.57
 - code: '161129'
   name: 易方达原油
   category: 原油
   holdings:
-    equity_ratio: 81.24
-    cash_ratio: 18.76
+    equity_ratio: 76.64
+    cash_ratio: 23.36
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -162,17 +159,14 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 45.0
+    weight: 61.03
     anchor: EU
   - symbol: USO
-    weight: 40.58
-    anchor: US
-  - symbol: USO-HK
-    weight: 14.41
+    weight: 38.97
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 81.24
+  position: 76.64
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金
@@ -649,21 +643,21 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 86.55
-    cash_ratio: 13.45
+    equity_ratio: 85.94
+    cash_ratio: 14.06
   valuation_portfolio:
   - symbol: SOXX
-    weight: 72.56
+    weight: 72.1
     anchor: US
   - symbol: SZ159560
-    weight: 27.44
+    weight: 27.9
     anchor: US
   sina_index_url: ''
   rate_type: midpoint
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 86.55
+  position: 85.94
 - code: '501312'
   name: 华宝海外科技
   category: 混合跨境

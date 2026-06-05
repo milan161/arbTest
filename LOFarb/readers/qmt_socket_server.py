@@ -1,18 +1,28 @@
 # encoding: gbk
 # =================================================================
-# v4.2 沙盘推演版 - 银河QMT Socket Server端策略 2026-4-27
+# v4.3 沙盘推演版 - 银河QMT Socket Server端策略 2026-06-05
+# 优化：1. 修复 __file__ 变量在 QMT 环境下不存在导致崩溃的 Bug。
+#      2. 吸收 BigQMT 理念，引入基于 builtins 的世代机制，自动清理旧残留线程，解决 8888 端口被占用问题。
 # =================================================================
 import socket
 import threading
 import time
+import builtins
 
 # 尝试导入本地敏感配置
 try:
     import sys, os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from account_private import YH_ACCOUNT as QMT_ACCOUNT
+    # 获取 QMT 安装目录或其他路径
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(''))))
+    # 如果上面的方式在纯内存执行下失效，使用更宽松的加载机制
+    try:
+        from account_private import YH_ACCOUNT as QMT_ACCOUNT
+    except ImportError:
+        # 如果当前路径找不到，尝试硬编码绝对路径(请根据您的实际工程路径修改)
+        sys.path.insert(0, r"D:\Study\arbTest\LOFarb")
+        from account_private import YH_ACCOUNT as QMT_ACCOUNT
 except ImportError:
-    print("[警告] account_private.py 不存在，使用默认账号")
+    print("[警告] 无法导入 account_private.py，请检查路径。")
     QMT_ACCOUNT = "您的银河QMT账号"
 
 g_context = None
@@ -21,6 +31,10 @@ g_account_id = ""
 g_active_clients = []
 g_clients_lock = threading.Lock()
 g_subscribed_stocks = set()
+
+# ==================== 防僵尸线程机制 ====================
+if not hasattr(builtins, '_qmt_socket_gen'):
+    builtins._qmt_socket_gen = 0
 
 def client_handler(conn, addr):
     with g_clients_lock: g_active_clients.append(conn)
@@ -81,24 +95,34 @@ def process_command_sync(conn, cmd_str):
         except: pass
         push_ticks()  # 核心：破除周末休眠
 
-def socket_server_thread():
+def socket_server_thread(my_gen):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         server.bind(('127.0.0.1', 8888))
         server.listen(5)
-        print("? 银河QMT Socket Server Started. Listening on 8888...")
+        server.settimeout(1.0) # 设置超时，让 while 循环能定期往下走，检查世代
+        print(f"✅ 银河QMT Socket Server Started. Listening on 8888... (世代: {my_gen})")
     except Exception as e:
-        print(f"❌ 致命错误：端口 8888 被占用！请彻底重启QMT软件！详细报错: {e}")
+        print(f"❌ 致命错误：端口 8888 被占用！详细报错: {e}")
         return
         
     while True:
+        current_gen = getattr(builtins, '_qmt_socket_gen', 0)
+        if current_gen != my_gen:
+            print(f"🔄 检测到策略重载，主动退出旧版 Socket 线程 (旧世代: {my_gen}, 新世代: {current_gen})")
+            break
         try:
             conn, addr = server.accept()
             t = threading.Thread(target=client_handler, args=(conn, addr))
             t.setDaemon(True)
             t.start()
-        except Exception: time.sleep(1)
+        except socket.timeout:
+            continue
+        except Exception: 
+            time.sleep(1)
+            
+    server.close()
 
 def broadcast_message(msg):
     with g_clients_lock:
@@ -110,12 +134,21 @@ def broadcast_message(msg):
 
 def init(ContextInfo):
     global g_account_id, g_context
-    print("\n[策略日志] 加载 v4.2 沙盘推演版 Socket 策略 (防崩溃版)...")
-    g_account_id = QMT_ACCOUNT
+    print("\n[策略日志] 加载 v4.3 沙盘推演版 Socket 策略 (防残影线程版)...")
+    
+    # 优先尝试从 QMT 界面上的"资金账号"列读取，若无则使用硬编码
+    try:
+        g_account_id = account
+    except NameError:
+        g_account_id = QMT_ACCOUNT
+        
     g_context = ContextInfo
     ContextInfo.set_account(g_account_id)
     
-    t = threading.Thread(target=socket_server_thread)
+    builtins._qmt_socket_gen += 1
+    my_gen = builtins._qmt_socket_gen
+    
+    t = threading.Thread(target=socket_server_thread, args=(my_gen,))
     t.setDaemon(True)
     t.start()
     
@@ -126,7 +159,6 @@ def push_ticks():
     if not g_context or not g_subscribed_stocks or len(g_active_clients) == 0: return
     with g_api_lock:
         try:
-            # 听从架构师的指引：回归极致性能！直接传入全量列表让C++引擎一次性并发处理！
             ticks = g_context.get_full_tick(list(g_subscribed_stocks))    
             
             for code, tick in ticks.items():
@@ -153,3 +185,4 @@ def handlebar(ContextInfo): push_ticks()
 def orderError_callback(ContextInfo, passOrderInfo, msg): pass
 def deal_callback(ContextInfo, dealInfo): pass
 def order_callback(ContextInfo, orderInfo): pass
+

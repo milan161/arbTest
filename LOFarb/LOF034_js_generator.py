@@ -147,6 +147,16 @@ class JsGenerator:
                         el.style.color = '#d32f2f'; // 闪烁红字提醒更新
                         setTimeout(function() { el.style.color = ''; }, 500);
                     }
+
+                    // [核心修正] 更新价格涨跌幅
+                    var chgEl = document.getElementById('t-1-premium-' + data.code);
+                    var baseData = window.fundBaseData[data.code];
+                    if (chgEl && baseData && baseData.baseClosePrice > 0) {
+                        var chg = (data.price / baseData.baseClosePrice - 1) * 100;
+                        chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+                        chgEl.className = 'num-font premium-big ' + (chg >= 0 ? 'premium-positive' : 'premium-negative');
+                        chgEl.style.color = chg >= 0 ? '#d32f2f' : '#388e3c';
+                    }
                     // 更新关联的沙盘推演(如果沙盘被打开，让测试价同步跳动)
                     var tpInput = document.getElementById('sb-target-price-' + data.code);
                     if (tpInput && !document.activeElement.isSameNode(tpInput)) {
@@ -164,10 +174,21 @@ class JsGenerator:
                 if (data && data.prices) {
                     window.latestLofPrices = window.latestLofPrices || {};
                     Object.keys(data.prices).forEach(function(code) {
-                        window.latestLofPrices[code] = data.prices[code];
+                        var price = data.prices[code];
+                        window.latestLofPrices[code] = price;
                         var el = document.getElementById('realtime-price-' + code);
-                        if (el && data.prices[code] > 0) {
-                            el.textContent = data.prices[code].toFixed(3);
+                        if (el && price > 0) {
+                            el.textContent = price.toFixed(3);
+                        }
+
+                        // [新增] 快照时同步更新涨跌幅
+                        var chgEl = document.getElementById('t-1-premium-' + code);
+                        var baseData = window.fundBaseData[code];
+                        if (chgEl && baseData && baseData.baseClosePrice > 0 && price > 0) {
+                            var chg = (price / baseData.baseClosePrice - 1) * 100;
+                            chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+                            chgEl.className = 'num-font premium-big ' + (chg >= 0 ? 'premium-positive' : 'premium-negative');
+                            chgEl.style.color = chg >= 0 ? '#d32f2f' : '#388e3c';
                         }
                     });
                 }
@@ -1043,6 +1064,12 @@ class JsGenerator:
                 if (isNaN(vol) || vol <= 0) { msgEl.textContent = '❌ 数量无效'; msgEl.style.color = '#d32f2f'; return; }
                 if (isNaN(price) || price <= 0) { msgEl.textContent = '❌ 价格无效'; msgEl.style.color = '#d32f2f'; return; }
         
+                // [核心加固] 下单确认
+                var actionText = (action === 'BUY' ? '买入' : '卖出');
+                if (!confirm('【实盘下单确认】\n\n代码: ' + code + '\n动作: ' + actionText + '\n价格: ' + price + '\n数量: ' + vol + '\n通道: ' + broker + '\n\n确认发送指令吗？')) {
+                    return;
+                }
+
                 msgEl.textContent = '🚀 指令发送中...';
                 msgEl.style.color = '#1976d2';
         
@@ -1081,6 +1108,12 @@ class JsGenerator:
                 if (isNaN(vol) || vol <= 0) { msgEl.textContent = '❌ 数量无效'; msgEl.style.color = '#d32f2f'; return; }
                 if (isNaN(price) || price <= 0) { msgEl.textContent = '❌ 价格无效'; msgEl.style.color = '#d32f2f'; return; }
         
+                // [核心加固] IB下单确认
+                var actionText = (action === 'BUY' ? '买入平仓' : '卖空开仓');
+                if (!confirm('【IB外盘实盘确认】\n\n合约: ' + sym + '\n动作: ' + actionText + '\n价格: ' + price + '\n数量: ' + vol + '\n路由: OVERNIGHT\n\n确认发送指令吗？')) {
+                    return;
+                }
+
                 msgEl.textContent = '🚀 指令发送中...';
                 msgEl.style.color = '#1976d2';
         

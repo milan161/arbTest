@@ -85,7 +85,20 @@ class DailyUpdater(BaseApp):
             target_files = [f for f in files if f.startswith(f"{data_type}_") and f.endswith(".json")]
             
             for remote_file in sorted(target_files):
+                # 从文件名提取日期 (woody_2026-05-31.json -> 2026-05-31)
+                try:
+                    file_date = remote_file.split('_')[1].split('.json')[0]
+                except Exception:
+                    continue
+
                 local_path = os.path.join(local_sync_dir, remote_file)
+                
+                # [性能优化] 如果数据库已经同步过该日期，且本地已存在该文件，则直接跳过读取，减少内存压力
+                sync_key = "woody_lof_batch"
+                if os.path.exists(local_path) and self.db.is_access_synced_today(file_date, sync_key):
+                    # self.logger.info(f"   ⏩ [VPS] 日期 {file_date} 已同步，跳过读取。")
+                    continue
+
                 # 3. 增量同步：如果本地不存在，则下载
                 if not os.path.exists(local_path):
                     remote_path = f"{VPS_DATA_DIR}/{remote_file}"
@@ -93,10 +106,7 @@ class DailyUpdater(BaseApp):
                     sftp.get(remote_path, local_path)
                 
                 # 4. 加载数据 (无论是刚下载的还是本地已有的)
-                # 注意：我们只返回最近 30 天内的数据，防止处理过旧的垃圾数据
                 try:
-                    # 从文件名提取日期 (woody_2026-05-31.json -> 2026-05-31)
-                    file_date = remote_file.split('_')[1].split('.json')[0]
                     with open(local_path, 'r', encoding='utf-8') as f:
                         content = json.load(f)
                     synced_data_list.append({'date': file_date, 'content': content})
@@ -161,6 +171,8 @@ class DailyUpdater(BaseApp):
                         processed_data = WoodyAPIService.process(self.db, api_content, source_id='woody_lof')
                         if processed_data:
                             self.logger.info(f"   ✅ [VPS] 日期 {file_date} 的因子解析成功")
+                            # [性能优化] 标记该日期已处理，下次不再重复解析
+                            self.db.mark_access_synced(file_date, sync_key)
                             if file_date == today_str:
                                 vps_today_success = True
                 except Exception as e:
