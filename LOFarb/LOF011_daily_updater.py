@@ -17,7 +17,7 @@ import random
 
 # 引入项目基座
 from arbcore.base_app import BaseApp, setup_logging
-from arbcore.fetchers.data_fetcher import data_fetcher
+from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
 from arbcore.fetchers.woody_api_service import WoodyAPIService
 from account_private import WOODY_USERNAME, WOODY_PASSWORD
@@ -30,9 +30,10 @@ class DailyUpdater(BaseApp):
     def __init__(self):
         super().__init__("LOF01_daily_updater")
         self.woody_crawler = WoodyWebCrawler()
+        self.hist_manager = HistoricalDataManager(db_manager=self.db)
         self._woody_logged_in = False  # 延迟登录标记
         # 降低第三方库日志噪音
-        logging.getLogger('arbcore.fetchers.data_fetcher').setLevel(logging.WARNING)
+        logging.getLogger('arbcore.fetchers.historical').setLevel(logging.WARNING)
     
     def _login_woody_if_needed(self):
         """延迟登录：只在真正需要时才登录 Woody 网站"""
@@ -312,39 +313,22 @@ class DailyUpdater(BaseApp):
 
     def step3_fetch_exchange_rate(self):
         """步骤三：抓取汇率（人民币中间价）存入库"""
-        self.logger.info("=== 步骤三：抓取汇率（人民币中间价） [V2.2.1 强力防刷版] ===")
+        self.logger.info("=== 步骤三：抓取汇率（人民币中间价） ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
 
-        # 🌟 核心修复：必须在任何 VPS 连接之前执行 check
-        if self.db.is_access_synced_today(today_str, source='official_exchange_rate') or \
-           self.db.is_access_synced_today(today_str, source='fx_siphon'):
-            self.logger.info("✅ 今日已获取过人民币中间价 (V2.2.1 拦截成功)，跳过所有抓取流程。")
+        if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
+            self.logger.info("✅ 今日已获取过人民币中间价，跳过。")
             return
 
-        # Level 0: VPS Siphon
-        vps_fx_data = self._try_fetch_from_vps('fx')
-        if vps_fx_data:
-            try:
-                date_info_str = vps_fx_data.get('date')
-                usd_rate = vps_fx_data.get('usd_cny_mid')
-                hkd_rate = vps_fx_data.get('hkd_cny_mid')
-                if date_info_str and (usd_rate or hkd_rate):
-                    self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_rate, hkd_cny_mid=hkd_rate)
-                    self.logger.info(f"✅ [VPS] 汇率入库: {date_info_str} -> USD:{usd_rate}, HKD:{hkd_rate}")
-                    self.db.mark_access_synced(today_str, source='fx_siphon')
-                    return 
-            except Exception as e:
-                self.logger.error(f"❌ [VPS] 汇率数据处理失败: {e}")
-
-        # Level 1: 本地抓取
+        # TODO: 暂时使用 data_fetcher 作为过渡，后续可全量迁移至 HistoricalDataManager
+        from arbcore.fetchers.data_fetcher import data_fetcher
         exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
         if exchange_rate_data:
             date_info = exchange_rate_data.get('日期')
-            rate = exchange_rate_data.get('人民币中间价')
             if date_info:
                 try:
                     date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
-                    usd_val = exchange_rate_data.get('usd_cny_mid', rate)
+                    usd_val = exchange_rate_data.get('usd_cny_mid')
                     hkd_val = exchange_rate_data.get('hkd_cny_mid')
                     self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
                     self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
@@ -353,7 +337,7 @@ class DailyUpdater(BaseApp):
                     self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
-        """安全合并保存 fund 数据，防止 price 和 nav 互相覆盖导致对方变成 NULL"""
+        """安全合并保存 fund 数据，并同步写入大一统历史表"""
         conn = self.db._get_conn()
         row = None
         try:
@@ -361,7 +345,6 @@ class DailyUpdater(BaseApp):
             cursor.execute("SELECT price, nav FROM fund_data WHERE date=? AND fund_code=?", (date_str, fund_code))
             row = cursor.fetchone()
         finally:
-            # 🚨 核心修复：必须在写入前先关闭读连接，释放读锁，防止死锁
             conn.close()
             
         exist_price = row[0] if row and row[0] is not None else None
@@ -375,273 +358,62 @@ class DailyUpdater(BaseApp):
             premium = (float(new_price) - float(new_nav)) / float(new_nav) * 100
             
         self.db.save_fund_data(date=date_str, fund_code=fund_code, price=new_price, nav=new_nav, premium=premium)
+        
+        # [核心增强] 同步写入大一统历史表，确保 Vue 看板有数
+        self.db.save_unified_history(
+            date_str=date_str, 
+            fund_code=fund_code, 
+            price=new_price, 
+            nav=new_nav, 
+            premium=premium
+        )
 
     def step4_fetch_lof_market(self):
         """步骤四：抓取各基金的净值和收盘价"""
-        self.logger.info("=== 步骤四：抓取各基金最新净值和收盘价 ===")
+        self.logger.info("=== 步骤四：抓取各基金最新净值和收盘价 (标准库模式) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
-        current_hour = datetime.now().hour
 
-        # 澄清：净值(NAV)来自东财，收盘价(price)来自新浪
         for fund in self.config.get('funds', []):
             code = str(fund.get('code', ''))
-            if not code:
-                continue
+            if not code: continue
                 
-            # --- 1. 获取新浪收盘价 ---
-            latest_date = None
-            t_minus_1_date = None
-            if self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
-                self.logger.info(f"✅ [{code}] 今日已获取过历史收盘价，跳过新浪接口...")
-                conn = self.db._get_conn()
-                cursor = conn.cursor()
-                cursor.execute("SELECT date FROM fund_data WHERE fund_code = ? AND price IS NOT NULL ORDER BY date DESC LIMIT 2", (code,))
-                rows = cursor.fetchall()
-                if rows and len(rows) > 0:
-                    latest_date = rows[0][0]
-                if rows and len(rows) > 1:
-                    t_minus_1_date = rows[1][0]
-                conn.close()
-            else:
-                price_df = data_fetcher.fetch_lof_price_data(code)
-                if price_df is not None and not price_df.empty:
-                    latest_row = price_df.iloc[0]
-                    latest_date = pd.to_datetime(latest_row['日期']).strftime('%Y-%m-%d')
-                    if len(price_df) > 1:
-                        t_minus_1_date = pd.to_datetime(price_df.iloc[1]['日期']).strftime('%Y-%m-%d')
-                    latest_price = latest_row['LOF交易价格']
-                    self.logger.info(f"✅ [{code}] 最新收盘价: {latest_date} -> {latest_price}")
+            # --- 1. 获取收盘价 (Sina) ---
+            if not self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
+                price_df = self.hist_manager.get_prices(code, source="sina")
+                if not price_df.empty:
                     for _, row in price_df.iterrows():
-                        d_str = pd.to_datetime(row['日期']).strftime('%Y-%m-%d')
-                        self._safe_save_fund_data(date_str=d_str, fund_code=code, price=row['LOF交易价格'])
+                        d_str = row['date'].strftime('%Y-%m-%d')
+                        self._safe_save_fund_data(date_str=d_str, fund_code=code, price=row['close'])
+                        # 记录更多指标到大一统表
+                        self.db.save_unified_history(date_str=d_str, fund_code=code, volume=row.get('volume'), turnover_rate=row.get('turnover_rate'))
                     self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
-                else:
-                    self.logger.warning(f"⚠️ [{code}] 未获取到历史收盘价数据 (新浪接口异常)。")
-
-            # --- 2. 获取东财净值 ---
-            def get_prev_trading_day(dt):
-                t = dt - timedelta(days=1)
-                while t.weekday() >= 5: t -= timedelta(days=1)
-                return t
-                
-            t_1_date = get_prev_trading_day(datetime.now())
-            t_2_date = get_prev_trading_day(t_1_date)
-            
-            target_nav_date = t_1_date.strftime('%Y-%m-%d')
-            # 15:00之前预期只有T-2的净值，15:00之后预期会有T-1的净值
-            expected_nav_date = t_2_date.strftime('%Y-%m-%d') if current_hour < 15 else t_1_date.strftime('%Y-%m-%d')
-            
-            conn = self.db._get_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT MAX(date) FROM fund_data WHERE fund_code = ? AND nav IS NOT NULL", (code,))
-            max_nav_row = cursor.fetchone()
-            conn.close()
-            
-            db_max_nav_date = max_nav_row[0] if max_nav_row and max_nav_row[0] else "2000-01-01"
-            
-            if db_max_nav_date >= expected_nav_date:
-                if current_hour < 15:
-                    self.logger.info(f"⏳ [{code}] 当前未到15:00，T-1净值未发。本地已拥有T-2及之前最新净值({db_max_nav_date})，暂不请求东财。")
-                else:
-                    self.logger.info(f"✅ [{code}] 数据库已存在预期最新净值 ({db_max_nav_date})，跳过东财接口...")
-                self.db.mark_access_synced(today_str, source=f'lof_nav_{code}')
-                continue
-                
-            self.logger.info(f"🔍 [{code}] 数据库最新净值({db_max_nav_date})落后于预期进度({expected_nav_date})，前往东财获取...")
-            nav_dict = data_fetcher.fetch_lof_nav_data(code)
-            if nav_dict:
-                latest_nav_date = sorted(nav_dict.keys(), reverse=True)[0]
-                latest_nav = nav_dict[latest_nav_date]
-                self.logger.info(f"✅ [{code}] 获取到净值: {latest_nav_date} -> {latest_nav}")
-                
-                for d_str, nav_val in nav_dict.items():
-                    self._safe_save_fund_data(date_str=d_str, fund_code=code, nav=nav_val)
-                
-                if latest_nav_date >= expected_nav_date:
-                    self.db.mark_access_synced(today_str, source=f'lof_nav_{code}')
-            else:
-                self.logger.warning(f"⚠️ [{code}] 东财接口未返回任何净值数据。")
+                    self.logger.info(f"✅ [{code}] 历史价格同步完成")
 
     def step5_fetch_usa_market_data(self):
-        """步骤五：抓取美股市场交易数据（标准ETF、期货、指数）"""
-        self.logger.info("=== 步骤五：抓取美股市场交易数据（标准ETF、期货、指数） ===")
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        
-        # 智能检查：如果 index_daily 表里根本没数据，说明之前被 access_sync 拦截漏抓了，强制解除今日防封号限制
-        conn = self.db._get_conn()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM index_daily")
-        index_count = cursor.fetchone()[0]
-        conn.close()
-        
-        # ⚠️ 临时禁用防刷检查（调试模式）：允许重新爬取新浪美股ETF数据
-        DEBUG_DISABLE_USA_ETF_RATE_LIMIT = False  # 设置为 False 启用防刷
-        
-        if not DEBUG_DISABLE_USA_ETF_RATE_LIMIT and self.db.is_access_synced_today(today_str, source='usa_market_data_sina') and index_count > 0:
-            self.logger.info("✅ 今日已获取过新浪美股市场数据，为防封号跳过...")
-            return
-        elif DEBUG_DISABLE_USA_ETF_RATE_LIMIT:
-            self.logger.info("🔧 [DEBUG] 防刷检查已临时禁用，将重新爬取新浪美股ETF数据...")
-
-        standard_etf_symbols = set()
-        ashare_etf_symbols = set()
-        hk_stock_symbols = set()  # 港股股票符号
-        index_symbols = set()
-        
-        # 预定义非ETF名单，防止误当做美股ETF爬取（拦截 _settle 后缀污染）
-        future_tickers = {'GC', 'CL', 'NQ', 'ES', 'AG', 'AG0', 'MGC', 'MCL', 'MES', 'MNQ', 'GC_settle', 'CL_settle', 'NQ_settle', 'ES_settle'}
-        index_tickers = {'INX', 'NDX', 'DJI', '.INX', '.NDX', '.DJI'}
-        
-        # 智能提取所有底层 ETF (过滤掉带后缀的衍生品，只取 GLD, USO, SPY 等根资产)
-        for fund in self.config.get('funds', []):
-            for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
-                sym = str(item.get('symbol', '')).replace('^', '').split('-')[0]
-                if not sym: continue
-                is_a_share = bool(re.match(r'^[0-9]{6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
-                # 识别港股：5-6位纯数字且不以0开头（排除A股）
-                is_hk_stock = bool(re.match(r'^[0-9]{5,6}$', sym)) and not is_a_share
-                if sym in future_tickers:
-                    continue  # 期货行情由专门的结算价接口获取，不走美股API
-                elif sym in index_tickers or sym.startswith('.'):
-                    clean_sym = f".{sym.replace('.', '')}"
-                    index_symbols.add(clean_sym)
-                elif is_a_share:
-                    ashare_etf_symbols.add(sym)
-                elif is_hk_stock:
-                    hk_stock_symbols.add(sym)
-                else:
-                    standard_etf_symbols.add(sym)
-                    
-            if fund.get('trade_etf'):
-                for s in str(fund.get('trade_etf')).replace('，', ',').split(','):
-                    s = s.strip().upper()
-                    if s and s not in future_tickers and s not in index_tickers and not s.startswith('.'):
-                        standard_etf_symbols.add(s)
-            # 提取纯净指数
-            idx_url = fund.get('sina_index_url', '')
-            idx_sym = None
-            if idx_url:
-                # 兼容新浪各种指数链接格式 (如 quotes/.INX.html)
-                m = re.search(r'(?:symbol=|list=gb_|quotes/)([.a-zA-Z0-9]+)', idx_url, re.IGNORECASE)
-                if m:
-                    raw_sym = m.group(1).upper().replace('.HTML', '')
-                    idx_sym = f".{raw_sym}" if not raw_sym.startswith('.') else raw_sym
-                    
-            if not idx_sym and fund.get('category', '') == '指数':
-                trade_etf = str(fund.get('trade_etf', '')).upper()
-                if 'QQQ' in trade_etf: idx_sym = '.NDX'
-                elif 'SPY' in trade_etf: idx_sym = '.INX'
-                
-            if idx_sym:
-                index_symbols.add(idx_sym)
-        
+        """步骤五：抓取美股市场交易数据"""
+        self.logger.info("=== 步骤五：抓取海外及指数市场交易数据 (标准库模式) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
         
-        # --- 1. 抓取标准ETF ---
-        missing_etfs = []
-        for sym in standard_etf_symbols:
-            import time
-            df = None
-            # 增加 3 次网络防抖重试机制，防止 USO 偶发的 Response ended prematurely
-            for attempt in range(3):
-                df = data_fetcher.fetch_sina_us_stock_historical_data(sym, start_date=start_date, end_date=today_str)
-                if df is not None and not df.empty:
-                    break
-                if attempt < 2:
-                    self.logger.warning(f"⏳ [ETF] {sym} 第 {attempt+1} 次抓取失败，2秒后准备重试...")
-                    time.sleep(2)
-                    
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    date_str = row['date'].strftime('%Y-%m-%d')
-                    price = row['close']
-                    if price > 0: self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=price)
-                self.logger.info(f"✅ [ETF] {sym} 历史行情入库完成。")
-            else:
-                missing_etfs.append(sym)
-        if missing_etfs:
-            self.logger.error(f"🚨 健壮性告警：以上标准 ETF 数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_etfs)}")
-            
-        # --- 1.5. 抓取A股成分ETF ---
-        for sym in ashare_etf_symbols:
-            m = re.match(r'^(?:sh|sz)?([0-9]{6})$', sym, re.IGNORECASE)
-            if not m: continue
-            clean_code = m.group(1)
-            
-            df = data_fetcher.fetch_lof_price_data(clean_code)
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    date_str = pd.to_datetime(row['日期']).strftime('%Y-%m-%d')
-                    price = row['LOF交易价格']
-                    if price > 0:
-                        # 统一存入 usa_etf_daily_prices 供宽表组合
-                        self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=price)
-                self.logger.info(f"✅ [A股成分] {sym} 历史行情入库完成。")
-            
-        # --- 1.6. 抓取港股股票 ---
-        missing_hk_stocks = []
-        for sym in hk_stock_symbols:
-            df = None
-            for attempt in range(3):
-                df = data_fetcher.fetch_sina_hk_stock_historical_data(sym, start_date=start_date, end_date=today_str)
-                if df is not None and not df.empty:
-                    break
-                if attempt < 2:
-                    self.logger.warning(f"⏳ [港股] {sym} 第 {attempt+1} 次抓取失败，2秒后准备重试...")
-                    time.sleep(2)
-                    
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    date_str = row['date'].strftime('%Y-%m-%d')
-                    price = row['close']
-                    if price > 0:
-                        self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=price)
-                self.logger.info(f"✅ [港股] {sym} 历史行情入库完成。")
-            else:
-                missing_hk_stocks.append(sym)
-        if missing_hk_stocks:
-            self.logger.error(f"🚨 健壮性告警：以上港股数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_hk_stocks)}")
-
-        # --- 2. 抓取指数 ---
-        missing_indices = []
-        # 极简模式：只取最近几天的记录以确保能拿到上一个交易日，不浪费资源请求长线历史
-        index_start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
-        for sym in index_symbols:
-            import time
-            df = None
-            # 恢复原生模式：直接使用带小数点的符号 (如 .NDX) 获取，剔除自作多情的轮询
-            for attempt in range(3):
-                df = data_fetcher.fetch_sina_us_stock_historical_data(sym, start_date=index_start_date, end_date=today_str)
-                if df is not None and not df.empty:
-                    break
-                if attempt < 2:
-                    time.sleep(1)
+        symbols = set()
+        for fund in self.config.get('funds', []):
+            for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
+                sym = str(item.get('symbol', '')).replace('^', '').split('-')[0]
+                if sym and not sym.isdigit(): symbols.add(sym)
                 
-            if df is not None and not df.empty:
-                # 精准提取上一个交易日最新收盘价
-                latest_row = df.sort_values('date', ascending=True).iloc[-1]
-                date_str = latest_row['date'].strftime('%Y-%m-%d')
-                price = latest_row['close']
-                if price > 0: 
-                    self.db.upsert_index_price(date=date_str, symbol=sym, price=price)
-                self.logger.info(f"✅ [指数] {sym} 极简入库完成 ({date_str} 收盘价 -> {price})。")
-            else:
-                missing_indices.append(sym)
-        if missing_indices:
-            self.logger.error(f"🚨 健壮性告警：以上纯净指数数据缺失，将会导致 012 算不出最新估值：{', '.join(missing_indices)}")
-            
-        # --- 3. 抓取期货结算价 ---
-        futures_data = data_fetcher.get_futures_settlement_data()
-        t_minus_1 = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        for fut in futures_data:
-            sym, settle = fut.get('symbol'), fut.get('settle')
-            if sym and settle:
-                self.db.upsert_futures_daily(date=t_minus_1, symbol=sym, settle_price=float(settle))
-                self.logger.info(f"✅ [期货] {t_minus_1} {sym} 结算价 -> {settle} 入库完成。")
-        
-        # 统一标记
-        self.db.mark_access_synced(today_str, source='usa_market_data_sina')
+        for sym in symbols:
+            df = self.hist_manager.get_prices(sym, source="sina", start_date=start_date)
+            if not df.empty:
+                for _, row in df.iterrows():
+                    date_str = row['date'].strftime('%Y-%m-%d')
+                    self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=row['close'])
+                    # 同步更新大一统表中的指数价格
+                    # 查找哪些基金使用了这个 sym 作为指数
+                    for fund in self.config.get('funds', []):
+                        for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
+                            if sym in str(item.get('symbol', '')):
+                                self.db.save_unified_history(date_str=date_str, fund_code=fund['code'], index_close=row['close'])
+                self.logger.info(f"✅ [海外/指数] {sym} 行情同步完成")
 
     def step6_fetch_woody_regional_etfs(self):
         """步骤六：抓取 Woody 特有的区域变种虚拟 ETF (如 ^GLD-EU) 历史行情"""

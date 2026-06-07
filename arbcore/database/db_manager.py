@@ -75,7 +75,99 @@ class DatabaseManager:
             conn.execute('''CREATE TABLE IF NOT EXISTS etf_raw_api_data (date TEXT NOT NULL, source TEXT NOT NULL, raw_content TEXT, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (date, source))''')
             conn.execute('''CREATE TABLE IF NOT EXISTS etf_rotation_list (group_id INTEGER, lof_code TEXT, lof_name TEXT, etf_code TEXT, etf_name TEXT, track_index TEXT, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (lof_code, etf_code))''')
             conn.execute('''CREATE TABLE IF NOT EXISTS fund_purchase_status (fund_code TEXT PRIMARY KEY, purchase_status TEXT, redemption_status TEXT, purchase_fee TEXT, redemption_fee TEXT, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')))''')
-            conn.execute('''CREATE TABLE IF NOT EXISTS jsl_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT)''')
+            
+            # 数据源配置中心 (VUE 控制台的核心)
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS data_source_config (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    module TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    priority INTEGER DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    config_json TEXT DEFAULT '{}',
+                    updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+                    UNIQUE(module, source_name)
+                )
+            ''')
+            
+            # 种子数据：初始化实时行情的优先级
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM data_source_config WHERE module = 'realtime_market'")
+            if cursor.fetchone()[0] == 0:
+                initial_sources = [
+                    ('realtime_market', 'tdx', 1, 1, '{"desc": "通达信内存直连"}'),
+                    ('realtime_market', 'guojin', 2, 1, '{"desc": "国金QMT (xtquant)"}'),
+                    ('realtime_market', 'galaxy', 3, 1, '{"desc": "银河QMT (Socket)"}'),
+                    ('realtime_market', 'sina', 4, 1, '{"desc": "新浪财经轮询"}')
+                ]
+                conn.executemany('''
+                    INSERT INTO data_source_config (module, source_name, priority, is_active, config_json)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', initial_sources)
+                
+                # 种子数据：初始化历史数据的优先级
+                historical_sources = [
+                    ('historical_nav', 'eastmoney', 1, 1, '{"desc": "东方财富净值"}'),
+                    ('historical_price', 'sina', 1, 1, '{"desc": "新浪/腾讯价格"}')
+                ]
+                conn.executemany('''
+                    INSERT INTO data_source_config (module, source_name, priority, is_active, config_json)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', historical_sources)
+
+            conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS jsl_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95)''')
+            try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN pos_ratio REAL DEFAULT 0.95')
+            except sqlite3.OperationalError: pass
+            try: conn.execute('ALTER TABLE jsl_fund_list ADD COLUMN pos_ratio REAL DEFAULT 0.95')
+            except sqlite3.OperationalError: pass
+
+            # JSL Index history and realtime tables
+            conn.execute('''CREATE TABLE IF NOT EXISTS index_history (symbol TEXT NOT NULL, date TEXT NOT NULL, close REAL, source TEXT, PRIMARY KEY (symbol, date))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS index_realtime_quotes (symbol TEXT PRIMARY KEY, name TEXT, last_price REAL, prev_close REAL, pct_change REAL, quote_time TEXT, source TEXT, updated_at TEXT)''')
+
+            # Create unified_fund_history if it doesn't exist
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS unified_fund_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    fund_code TEXT NOT NULL,
+                    price REAL,
+                    price_change REAL,
+                    nav REAL,
+                    nav_date TEXT,
+                    volume REAL,
+                    shares REAL,
+                    shares_added REAL,
+                    turnover_rate TEXT,
+                    static_val REAL,
+                    rt_val REAL,
+                    premium REAL,
+                    rt_premium REAL,
+                    index_close REAL,
+                    index_pct REAL,
+                    calibration REAL,
+                    purchase_status TEXT,
+                    redemption_status TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(date, fund_code)
+                )
+            ''')
+
+            # [V3.8] 新增分时采样表，用于展示深度分析的分时曲线
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS fund_intraday_quotes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fund_code TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    time TEXT NOT NULL,
+                    price REAL,
+                    rt_val REAL,
+                    premium REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_intraday_code_date ON fund_intraday_quotes(fund_code, date)')
 
             conn.commit()
             conn.close()
@@ -89,10 +181,13 @@ class DatabaseManager:
     def get_fund_basket(self, *args, **kwargs): return self.funds.get_fund_basket(*args, **kwargs)
     def get_latest_fund_price(self, *args, **kwargs): return self.funds.get_latest_fund_price(*args, **kwargs)
     def batch_save_fund_prices(self, *args, **kwargs): return self.funds.batch_save_fund_prices(*args, **kwargs)
+    def sync_unified_fund_list(self, *args, **kwargs): return self.funds.sync_unified_fund_list(*args, **kwargs)
+    def get_unified_fund_list(self, *args, **kwargs): return self.funds.get_unified_fund_list(*args, **kwargs)
     def sync_jsl_fund_list(self, *args, **kwargs): return self.funds.sync_jsl_fund_list(*args, **kwargs)
     def get_jsl_fund_list(self, *args, **kwargs): return self.funds.get_jsl_fund_list(*args, **kwargs)
     def batch_save_fund_purchase_status(self, *args, **kwargs): return self.funds.batch_save_fund_purchase_status(*args, **kwargs)
     def get_fund_purchase_status(self, *args, **kwargs): return self.funds.get_fund_purchase_status(*args, **kwargs)
+    def save_unified_history(self, *args, **kwargs): return self.funds.save_unified_history(*args, **kwargs)
 
     def upsert_exchange_rate(self, *args, **kwargs): return self.market.upsert_exchange_rate(*args, **kwargs)
     def upsert_hkd_exchange_rate(self, *args, **kwargs): return self.market.upsert_hkd_exchange_rate(*args, **kwargs)
@@ -113,6 +208,8 @@ class DatabaseManager:
     def cleanup_old_data(self, *args, **kwargs): return self.system.cleanup_old_data(*args, **kwargs)
     def drop_deprecated_tables(self, *args, **kwargs): return self.system.drop_deprecated_tables(*args, **kwargs)
     def vacuum_database(self, *args, **kwargs): return self.system.vacuum_database(*args, **kwargs)
+    def get_data_source_config(self, *args, **kwargs): return self.system.get_data_source_config(*args, **kwargs)
+    def update_data_source_config(self, *args, **kwargs): return self.system.update_data_source_config(*args, **kwargs)
 
     # Compatibility methods
     def mark_api_synced(self, *args, **kwargs): return self.mark_access_synced(*args, **kwargs)

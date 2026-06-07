@@ -173,9 +173,13 @@ def push_ticks():
                 av = safe_list(tick.get('askVol'))
                 bp = safe_list(tick.get('bidPrice'))
                 bv = safe_list(tick.get('bidVol'))
-                
-                msg = f"TICK,{code},{tick.get('lastPrice', 0)},{tick.get('volume', 0)},{ap[0]},{av[0]},{ap[1]},{av[1]},{bp[0]},{bv[0]},{bp[1]},{bv[1]},{tick.get('timetag', '')}\n"
+
+                last_close = tick.get('lastClose', 0)
+                amount = tick.get('amount', 0)
+
+                msg = f"TICK,{code},{tick.get('lastPrice', 0)},{tick.get('volume', 0)},{ap[0]},{av[0]},{ap[1]},{av[1]},{bp[0]},{bv[0]},{bp[1]},{bv[1]},{tick.get('timetag', '')},{last_close},{amount}\n"
                 broadcast_message(msg)
+
         except Exception as e:
             broadcast_message(f"ERROR, push_ticks 发生致命错误: {e}\n")
             print(f"❌ [推流异常] push_ticks 发生错误: {e}")

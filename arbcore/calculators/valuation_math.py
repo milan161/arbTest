@@ -1,41 +1,63 @@
 # -*- coding: utf-8 -*-
-# valuation_math.py - 估值核心数学引擎 (大一统魔法公式)
+# valuation_math.py - 估值核心数学引擎 (工业级 V2.0)
 
-def calculate_magic_valuation(base_nav: float, position: float, current_asset_price: float, current_fx: float, hedge_value: float) -> float:
+import logging
+from typing import Optional, List, Dict
+
+logger = logging.getLogger(__name__)
+
+def calculate_magic_valuation(
+    base_nav: float, 
+    position: float, 
+    current_asset_price: float, 
+    current_fx: float, 
+    hedge_value: float
+) -> Optional[float]:
     """
     利用常量折叠（Hedge对冲值）进行 O(1) 极速推演的大一统函数。
     
-    数学推导：
-    传统公式: 估值 = T-1净值 * (1 + 仓位 * ((T日价格 * T日汇率) / (T-1价格 * T-1汇率) - 1))
-    由于 Hedge = (T-1价格 * T-1汇率) / (T-1净值 * 仓位)
-    代入化简后: 估值 = T-1净值 * (1 - 仓位) + (T日价格 * T日汇率) / Hedge
-    
-    适用场景：
-    1. 纯ETF实时估值:     current_asset_price = T日ETF现价,        hedge_value = API_Hedge
-    2. 期货校准实时估值:  current_asset_price = T日期货现价 / 校准值, hedge_value = API_Hedge
-    3. 纯期货映射估值:    current_asset_price = T日期货现价,        hedge_value = 物理反推的Futures_Hedge
+    公式: 估值 = T-1净值 * (1 - 仓位) + (T日价格 * T日汇率) / Hedge
     """
-    if not hedge_value or hedge_value <= 0:
+    if not all([base_nav, position, current_asset_price, current_fx, hedge_value]):
         return None
-    if not current_asset_price or current_asset_price <= 0:
-        return None
-    if not current_fx or current_fx <= 0:
+    if hedge_value <= 0 or current_asset_price <= 0 or current_fx <= 0:
         return None
         
-    # 大一统魔法公式
     return base_nav * (1.0 - position) + (current_asset_price * current_fx) / hedge_value
 
-def calculate_base_denominator(base_nav: float, position: float, hedge_value: float) -> float:
+def calculate_basket_valuation(
+    base_nav: float,
+    position: float,
+    current_fx: float,
+    base_fx: float,
+    portfolio_items: List[Dict]
+) -> Optional[float]:
     """
-    [辅助函数] 逆向还原分母
-    如果你在某些旧版逻辑中，非要用到 "T-1日基准价格 * T-1日基准汇率" 这个绝对分母，
-    无需去查数据库的 T-1 行情表，直接用本函数还原即可。
+    一篮子资产矩阵推演公式（当缺失对冲因子时的兜底逻辑）。
     
-    公式：分母 = Hedge * Base_NAV * Position
+    portfolio_items 格式: [{'current_price': 10, 'base_price': 9, 'weight': 0.5}, ...]
     """
-    if not hedge_value or hedge_value <= 0:
-        return None
-    if not base_nav or base_nav <= 0:
+    if not all([base_nav, base_fx, current_fx]) or base_fx <= 0 or current_fx <= 0:
         return None
         
-    return hedge_value * base_nav * position
+    fx_change = current_fx / base_fx
+    w_change, valid_w = 0.0, 0.0
+    
+    for item in portfolio_items:
+        c_p = item.get('current_price', 0)
+        b_p = item.get('base_price', 0)
+        weight = item.get('weight', 0) # 0-1 之间
+        
+        if c_p > 0 and b_p > 0 and weight > 0:
+            w_change += (c_p / b_p) * weight
+            valid_w += weight
+            
+    if valid_w <= 0:
+        return None
+        
+    # 归一化权重处理
+    if abs(valid_w - 1.0) > 0.001:
+        w_change = w_change / valid_w
+        
+    net_ratio = position * (w_change * fx_change - 1.0)
+    return base_nav * (1.0 + net_ratio)

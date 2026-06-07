@@ -105,27 +105,19 @@ class LofValuationApp(BaseApp):
             conn.close()
 
     def run(self):
-        self.logger.info("🚀 开始执行全市场静态估值计算 (SQLite纯享版)...")
+        self.logger.info("🚀 开始执行全市场静态估值计算 (SQLite 工业化重构版)...")
         self.diagnose_global_environment()
 
         funds = self.config.get('funds', [])
         for fund in funds:
-            # 核心格式对齐修复
-            for port_type in ['valuation_portfolio', 'hedging_portfolio', 'holdings_portfolio']:
-                for item in fund.get(port_type, []):
-                    sym = item.get('symbol', '')
-                    if isinstance(sym, str) and ('-JP' in sym or '-EU' in sym or '-HK' in sym) and not sym.startswith('^'):
-                        item['symbol'] = f"^{sym}"
-
             try:
                 self.pre_diagnose_fund(fund)
                 # 执行核心计算逻辑
                 success = self.calculator.process_fund(fund)
                 if success:
-                    self.logger.info(f"  ✅ [{fund.get('code')}] 静态估值计算完成")
+                    self.logger.info(f"  ✅ [{fund.get('code')}] 静态估值历史推演完成")
                 else:
                     self.logger.warning(f"  ⚠️ [{fund.get('code')}] 静态估值计算跳过（可能缺失必要前置数据）")
-                self.diagnose_fund(fund)
             except Exception as e:
                 self.logger.error(f"❌ 处理基金 {fund.get('code')} 时出错: {e}")
 

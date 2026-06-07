@@ -31,8 +31,8 @@ funds:
   name: 南方原油
   category: 原油
   holdings:
-    equity_ratio: 75.51
-    cash_ratio: 24.49
+    equity_ratio: 75.39
+    cash_ratio: 24.61
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -44,20 +44,20 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 59.54
+    weight: 59.88
     anchor: EU
   - symbol: USO
-    weight: 40.46
+    weight: 40.12
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 75.51
+  position: 75.39
 - code: '160723'
   name: 嘉实原油
   category: 原油
   holdings:
-    equity_ratio: 75.57
-    cash_ratio: 24.43
+    equity_ratio: 75.74
+    cash_ratio: 24.26
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -104,14 +104,14 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 57.22
+    weight: 57.64
     anchor: US
   - symbol: USO-EU
-    weight: 42.78
+    weight: 42.36
     anchor: EU
   trade_etf: USO
   trade_future: MCL
-  position: 75.57
+  position: 75.74
 - code: '161129'
   name: 易方达原油
   category: 原油
@@ -173,22 +173,22 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 76.97
-    cash_ratio: 23.03
+    equity_ratio: 78.99
+    cash_ratio: 21.01
   valuation_portfolio:
   - symbol: SLV
-    weight: 53.85
+    weight: 49.91
     anchor: US
   - symbol: USO
-    weight: 30.99
+    weight: 30.76
     anchor: US
   - symbol: CPER
-    weight: 15.16
+    weight: 19.33
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 76.97
+  position: 78.99
 - code: '161815'
   name: 银华抗通胀
   category: 黄金
@@ -583,7 +583,7 @@ funds:
     name: 微型纳斯达克100指数期货
 - code: '161226'
   name: 国瑞白银期货
-  category: 其他
+  category: 白银
   trade_etf: ''
   trade_future: 沪银Ag
   holdings:
@@ -664,8 +664,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
+    equity_ratio: 89.86
+    cash_ratio: 10.14
   valuation_portfolio:
   - symbol: ARKK
     weight: 20.85
@@ -702,6 +702,7 @@ funds:
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
+  position: 89.86
 - code: '160644'
   name: 鹏华港美互联
   category: 混合跨境

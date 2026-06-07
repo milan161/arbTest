@@ -128,3 +128,58 @@ class SystemManager(BaseManager):
             logger.info("Database VACUUM completed")
         except Exception as e:
             logger.error(f"Failed to vacuum database: {e}")
+
+    def get_data_source_config(self, module: str) -> List[Dict[str, Any]]:
+        """获取指定模块的数据源配置，按优先级排序"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            query = """
+                SELECT source_name, priority, is_active, config_json 
+                FROM data_source_config 
+                WHERE module = ? AND is_active = 1
+                ORDER BY priority ASC
+            """
+            cursor.execute(query, (module,))
+            results = cursor.fetchall()
+            conn.close()
+            return [
+                {
+                    'source_name': row[0],
+                    'priority': row[1],
+                    'is_active': row[2],
+                    'config_json': row[3]
+                }
+                for row in results
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get data source config for {module}: {e}")
+            return []
+
+    def update_data_source_config(self, module: str, source_name: str, priority: int = None, is_active: int = None, config_json: str = None):
+        """更新数据源配置"""
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                updates = []
+                params = []
+                if priority is not None:
+                    updates.append("priority = ?")
+                    params.append(priority)
+                if is_active is not None:
+                    updates.append("is_active = ?")
+                    params.append(is_active)
+                if config_json is not None:
+                    updates.append("config_json = ?")
+                    params.append(config_json)
+                
+                if not updates: return
+                
+                params.extend([module, source_name])
+                query = f"UPDATE data_source_config SET {', '.join(updates)}, updated_at = (datetime('now', 'localtime')) WHERE module = ? AND source_name = ?"
+                conn.execute(query, params)
+                conn.commit()
+                conn.close()
+                logger.info(f"Updated data source config: {module} -> {source_name}")
+            except Exception as e:
+                logger.error(f"Failed to update data source config: {e}")

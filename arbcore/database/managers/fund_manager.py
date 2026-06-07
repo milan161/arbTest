@@ -160,7 +160,7 @@ class FundManager(BaseManager):
     def get_fund_purchase_status(self, fund_code: str) -> Dict[str, str]:
         conn = self._get_conn()
         cursor = conn.execute('''
-            SELECT purchase_status, redemption_status, purchase_fee, redemption_fee 
+            SELECT purchase_status, redemption_status, purchase_fee, redemption_fee
             FROM fund_purchase_status WHERE fund_code = ?
         ''', (fund_code,))
         r = cursor.fetchone()
@@ -174,3 +174,59 @@ class FundManager(BaseManager):
             'purchase_status': '未知', 'redemption_status': '未知',
             'purchase_fee': '0%', 'redemption_fee': '0.50%'
         }
+
+    def sync_unified_fund_list(self, fund_list: List[Dict[str, Any]]):
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                for item in fund_list:
+                    conn.execute('''
+                        INSERT OR REPLACE INTO unified_fund_list
+                        (category, fund_code, fund_name, related_index, pos_ratio)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (item['category'], item['code'], item['name'], item.get('related_index', '-'), item.get('pos_ratio', 0.95)))
+                conn.commit()
+                logger.info(f"Successfully synced {len(fund_list)} unified items to database.")
+            except Exception as e:
+                logger.error(f"Failed to sync unified fund list: {e}")
+            finally:
+                conn.close()
+
+    def get_unified_fund_list(self) -> List[Dict[str, Any]]:
+        conn = self._get_conn()
+        cursor = conn.execute("SELECT category, fund_code, fund_name, related_index, pos_ratio FROM unified_fund_list")
+        results = [{"category": r[0], "code": r[1], "name": r[2], "related_index": r[3], "pos_ratio": r[4]} for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def save_unified_history(self, date_str, fund_code, **kwargs):
+        """
+        [V3.0] 极简通用型历史数据保存器
+        支持动态列更新，自动处理 NULL 覆盖问题。
+        """
+        with self.lock:
+            conn = self._get_conn()
+            try:
+                # 过滤掉 None 值，避免覆盖已有数据
+                valid_data = {k: v for k, v in kwargs.items() if v is not None}
+                if not valid_data: return
+
+                cols = ['date', 'fund_code'] + list(valid_data.keys())
+                placeholders = ['?'] * len(cols)
+                vals = [date_str, fund_code] + list(valid_data.values())
+
+                update_clause = ", ".join([f"{k} = excluded.{k}" for k in valid_data.keys()])
+
+                query = f"""
+                    INSERT INTO unified_fund_history ({", ".join(cols)})
+                    VALUES ({", ".join(placeholders)})
+                    ON CONFLICT(date, fund_code) DO UPDATE SET
+                    {update_clause}
+                """
+                conn.execute(query, vals)
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Failed to save unified history for {fund_code}: {e}")
+            finally:
+                conn.close()
+
