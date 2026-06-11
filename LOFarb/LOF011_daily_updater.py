@@ -635,6 +635,35 @@ class DailyUpdater(BaseApp):
         self.db.mark_access_synced(today_str, source='woody_extra_calibrations')
 
 
+    def step8_fetch_sina_futures_from_vps(self):
+        """步骤八：从VPS同步新浪期货数据（收盘价和结算价）"""
+        self.logger.info("=== 步骤八：从VPS同步新浪期货数据 ===")
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        
+        vps_futures_data = self._try_sync_all_from_vps('futures')
+        if vps_futures_data:
+            self.logger.info(f"🔄 [VPS] 发现 {len(vps_futures_data)} 份历史期货数据，正在同步入库...")
+            for item in vps_futures_data:
+                file_date = item['date']
+                content = item['content']
+                try:
+                    date_info = content.get('date', file_date)
+                    futures_list = content.get('data', [])
+                    for f_data in futures_list:
+                        symbol = f_data.get('symbol')
+                        settle = f_data.get('settle')
+                        close_price = f_data.get('close')
+                        
+                        if symbol and (settle is not None or close_price is not None):
+                            self.db.upsert_futures_daily(date=date_info, symbol=symbol, settle_price=settle, close_price=close_price)
+                    
+                    self.logger.info(f"   ✅ [VPS] 同步入库期货数据: {date_info} ({len(futures_list)} 个品种)")
+                    self.db.mark_access_synced(file_date, 'futures_vps_sync')
+                    if date_info >= today_str:
+                        self.db.mark_access_synced(today_str, source='futures_data')
+                except Exception as e:
+                    self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 期货数据时出错: {e}")
+
     def run(self):
         self.logger.info("🚀 开始执行每日数据大一统更新流水线...")
         self.step1_and_2_fetch_woody_api()
@@ -650,6 +679,7 @@ class DailyUpdater(BaseApp):
         # self.step6_fetch_woody_regional_etfs()
         
         self.step7_fetch_extra_calibrations()
+        self.step8_fetch_sina_futures_from_vps()
         self.logger.info("🎉 流水线执行完毕，数据大盘一切就绪！")
 
 if __name__ == "__main__":

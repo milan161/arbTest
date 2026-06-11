@@ -26,7 +26,7 @@ class MarketManager(BaseManager):
             conn.commit()
             conn.close()
 
-    def upsert_futures_daily(self, date: str, symbol: str, settle_price: float = None, calibration: float = None):
+    def upsert_futures_daily(self, date: str, symbol: str, settle_price: float = None, calibration: float = None, close_price: float = None):
         with self.lock:
             conn = self._get_conn()
             conn.execute("INSERT OR IGNORE INTO futures_daily (date, symbol) VALUES (?, ?)", (date, symbol))
@@ -34,6 +34,8 @@ class MarketManager(BaseManager):
                 conn.execute("UPDATE futures_daily SET settle_price = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (settle_price, date, symbol))
             if calibration is not None:
                 conn.execute("UPDATE futures_daily SET calibration = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (calibration, date, symbol))
+            if close_price is not None:
+                conn.execute("UPDATE futures_daily SET close_price = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (close_price, date, symbol))
             conn.commit()
             conn.close()
             
