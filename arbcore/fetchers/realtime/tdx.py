@@ -631,64 +631,28 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-
-
-
-
-        # 优先从缓存取，如果缓存没有，尝试主动拉取快照
-
-
-
-
+        """每次都从通达信拉取最新快照（本地内存直连，延迟极低），确保盘口实时"""
         clean_symbol = symbol.split('.')[0]
 
-
-
-
-        with self._lock:
-
-
-
-
-            if clean_symbol in self.quotes:
-
-
-
-
-                return self.quotes[clean_symbol]
-
-
-
-
-        
-
-
-
-
+        # 始终尝试主动拉取最新快照，不依赖可能过期的缓存
         if self.is_connected:
-
-
-
-
             tdx_code = self.normalize_symbol(symbol)
+            try:
+                snap = self.tq.get_market_snapshot(stock_code=tdx_code)
+                if snap:
+                    quote = self._format_snap(tdx_code, snap)
+                    if quote:
+                        # 同步更新缓存，供回调和其他模块使用
+                        with self._lock:
+                            self.quotes[clean_symbol] = quote
+                        return quote
+            except Exception:
+                pass
 
-
-
-
-            snap = self.tq.get_market_snapshot(stock_code=tdx_code)
-
-
-
-
-            if snap:
-
-
-
-
-                return self._format_snap(tdx_code, snap)
-
-
-
+        # 通达信拉取失败时，降级使用缓存
+        with self._lock:
+            if clean_symbol in self.quotes:
+                return self.quotes[clean_symbol]
 
         return None
 
