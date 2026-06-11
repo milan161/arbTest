@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pandas
+numpy
+sqlalchemy
+pydantic
+python-dotenv
+httpx
+flask  # For compatibility if needed
+requests
+pyyaml
+paramiko

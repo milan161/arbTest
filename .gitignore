@@ -2,9 +2,10 @@
 ArbDashboard/backend/private/
 ArbDashboard/frontend/src/private/
 ArbDashboard/backend/core/private/
+ArbDashboard/backend/core/auto_trade/
 
 # === 私密配置 ===
-account_private.py
+arbcore/config/account_private.py
 arb_config.yaml
 *.local.py
 .env
@@ -31,6 +32,9 @@ woodyAPI/
 公众号/
 woodykey轮动demo/
 /ArbDashboard_Next/
+logs/
+test/
+scratch/
 
 # === 压缩包/临时文件 ===
 ETFRotate*.zip
