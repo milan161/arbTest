@@ -755,3 +755,5 @@ last_futures_settlement_date: '2026-04-07'
 161127_calibration: 505.047471
 161125_calibration: 16399.583345
 161130_calibration: 44691.210786
+
+enable_intraday_sampler: false
