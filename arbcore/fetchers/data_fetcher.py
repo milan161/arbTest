@@ -616,40 +616,27 @@ class DataFetcher:
         }
         
         # 使用新浪API获取期货数据
-        url = "http://hq.sinajs.cn/list=hf_GC,hf_CL,hf_NQ,hf_ES"
+        url = "http://hq.sinajs.cn/list=hf_MGC,hf_GC,hf_CL,hf_NQ,hf_ES,hf_SI"
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
             response.encoding = 'gbk'
             if response.status_code == 200:
                 for line in response.text.strip().split('\n'):
-                    if 'hf_GC' in line:
-                        v = line.split('"')[1].split(',')
-                        if len(v) >= 14:
-                            yesterday_settlement = float(v[7])
-                            logger.info(f"GC 结算价: {yesterday_settlement}")
-                            futures_data.append({"symbol": "GC", "settle": yesterday_settlement})
-                    elif 'hf_CL' in line:
-                        v = line.split('"')[1].split(',')
-                        if len(v) >= 14:
-                            yesterday_settlement = float(v[7])
-                            logger.info(f"CL 结算价: {yesterday_settlement}")
-                            futures_data.append({"symbol": "CL", "settle": yesterday_settlement})
-                    elif 'hf_NQ' in line:
-                        v = line.split('"')[1].split(',')
-                        if len(v) >= 14:
-                            yesterday_settlement = float(v[7])
-                            logger.info(f"NQ 结算价: {yesterday_settlement}")
-                            futures_data.append({"symbol": "NQ", "settle": yesterday_settlement})
-                    elif 'hf_ES' in line:
-                        v = line.split('"')[1].split(',')
-                        if len(v) >= 14:
-                            yesterday_settlement = float(v[7])
-                            logger.info(f"ES 结算价: {yesterday_settlement}")
-                            futures_data.append({"symbol": "ES", "settle": yesterday_settlement})
+                    if not line: continue
+                    try:
+                        symbol = line.split('=')[0].split('_')[-1]
+                        parts = line.split('"')[1].split(',')
+                        if len(parts) >= 14:
+                            close_price = float(parts[0])
+                            settle_price = float(parts[7])
+                            logger.info(f"{symbol} 收盘价: {close_price}, 结算价: {settle_price}")
+                            futures_data.append({"symbol": symbol, "settle": settle_price, "close": close_price})
+                    except Exception as e:
+                        logger.error(f"解析期货行失败 {line}: {e}")
             else:
                 logger.error(f"请求期货数据失败，状态码: {response.status_code}")
         except Exception as e:
-            logger.error(f"获取期货结算价失败: {e}")
+            logger.error(f"获取期货数据失败: {e}")
         
         return futures_data
     

@@ -636,11 +636,18 @@ class DailyUpdater(BaseApp):
 
 
     def step8_fetch_sina_futures_from_vps(self):
-        """步骤八：从VPS同步新浪期货数据（收盘价和结算价）"""
-        self.logger.info("=== 步骤八：从VPS同步新浪期货数据 ===")
+        """步骤八：从VPS同步新浪期货数据，并带有本地接口兜底（收盘价和结算价）"""
+        self.logger.info("=== 步骤八：获取新浪期货数据 (VPS优先 -> 本地兜底) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
         
+        # 如果今天的数据已经同步成功过，直接跳过
+        if self.db.is_access_synced_today(today_str, source='futures_data'):
+            self.logger.info("✅ 今日已同步过期货数据，跳过抓取。")
+            return
+            
         vps_futures_data = self._try_sync_all_from_vps('futures')
+        vps_today_success = False
+        
         if vps_futures_data:
             self.logger.info(f"🔄 [VPS] 发现 {len(vps_futures_data)} 份历史期货数据，正在同步入库...")
             for item in vps_futures_data:
@@ -660,9 +667,71 @@ class DailyUpdater(BaseApp):
                     self.logger.info(f"   ✅ [VPS] 同步入库期货数据: {date_info} ({len(futures_list)} 个品种)")
                     self.db.mark_access_synced(file_date, 'futures_vps_sync')
                     if date_info >= today_str:
-                        self.db.mark_access_synced(today_str, source='futures_data')
+                        vps_today_success = True
                 except Exception as e:
                     self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 期货数据时出错: {e}")
+
+        if vps_today_success:
+            self.db.mark_access_synced(today_str, source='futures_data')
+            self.logger.info("✅ [VPS] 今日期货数据同步完成！")
+            return
+            
+        # 本地兜底
+        self.logger.warning("⚠️ [VPS] 未获取到今日期货数据，启动本地新浪API兜底...")
+        from arbcore.fetchers.data_fetcher import data_fetcher
+        fallback_data = data_fetcher.fetch_futures_settlement_price()
+        if fallback_data:
+            for f_data in fallback_data:
+                symbol = f_data.get('symbol')
+                settle = f_data.get('settle')
+                close_price = f_data.get('close')
+                if symbol and (settle is not None or close_price is not None):
+                    self.db.upsert_futures_daily(date=today_str, symbol=symbol, settle_price=settle, close_price=close_price)
+            self.db.mark_access_synced(today_str, source='futures_data')
+            self.logger.info(f"✅ [本地兜底] 今日期货数据获取完成！")
+        else:
+            self.logger.error("❌ [本地兜底] 获取期货数据失败。")
+
+    def step9_fetch_jsl_shares_from_vps(self):
+        """步骤九：从VPS同步深交所场内份额数据"""
+        self.logger.info("=== 步骤九：从VPS同步深交所场内份额数据 ===")
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        
+        # 份额通常是 T-1 日的数据，但它是每天采集的，所以标记为当天已同步
+        if self.db.is_access_synced_today(today_str, source='jsl_shares_data'):
+            self.logger.info("✅ 今日已同步过场内份额数据，跳过。")
+            return
+            
+        vps_shares_data = self._try_sync_all_from_vps('shares')
+        vps_today_success = False
+        
+        if vps_shares_data:
+            self.logger.info(f"🔄 [VPS] 发现 {len(vps_shares_data)} 份历史份额数据，正在同步入库...")
+            for item in vps_shares_data:
+                file_date = item['date']
+                content = item['content']
+                try:
+                    # 假设文件内容是 {"162411": 12345.67, "161129": 2345.67}
+                    count = 0
+                    for fund_code, shares in content.items():
+                        if shares is not None:
+                            # 份额是 T-1 日的（如果是今天早上6点采集，那就是昨天收盘后的数据）
+                            # 因此写入历史表时，最好对齐到 file_date 作为基准日
+                            self.db.save_unified_history(date_str=file_date, fund_code=fund_code, shares=shares)
+                            count += 1
+                    
+                    self.logger.info(f"   ✅ [VPS] 同步入库份额数据: {file_date} ({count} 个品种)")
+                    self.db.mark_access_synced(file_date, 'shares_vps_sync')
+                    if file_date >= today_str:
+                        vps_today_success = True
+                except Exception as e:
+                    self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 份额数据时出错: {e}")
+
+        if vps_today_success:
+            self.db.mark_access_synced(today_str, source='jsl_shares_data')
+            self.logger.info("✅ [VPS] 今日场内份额数据同步完成！")
+        else:
+            self.logger.warning("⚠️ [VPS] 未获取到今日场内份额数据 (可能VPS采集失败或今天非交易日)。")
 
     def run(self):
         self.logger.info("🚀 开始执行每日数据大一统更新流水线...")
@@ -680,6 +749,7 @@ class DailyUpdater(BaseApp):
         
         self.step7_fetch_extra_calibrations()
         self.step8_fetch_sina_futures_from_vps()
+        self.step9_fetch_jsl_shares_from_vps()
         self.logger.info("🎉 流水线执行完毕，数据大盘一切就绪！")
 
 if __name__ == "__main__":
