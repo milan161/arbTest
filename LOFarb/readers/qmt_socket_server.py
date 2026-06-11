@@ -177,7 +177,11 @@ def push_ticks():
                 last_close = tick.get('lastClose', 0)
                 amount = tick.get('amount', 0)
 
-                msg = f"TICK,{code},{tick.get('lastPrice', 0)},{tick.get('volume', 0)},{ap[0]},{av[0]},{ap[1]},{av[1]},{bp[0]},{bv[0]},{bp[1]},{bv[1]},{tick.get('timetag', '')},{last_close},{amount}\n"
+                # 扩充为 5 档盘口发送
+                msg = f"TICK,{code},{tick.get('lastPrice', 0)},{tick.get('volume', 0)}," \
+                      f"{ap[0]},{av[0]},{ap[1]},{av[1]},{ap[2]},{av[2]},{ap[3]},{av[3]},{ap[4]},{av[4]}," \
+                      f"{bp[0]},{bv[0]},{bp[1]},{bv[1]},{bp[2]},{bv[2]},{bp[3]},{bv[3]},{bp[4]},{bv[4]}," \
+                      f"{tick.get('timetag', '')},{last_close},{amount}\n"
                 broadcast_message(msg)
 
         except Exception as e:

@@ -101,11 +101,11 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
                     "last_price": last_price,
                     "price_change": round(price_change, 2),
                     "volume": volume,
-                    "amount": round(amount / 10000, 2), # 转换为万元
-                    "ask": [float(parts[4]) if parts[4] else 0, float(parts[6]) if parts[6] else 0],
-                    "ask_vol": [float(parts[5]) if parts[5] else 0, float(parts[7]) if parts[7] else 0],
-                    "bid": [float(parts[8]) if parts[8] else 0, float(parts[10]) if parts[10] else 0],
-                    "bid_vol": [float(parts[9]) if parts[9] else 0, float(parts[11]) if parts[11] else 0],
+                    "amount": round(amount / 10000, 2), 
+                    "ask": [float(parts[4]), float(parts[6]), float(parts[8]), float(parts[10]), float(parts[12])],
+                    "ask_vol": [int(float(parts[5])), int(float(parts[7])), int(float(parts[9])), int(float(parts[11])), int(float(parts[13]))],
+                    "bid": [float(parts[14]), float(parts[16]), float(parts[18]), float(parts[20]), float(parts[22])],
+                    "bid_vol": [int(float(parts[15])), int(float(parts[17])), int(float(parts[19])), int(float(parts[21])), int(float(parts[23]))],
                     "time": time.time(),
                     "source": self.name
                 }

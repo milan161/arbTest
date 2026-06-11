@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import logging
 import json
+import re
 from typing import List, Dict, Optional, Any
 from .base import BaseHistoricalFetcher
 from datetime import datetime, timedelta
@@ -25,10 +26,18 @@ class SinaHistoricalFetcher(BaseHistoricalFetcher):
         return pd.DataFrame()
 
     def fetch_prices(self, symbol: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
-        """获取 A 股/港股/美股历史价格"""
+        """获取 A 股/港股/美股/期货/指数历史价格"""
         logger.info(f"[{self.name}] 获取 {symbol} 历史价格")
         
-        # 判断市场
+        # 1. 期货处理 (如 GC2412, CL2501, AU2412)
+        if re.match(r'^[A-Z]{2}\d{4}$', symbol):
+            return self._fetch_futures(symbol, start_date, end_date)
+        
+        # 2. 指数处理 (如 .INX, .NDX, .HSI, .SSEC)
+        if symbol.startswith('.'):
+            return self._fetch_index(symbol, start_date, end_date)
+
+        # 3. 股票/ETF 处理
         if symbol.startswith('5') or symbol.startswith('6'):
             return self._fetch_a_share(symbol, start_date, end_date, 'sh')
         elif symbol.startswith('0') or symbol.startswith('1') or symbol.startswith('3') or symbol.startswith('15') or symbol.startswith('16'):
@@ -37,6 +46,54 @@ class SinaHistoricalFetcher(BaseHistoricalFetcher):
             return self._fetch_hk_share(symbol, start_date, end_date)
         else:
             return self._fetch_us_share(symbol, start_date, end_date)
+
+    def _fetch_futures(self, symbol: str, start_date, end_date) -> pd.DataFrame:
+        """获取内盘/外盘期货历史日线"""
+        # 判断是内盘还是外盘
+        if symbol.startswith(('GC', 'CL', 'SI', 'HG')):
+            # 外盘期货
+            url = f"https://stock.finance.sina.com.cn/futures/api/jsonp.php/var%20_{symbol}=/GlobalFuturesService.getGlobalFuturesDailyKLine?symbol={symbol}"
+        else:
+            # 内盘期货
+            url = f"https://stock.finance.sina.com.cn/futures/api/jsonp.php/var%20_{symbol}=/InnerFuturesService.getInnerFuturesDailyKLine?symbol={symbol}"
+        
+        try:
+            res = requests.get(url, headers=self.headers, timeout=10, proxies={"http": None, "https": None})
+            text = res.text
+            # 解析 JSONP
+            json_str = text.split('=(')[-1].split(');')[0]
+            data = json.loads(json_str)
+            
+            df = pd.DataFrame(data)
+            if not df.empty:
+                df = df.rename(columns={'d': 'date', 'c': 'close'})
+                df['date'] = pd.to_datetime(df['date'])
+                df['close'] = pd.to_numeric(df['close'])
+                
+                if start_date:
+                    df = df[df['date'] >= pd.to_datetime(start_date)]
+                if end_date:
+                    df = df[df['date'] <= pd.to_datetime(end_date)]
+            return df[['date', 'close']].sort_values('date', ascending=False)
+        except Exception as e:
+            logger.error(f"获取期货 {symbol} 失败: {e}")
+            return pd.DataFrame()
+
+    def _fetch_index(self, symbol: str, start_date, end_date) -> pd.DataFrame:
+        """获取指数历史价格"""
+        # 转换符号 (如 .INX -> gb_inx)
+        sina_code = symbol.lstrip('.')
+        if sina_code in ['INX', 'NDX', 'DJI', 'IXIC']:
+            sina_code = f"gb_{sina_code.lower()}"
+            return self._fetch_us_share(sina_code, start_date, end_date)
+        elif sina_code == 'SSEC':
+            return self._fetch_a_share('000001', start_date, end_date, 'sh')
+        elif sina_code == 'SZSC':
+            return self._fetch_a_share('399001', start_date, end_date, 'sz')
+        elif sina_code == 'HSI':
+            return self._fetch_hk_share('HSI', start_date, end_date)
+        
+        return pd.DataFrame()
 
     def _fetch_a_share(self, symbol: str, start_date, end_date, market: str) -> pd.DataFrame:
         # 新浪 K 线接口，scale=240 表示日线

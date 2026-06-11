@@ -12,27 +12,27 @@ funds:
   trade_etf: USO
   trade_future: MCL
   holdings:
-    equity_ratio: 84.62
-    cash_ratio: 15.38
+    equity_ratio: 88.23
+    cash_ratio: 11.77
   valuation_portfolio:
   - symbol: XLE
-    weight: 83.86
+    weight: 84.29
     anchor: US
   - symbol: USO
-    weight: 16.14
+    weight: 15.71
     anchor: US
   sina_index_url: ''
   rate_type: midpoint
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 84.62
+  position: 88.23
 - code: '501018'
   name: 南方原油
   category: 原油
   holdings:
-    equity_ratio: 75.39
-    cash_ratio: 24.61
+    equity_ratio: 76.66
+    cash_ratio: 23.34
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -44,20 +44,20 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 59.88
+    weight: 62.99
     anchor: EU
   - symbol: USO
-    weight: 40.12
+    weight: 37.01
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 75.39
+  position: 76.66
 - code: '160723'
   name: 嘉实原油
   category: 原油
   holdings:
-    equity_ratio: 75.74
-    cash_ratio: 24.26
+    equity_ratio: 76.03
+    cash_ratio: 23.97
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -104,20 +104,20 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 57.64
+    weight: 51.98
     anchor: US
   - symbol: USO-EU
-    weight: 42.36
+    weight: 48.02
     anchor: EU
   trade_etf: USO
   trade_future: MCL
-  position: 75.74
+  position: 76.03
 - code: '161129'
   name: 易方达原油
   category: 原油
   holdings:
-    equity_ratio: 76.64
-    cash_ratio: 23.36
+    equity_ratio: 79.08
+    cash_ratio: 20.92
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -159,50 +159,47 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 61.03
+    weight: 55.17
     anchor: EU
   - symbol: USO
-    weight: 38.97
+    weight: 44.83
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 76.64
+  position: 79.08
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 78.99
-    cash_ratio: 21.01
+    equity_ratio: 60.9
+    cash_ratio: 39.1
   valuation_portfolio:
   - symbol: SLV
-    weight: 49.91
+    weight: 58.59
     anchor: US
   - symbol: USO
-    weight: 30.76
-    anchor: US
-  - symbol: CPER
-    weight: 19.33
+    weight: 41.41
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 78.99
+  position: 60.9
 - code: '161815'
   name: 银华抗通胀
   category: 黄金
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 89.41
-    cash_ratio: 10.59
+    equity_ratio: 91.06
+    cash_ratio: 8.94
   valuation_portfolio:
   - symbol: GLD
-    weight: 73.34
+    weight: 75.98
     anchor: US
-  - symbol: ^USO-EU
-    weight: 26.66
+  - symbol: USO-EU
+    weight: 24.02
     anchor: EU
   sina_index_url: ''
   holdings_portfolio: []
@@ -219,13 +216,13 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 89.41
+  position: 91.06
 - code: '160719'
   name: 嘉实黄金
   category: 黄金
   holdings:
-    equity_ratio: 96.37
-    cash_ratio: 3.63
+    equity_ratio: 96.52
+    cash_ratio: 3.48
   holdings_portfolio:
   - symbol: GLD
     weight: 19.02
@@ -267,28 +264,28 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 54.39
+    weight: 54.6
     anchor: US
   - symbol: GLD-EU
-    weight: 45.61
+    weight: 45.4
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 96.37
+  position: 96.52
 - code: '161116'
   name: 易方达黄金
   category: 黄金
   trade_etf: GLD
   trade_future: MGC
   holdings:
-    equity_ratio: 93.66
-    cash_ratio: 6.34
+    equity_ratio: 93.82
+    cash_ratio: 6.18
   valuation_portfolio:
   - symbol: GLD
-    weight: 79.9
+    weight: 80.56
     anchor: US
-  - symbol: ^GLD-EU
-    weight: 20.1
+  - symbol: GLD-EU
+    weight: 19.44
     anchor: EU
   sina_index_url: ''
   holdings_portfolio:
@@ -329,7 +326,7 @@ funds:
     currency: USD
     exchange: SMART
     name: ''
-  position: 93.66
+  position: 93.82
 - code: '164701'
   name: 汇添富贵金属
   category: 黄金
@@ -409,8 +406,8 @@ funds:
   name: 中信保诚
   category: 黄金
   holdings:
-    equity_ratio: 89.72
-    cash_ratio: 10.28
+    equity_ratio: 89.96
+    cash_ratio: 10.04
   holdings_portfolio: []
   future_hedging:
   - symbol: MGC
@@ -422,14 +419,14 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 88.48
+    weight: 90.61
     anchor: US
   - symbol: GLD-EU
-    weight: 11.52
+    weight: 9.39
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 89.72
+  position: 89.96
 - code: '162411'
   name: 华宝油气
   category: 纯ETF
@@ -563,8 +560,8 @@ funds:
   trade_etf: QQQ
   trade_future: MNQ
   holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
+    equity_ratio: 94.0
+    cash_ratio: 6.0
   valuation_portfolio:
   - symbol: QQQ
     weight: 100.0
@@ -581,6 +578,7 @@ funds:
     currency: USD
     exchange: SMART
     name: 微型纳斯达克100指数期货
+  position: 94.0
 - code: '161226'
   name: 国瑞白银期货
   category: 白银
@@ -643,21 +641,21 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 85.94
-    cash_ratio: 14.06
+    equity_ratio: 87.28
+    cash_ratio: 12.72
   valuation_portfolio:
   - symbol: SOXX
-    weight: 72.1
+    weight: 74.9
     anchor: US
   - symbol: SZ159560
-    weight: 27.9
+    weight: 25.1
     anchor: US
   sina_index_url: ''
   rate_type: midpoint
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 85.94
+  position: 87.28
 - code: '501312'
   name: 华宝海外科技
   category: 混合跨境
@@ -709,8 +707,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 98.0
-    cash_ratio: 2.0
+    equity_ratio: 90.0
+    cash_ratio: 10.0
   valuation_portfolio:
   - symbol: TSM
     weight: 14.79
@@ -747,7 +745,7 @@ funds:
   holdings_portfolio: []
   future_hedging: []
   val_tab_type: multi
-  position: 98.0
+  position: 90.0
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
 future_oil_calibration: .nan

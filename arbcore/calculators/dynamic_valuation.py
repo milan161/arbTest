@@ -49,7 +49,8 @@ class DynamicValuationCalculator:
                 conn, params=(base_date,)
             )
             for _, r in etf_df.iterrows():
-                base_row[r['symbol'].replace('^', '')] = r['price']
+                # 保留完整符号（如 ^USO-EU），不要去掉 ^ 前缀
+                base_row[r['symbol']] = r['price']
 
             self._base_data_cache[fund_code] = base_row
             return base_row
@@ -79,8 +80,16 @@ class DynamicValuationCalculator:
         
         rt_val = None
         if pd.notna(b_hedge) and b_hedge > 0 and len(portfolio) == 1:
-            primary_sym = portfolio[0].get('symbol', '').replace('^', '').split('-')[0]
+            # 分子：实时价格，去掉 ^ 前缀和 -EU/-JP/-HK 后缀，得到基础代码 USO/GLD
+            full_symbol = portfolio[0].get('symbol', '')
+            primary_sym = full_symbol.lstrip('^')  # ^USO-EU → USO-EU
+            for suffix in ['-EU', '-JP', '-HK']:
+                if primary_sym.endswith(suffix):
+                    primary_sym = primary_sym[:-len(suffix)]  # USO-EU → USO
+                    break
             c_price = current_etfs.get(primary_sym, 0)
+            if not c_price or c_price <= 0:
+                c_price = base_data.get(full_symbol, 0)
             if c_price > 0:
                 rt_val = calculate_magic_valuation(b_nav, position, c_price, current_fx, b_hedge)
         
@@ -88,9 +97,18 @@ class DynamicValuationCalculator:
         if rt_val is None:
             items = []
             for p in portfolio:
-                sym = p.get('symbol', '').replace('^', '').split('-')[0]
-                b_price = base_data.get(sym)
-                c_price = current_etfs.get(sym, 0)
+                # 分母：基准价格，用完整符号查数据库
+                full_symbol = p.get('symbol', '')
+                b_price = base_data.get(full_symbol)
+                # 分子：实时价格，去掉 ^ 前缀和 -EU/-JP/-HK 后缀，得到基础代码
+                c_sym = full_symbol.lstrip('^')  # ^USO-EU → USO-EU
+                for suffix in ['-EU', '-JP', '-HK']:
+                    if c_sym.endswith(suffix):
+                        c_sym = c_sym[:-len(suffix)]  # USO-EU → USO
+                        break
+                c_price = current_etfs.get(c_sym, 0)
+                if not c_price or c_price <= 0:
+                    c_price = b_price
                 if b_price and c_price > 0:
                     items.append({
                         'current_price': c_price,

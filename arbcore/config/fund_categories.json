@@ -1,0 +1,425 @@
+{
+  "description": "统一基金分类配置文件 - 程序1/2/3共享",
+  "last_update": "2026-06-10",
+  "target_types": {
+    "ETF": "跟踪单一ETF（如XOP、XLY、RSPH、XBI、KWEB等），调用ETF数据获取函数",
+    "INDEX": "跟踪美股指数（.INX标普500、.NDX纳斯达克100），调用指数数据获取函数，考虑13-15小时时差"
+  },
+  "valuation_object_types": {
+    "SINGLE_ETF": "单ETF（无锚点）- 跟踪单一ETF，无区域后缀，如XOP、QQQ、SPY。实时估值分子和分母都用同一个符号。历史收盘价来自Woody API（netvalue字段）或IB/TDX数据库",
+    "MULTI_ETF_ANCHOR": "多ETF（有锚点）- 同一ETF在不同交易所的锚点，如^USO-EU、^GLD-JP、^USO-HK。分子是底层ETF实时价格（去掉^和-EU/-JP/-HK后缀），分母是Woody API的历史收盘价。**只有Woody数据源认识这种带^前缀和-EU/-JP/-HK后缀的符号**。Woody API原始数据格式见：D:\\Study\\arbTest\\LOFarb\\data\\woodyAPI\\Data_woody_lof_*.json",
+    "MULTI_ASSET": "多资产混合 - 跟踪多个股票/ETF/基金，如501225、501312、160644。需要分别获取多个资产的价格",
+    "CROSS_MARKET": "跨市场混合 - 跟踪跨市场资产（美股+A股），如501225跟踪SOXX（美股）+ SZ159560（A股）",
+    "US_INDEX": "美股指数 - 跟踪美股指数（.INX标普500、.NDX纳斯达克100），调用指数数据获取函数，考虑13-15小时时差"
+  },
+  "data_sources": {
+    "美股ETF实时价格": "IB（主）或富途（备），绝不可能是TDX",
+    "美股ETF历史收盘价": "Woody API（netvalue字段）或新浪，单ETF无锚点用这个",
+    "A股ETF实时价格": "TDX（主）或QMT（备）",
+    "A股ETF历史收盘价": "TDX数据库",
+    "港股股票实时价格": "富途（主）或IB（备）",
+    "港股股票历史收盘价": "富途数据库",
+    "美股指数实时价格": "新浪（待确认，暂未使用）",
+    "Woody API数据源": "只有Woody数据源认识^前缀和-EU/-JP/-HK后缀的锚点符号",
+    "Woody API原始数据路径": "D:\\Study\\arbTest\\LOFarb\\data\\woodyAPI\\Data_woody_lof_YYYYMMDD_HHMM.json"
+  },
+  "categories": {
+    "黄金原油": {
+      "description": "跟踪黄金、原油、大宗商品ETF的LOF基金",
+      "db_categories": ["黄金原油", "黄金", "原油"],
+      "funds": [
+        {
+          "code": "163208",
+          "name": "诺安油气能源",
+          "category": "黄金原油",
+          "trade_etf": "USO",
+          "position": 85.83,
+          "valuation_portfolio": [
+            {"symbol": "XLE", "weight": 81.96, "anchor": "US"},
+            {"symbol": "USO", "weight": 18.04, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "501018",
+          "name": "南方原油",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "USO",
+          "position": 75.77,
+          "valuation_portfolio": [
+            {"symbol": "USO-EU", "weight": 64.93, "anchor": "EU"},
+            {"symbol": "USO", "weight": 35.07, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "160723",
+          "name": "嘉实原油",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "USO",
+          "position": 75.37,
+          "valuation_portfolio": [
+            {"symbol": "USO-EU", "weight": 51.11, "anchor": "EU"},
+            {"symbol": "USO", "weight": 48.89, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "161129",
+          "name": "易方达原油",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "USO",
+          "position": 77.91,
+          "valuation_portfolio": [
+            {"symbol": "USO-EU", "weight": 58.04, "anchor": "EU"},
+            {"symbol": "USO", "weight": 41.96, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "160216",
+          "name": "国泰大宗商品",
+          "category": "黄金原油",
+          "trade_etf": "GLD,USO",
+          "position": 69.1,
+          "valuation_portfolio": [
+            {"symbol": "SLV", "weight": 67.93, "anchor": "US"},
+            {"symbol": "USO", "weight": 32.07, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "161815",
+          "name": "银华抗通胀",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "GLD,USO",
+          "position": 93.87,
+          "valuation_portfolio": [
+            {"symbol": "GLD", "weight": 76.7, "anchor": "US"},
+            {"symbol": "USO-EU", "weight": 23.3, "anchor": "EU"}
+          ]
+        },
+        {
+          "code": "160719",
+          "name": "嘉实黄金",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "GLD",
+          "position": 96.46,
+          "valuation_portfolio": [
+            {"symbol": "GLD", "weight": 54.77, "anchor": "US"},
+            {"symbol": "GLD-EU", "weight": 45.23, "anchor": "EU"}
+          ]
+        },
+        {
+          "code": "161116",
+          "name": "易方达黄金",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "GLD",
+          "position": 93.82,
+          "valuation_portfolio": [
+            {"symbol": "GLD", "weight": 80.56, "anchor": "US"},
+            {"symbol": "GLD-EU", "weight": 19.44, "anchor": "EU"}
+          ]
+        },
+        {
+          "code": "164701",
+          "name": "汇添富贵金属",
+          "category": "黄金原油",
+          "trade_etf": "GLD",
+          "position": 98.62,
+          "valuation_portfolio": [
+            {"symbol": "GLD", "weight": 99.52, "anchor": "US"},
+            {"symbol": "SLV", "weight": 0.48, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "165513",
+          "name": "中信保诚",
+          "category": "黄金原油",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "GLD",
+          "position": 89.93,
+          "valuation_portfolio": [
+            {"symbol": "GLD", "weight": 90.33, "anchor": "US"},
+            {"symbol": "GLD-EU", "weight": 9.67, "anchor": "EU"}
+          ]
+        }
+      ]
+    },
+    "QDII欧美": {
+      "description": "跟踪美股指数、行业ETF、跨境资产的LOF基金",
+      "db_categories": ["纯ETF", "QDII 欧美", "混合跨境"],
+      "funds": [
+        {
+          "code": "162411",
+          "name": "华宝油气",
+          "category": "纯ETF",
+          "trade_etf": "XOP",
+          "position": 95.0,
+          "valuation_portfolio": [
+            {"symbol": "XOP", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "162415",
+          "name": "美国消费",
+          "category": "纯ETF",
+          "trade_etf": "XLY",
+          "position": 94.0,
+          "valuation_portfolio": [
+            {"symbol": "XLY", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "161126",
+          "name": "标普医疗",
+          "category": "纯ETF",
+          "trade_etf": "RSPH",
+          "position": 95.0,
+          "valuation_portfolio": [
+            {"symbol": "RSPH", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "161127",
+          "name": "标普生物科技",
+          "category": "纯ETF",
+          "trade_etf": "XBI",
+          "position": 95.0,
+          "valuation_portfolio": [
+            {"symbol": "XBI", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "164906",
+          "name": "交银中概互联",
+          "category": "纯ETF",
+          "trade_etf": "KWEB",
+          "position": 92.0,
+          "valuation_portfolio": [
+            {"symbol": "KWEB", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "161125",
+          "name": "易方达标普500",
+          "category": "指数",
+          "target_type": "INDEX",
+          "trade_etf": "SPY",
+          "position": 95.0,
+          "valuation_portfolio": [
+            {"symbol": "SPY", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "161130",
+          "name": "易方达纳100",
+          "category": "指数",
+          "target_type": "INDEX",
+          "trade_etf": "QQQ",
+          "position": 94.0,
+          "valuation_portfolio": [
+            {"symbol": "QQQ", "weight": 100.0, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "164824",
+          "name": "工银印度",
+          "category": "混合跨境",
+          "valuation_object_type": "MULTI_ETF_ANCHOR",
+          "trade_etf": "INDA",
+          "position": 89.17,
+          "valuation_portfolio": [
+            {"symbol": "INDA", "weight": 59.4, "anchor": "US"},
+            {"symbol": "^INDA-EU", "weight": 34.78, "anchor": "EU"},
+            {"symbol": "^INDA-JP", "weight": 4.84, "anchor": "JP"},
+            {"symbol": "^INDA-HK", "weight": 0.98, "anchor": "HK"}
+          ]
+        },
+        {
+          "code": "501225",
+          "name": "景顺半导体芯片",
+          "category": "混合跨境",
+          "valuation_object_type": "CROSS_MARKET",
+          "position": 87.26,
+          "valuation_portfolio": [
+            {"symbol": "SOXX", "weight": 74.74, "anchor": "US"},
+            {"symbol": "SZ159560", "weight": 25.26, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "501312",
+          "name": "华宝海外科技",
+          "category": "混合跨境",
+          "valuation_object_type": "MULTI_ASSET",
+          "position": 89.86,
+          "valuation_portfolio": [
+            {"symbol": "ARKK", "weight": 20.85, "anchor": "US"},
+            {"symbol": "ARKG", "weight": 17.08, "anchor": "US"},
+            {"symbol": "ARKQ", "weight": 12.9, "anchor": "US"},
+            {"symbol": "SOXX", "weight": 10.58, "anchor": "US"},
+            {"symbol": "AIQ", "weight": 8.74, "anchor": "US"},
+            {"symbol": "QQQ", "weight": 8.29, "anchor": "US"},
+            {"symbol": "BOTZ", "weight": 8.28, "anchor": "US"},
+            {"symbol": "XLK", "weight": 7.17, "anchor": "US"},
+            {"symbol": "SMH", "weight": 4.77, "anchor": "US"},
+            {"symbol": "FINX", "weight": 1.34, "anchor": "US"}
+          ]
+        },
+        {
+          "code": "160644",
+          "name": "鹏华港美互联",
+          "category": "混合跨境",
+          "valuation_object_type": "MULTI_ASSET",
+          "position": 90.0,
+          "valuation_portfolio": [
+            {"symbol": "TSM", "weight": 14.79, "anchor": "US"},
+            {"symbol": "NVDA", "weight": 14.73, "anchor": "US"},
+            {"symbol": "SNDK", "weight": 13.94, "anchor": "US"},
+            {"symbol": "MU", "weight": 12.19, "anchor": "US"},
+            {"symbol": "00700", "weight": 10.71, "anchor": "HK"},
+            {"symbol": "GOOGL", "weight": 9.26, "anchor": "US"},
+            {"symbol": "09988", "weight": 7.63, "anchor": "HK"},
+            {"symbol": "00883", "weight": 6.44, "anchor": "HK"},
+            {"symbol": "AVGO", "weight": 5.68, "anchor": "US"},
+            {"symbol": "ASML", "weight": 4.64, "anchor": "US"}
+          ]
+        }
+      ]
+    },
+    "QDII亚洲": {
+      "description": "跟踪港股、亚洲市场指数的LOF基金",
+      "db_categories": ["QDII 亚洲"],
+      "funds": [
+        {
+          "code": "160322",
+          "name": "港股精选",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501310",
+          "name": "价值基金",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501305",
+          "name": "港股高股息",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501303",
+          "name": "恒生中型股",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501302",
+          "name": "恒生指数基金",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "160924",
+          "name": "恒生指数LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "164705",
+          "name": "恒生LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501021",
+          "name": "香港中小LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501306",
+          "name": "港股高股息LOFC",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "161831",
+          "name": "恒生国企LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501307",
+          "name": "银华高股息LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501301",
+          "name": "香港大盘LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "160717",
+          "name": "H股LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501311",
+          "name": "新经济港股通LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "501025",
+          "name": "香港银行LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        },
+        {
+          "code": "161124",
+          "name": "港股小盘LOF",
+          "category": "QDII 亚洲",
+          "position": 95.0
+        }
+      ]
+    },
+    "国内LOF": {
+      "description": "跟踪A股指数、行业的LOF基金（套利机会少，暂不重点监控）",
+      "db_categories": ["指数LOF", "其他", "国内LOF"],
+      "funds": []
+    },
+    "白银": {
+      "description": "跟踪白银期货的LOF基金",
+      "db_categories": ["白银", "白银LOF"],
+      "funds": [
+        {
+          "code": "161226",
+          "name": "国瑞白银期货",
+          "category": "白银",
+          "trade_future": "沪银Ag",
+          "position": 100.0
+        }
+      ]
+    }
+  },
+  "tab_mapping": {
+    "黄金原油": "黄金原油",
+    "QDII欧美": "QDII欧美",
+    "QDII亚洲": "QDII亚洲",
+    "国内LOF": "国内LOF",
+    "白银": "白银"
+  },
+  "usage_notes": {
+    "program1": "程序1(LOFarb)可直接读取此文件替换lof_config.yaml中的funds部分",
+    "program2": "程序2(jsl)可将fund_list.csv迁移到此文件",
+    "program3": "程序3(ArbDashboard)可从数据库导入此文件，或直接从JSON读取",
+    "category_mapping": "前端Tab通过db_categories映射数据库中的原始分类"
+  }
+}

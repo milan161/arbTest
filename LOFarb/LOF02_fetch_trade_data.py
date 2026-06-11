@@ -101,7 +101,7 @@ def init_trade_manager():
     with _trade_manager_lock:
         if trade_manager is not None: return
         try:
-            from readers.trade_manager import TradeManager
+            from arbcore.traders.trade_manager import TradeManager
             print("⚙️ [系统] 正在懒加载 TradeManager 交易引擎...")
             trade_manager = TradeManager()
             TDX_AVAILABLE = trade_manager.tdx_available
@@ -815,7 +815,9 @@ class LOFPriceReader:
                     init_trade_manager()
                     if TDX_AVAILABLE and tq:
                         try:
-                            tq.initialize(__file__)
+                            tdx_api_path = r'D:\new_tdx_test\PYPlugins\user'
+                            tdx_plugin_path = os.path.join(tdx_api_path, 'tqcenter.py')
+                            tq.initialize(tdx_plugin_path)
                             self.use_tdx = True
                             print("  🚀 [引擎启动] 【通达信新版】已成功挂载！")
                             print("  💡 [系统提示] 请确保您的通达信客户端已登录并保持运行。")

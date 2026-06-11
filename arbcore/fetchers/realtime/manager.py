@@ -1,10 +1,11 @@
-import logging
+﻿import logging
 from typing import List, Dict, Optional, Any
 from .base import BaseRealtimeFetcher
 from .guojin import GuojinQmtFetcher
 from .galaxy import GalaxyQmtFetcher
 from .sina import SinaRealtimeFetcher
 from .tdx import TdxRealtimeFetcher
+from .tencent import TencentRealtimeFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -13,16 +14,17 @@ class RealtimeMarketManager:
     实时行情管理器。
     负责协调多个数据源，实现优先级排序和自动降级。
     """
-    
+
     def __init__(self, db_manager=None, priority_list: List[str] = None):
         # 可用的 Fetcher 映射
         self.fetcher_classes = {
             "guojin": GuojinQmtFetcher,
             "galaxy": GalaxyQmtFetcher,
             "tdx": TdxRealtimeFetcher,
-            "sina": SinaRealtimeFetcher
+            "sina": SinaRealtimeFetcher,
+            "tencent": TencentRealtimeFetcher
         }
-        
+
         self.db_manager = db_manager
         self.priority_list = priority_list
         self.active_fetchers: Dict[str, BaseRealtimeFetcher] = {}
@@ -46,16 +48,33 @@ class RealtimeMarketManager:
         full_config = []
         if self.db_manager:
             full_config = self.db_manager.get_data_source_config("realtime_market")
-        
+
         if not full_config:
-            priority_names = self.priority_list or ["tdx", "guojin", "galaxy", "sina"]
+            priority_names = self.priority_list or ["tdx", "guojin", "galaxy", "tencent", "sina"]
             full_config = [{"source_name": name, "config_json": "{}"} for name in priority_names]
             self.priority_list = priority_names
         else:
             self.priority_list = [item['source_name'] for item in full_config]
-            
+
         logger.info(f"🚀 行情引擎启动，准备挂载数据源...")
         if self.system_status: self.system_status.add_milestone("INFO", "行情引擎启动，开始挂载数据源...")
+        
+        # [Master-Slave架构] 检查主交易程序 (LOFarb) 是否正在运行
+        import socket
+        lof_is_running = False
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.1)
+            # 5000 是 LOF02_fetch_trade_data.py 的主端口
+            if sock.connect_ex(("127.0.0.1", 5000)) == 0:
+                lof_is_running = True
+                
+        if lof_is_running:
+            msg = "⚠️ [主从架构] 检测到主交易程序(LOFarb)正在运行！当前为只读监控模式(Slave)，主动禁用通达信(tdx)行情，避免多开冲突崩溃。"
+            logger.warning(msg)
+            if self.system_status: self.system_status.add_milestone("WARNING", msg)
+            if "tdx" in self.priority_list:
+                self.priority_list.remove("tdx")
+            full_config = [item for item in full_config if item['source_name'] != 'tdx']
         
         import json
         source_name_map = {
@@ -64,11 +83,11 @@ class RealtimeMarketManager:
             "galaxy": "银河QMT",
             "sina": "新浪财经"
         }
-        
+
         for item in full_config:
             source_name_key = item['source_name']
             source_name_cn = source_name_map.get(source_name_key, source_name_key)
-            
+
             config_dict = {}
             try:
                 config_dict = json.loads(item.get('config_json', '{}'))
@@ -95,7 +114,7 @@ class RealtimeMarketManager:
                     msg = f"数据源已成功挂载: {source_name_cn}"
                     logger.info(f"✅ {msg}")
                     if self.system_status: self.system_status.add_milestone("SUCCESS", msg)
-                    
+
                     if self.symbols:
                         fetcher.subscribe(self.symbols)
                     
@@ -129,7 +148,7 @@ class RealtimeMarketManager:
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """按照优先级从活跃源中获取行情"""
-        for source_name in self.priority_list:
+        for source_name in (self.priority_list or ["tdx", "guojin", "galaxy", "tencent", "sina"]):
             if source_name in self.active_fetchers:
                 quote = self.active_fetchers[source_name].get_quote(symbol)
                 if quote and quote.get('price', 0) > 0:

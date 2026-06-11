@@ -182,9 +182,9 @@ class FundManager(BaseManager):
                 for item in fund_list:
                     conn.execute('''
                         INSERT OR REPLACE INTO unified_fund_list
-                        (category, fund_code, fund_name, related_index, pos_ratio)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (item['category'], item['code'], item['name'], item.get('related_index', '-'), item.get('pos_ratio', 0.95)))
+                        (category, fund_code, fund_name, related_index, pos_ratio, target_type)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (item['category'], item['code'], item['name'], item.get('related_index', '-'), item.get('pos_ratio', 0.95), item.get('target_type', 'ETF')))
                 conn.commit()
                 logger.info(f"Successfully synced {len(fund_list)} unified items to database.")
             except Exception as e:
@@ -194,8 +194,8 @@ class FundManager(BaseManager):
 
     def get_unified_fund_list(self) -> List[Dict[str, Any]]:
         conn = self._get_conn()
-        cursor = conn.execute("SELECT category, fund_code, fund_name, related_index, pos_ratio FROM unified_fund_list")
-        results = [{"category": r[0], "code": r[1], "name": r[2], "related_index": r[3], "pos_ratio": r[4]} for r in cursor.fetchall()]
+        cursor = conn.execute("SELECT category, fund_code, fund_name, related_index, pos_ratio, target_type FROM unified_fund_list")
+        results = [{"category": r[0], "code": r[1], "name": r[2], "related_index": r[3], "pos_ratio": r[4], "target_type": r[5]} for r in cursor.fetchall()]
         conn.close()
         return results
 

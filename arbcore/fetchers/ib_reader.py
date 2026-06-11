@@ -8,6 +8,20 @@ from datetime import datetime
 import yaml
 import random
 import os
+import sys
+import builtins
+
+# Windows GBK encoding safe print helper
+def print(*args, **kwargs):
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        try:
+            encoding = sys.stdout.encoding or 'gbk'
+            safe_args = [str(arg).encode(encoding, errors='replace').decode(encoding) for arg in args]
+            builtins.print(*safe_args, **kwargs)
+        except:
+            pass
 
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
@@ -15,10 +29,11 @@ from ibapi.contract import Contract
 from ibapi.order import Order
 
 class IBReader(EWrapper, EClient):
-    def __init__(self, client_id=None, on_price_update=None):
+    def __init__(self, client_id=None, on_price_update=None, db_manager=None):
         EClient.__init__(self, self)
         self.client_id = client_id if client_id is not None else random.randint(1000, 9999)
         self.on_price_update = on_price_update  # 注入回调函数解耦 SocketIO
+        self.db_manager = db_manager # 注入数据库管理器
         self.target_ports = [4001, 4002, 7496, 7497] 
         self.current_port_index = 0
         self.connected = False
@@ -79,16 +94,16 @@ class IBReader(EWrapper, EClient):
             if self.isConnected():
                 self.connected = True
                 self.retry_delay = 1.0
-                print(f"[IBReader] ✅ 连接成功 (端口: {target_port})")
+                print(f"[IBReader] [OK] 连接成功 (端口: {target_port})")
                 return True
             else:
-                print(f"[IBReader] ❌ 连接失败 (端口: {target_port})")
+                print(f"[IBReader] [ERROR] 连接失败 (端口: {target_port})")
                 self.disconnect()
                 self.connected = False
                 self.current_port_index = (self.current_port_index + 1) % len(self.target_ports)
                 return False
         except Exception as e:
-            print(f"[IBReader] ❌ 连接异常 (端口: {target_port}): {e}")
+            print(f"[IBReader] [ERROR] 连接异常 (端口: {target_port}): {e}")
             self.disconnect()
             self.connected = False
             self.current_port_index = (self.current_port_index + 1) % len(self.target_ports)
@@ -98,7 +113,7 @@ class IBReader(EWrapper, EClient):
         if self.isConnected():
             self.disconnect()
             self.connected = False
-            print("[IBReader] 🔌 已断开连接")
+            print("[IBReader] [INFO] 已断开连接")
 
     def fetch_prev_closes_once(self):
         """如果昨收数据为空，则尝试获取一次。"""
@@ -139,11 +154,11 @@ class IBReader(EWrapper, EClient):
              
         if current_prev_closes:
             self.prev_closes = current_prev_closes
-            print(f"[IBReader] 📊 已获取昨日收盘价: " + ", ".join([f"{k}=${v:.2f}" for k, v in self.prev_closes.items()]))
+            print(f"[IBReader] [INFO] 已获取昨日收盘价: " + ", ".join([f"{k}=${v:.2f}" for k, v in self.prev_closes.items()]))
         else:
             # 🛡️ 核心修复：如果获取失败，直接填入占位符，
             # 让 self.prev_closes 不再为空，从而彻底掐断无限重试的死循环，还控制台清净！
-            print("[IBReader] ⚠️ 未能获取到昨日收盘价(可能是并发超限、超时或非交易日无数据)。已终止重试。")
+            print("[IBReader] [WARNING] 未能获取到昨日收盘价(可能是并发超限、超时或非交易日无数据)。已终止重试。")
             self.prev_closes = {sym: 0.0 for sym in self.symbols}
 
     def start_polling(self):
@@ -160,26 +175,42 @@ class IBReader(EWrapper, EClient):
 
     def _polling_loop(self):
         while self.running:
-            # 兼容原有的 YAML 动态读取，遇到异常直接跳过(依赖外部传入 symbols)
+            # 兼容原有的 YAML 动态读取，并且优先支持从数据库加载白名单
             try:
-                with open('lof_config.yaml', 'r', encoding='utf-8') as f:
-                    cfg = yaml.safe_load(f)
-                    syms = set(["GLD", "USO", "XOP", "SLV", "SPY", "QQQ"])
-                    for fund in cfg.get('funds', []):
-                        for h in fund.get('valuation_portfolio', []):
-                            sym = h.get('symbol', '').split('-')[0].replace('^', '')
-                            # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
-                            is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
-                            if sym and not is_a_share: syms.add(sym)
-                        trade_etf = fund.get('trade_etf', '')
-                        if trade_etf:
-                            for s in str(trade_etf).replace('，', ',').split(','):
-                                s = s.strip().upper()
+                loaded = False
+                if self.db_manager:
+                    conn = self.db_manager._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT config_json FROM data_source_config WHERE module = 'ib_config' AND source_name = 'whitelist'")
+                    row = cursor.fetchone()
+                    conn.close()
+                    if row and row[0]:
+                        import json
+                        whitelist = json.loads(row[0]).get('symbols', [])
+                        if whitelist:
+                            self.symbols = whitelist
+                            loaded = True
+                
+                if not loaded:
+                    with open('lof_config.yaml', 'r', encoding='utf-8') as f:
+                        cfg = yaml.safe_load(f)
+                        syms = set(["GLD", "USO", "XOP", "SLV", "SPY", "QQQ"])
+                        for fund in cfg.get('funds', []):
+                            for h in fund.get('valuation_portfolio', []):
+                                sym = h.get('symbol', '').split('-')[0].replace('^', '')
                                 # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
-                                is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', s, re.IGNORECASE))
-                                if s and not is_a_share: syms.add(s)
-                    self.symbols = list(syms)
-            except: pass
+                                is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
+                                if sym and not is_a_share: syms.add(sym)
+                            trade_etf = fund.get('trade_etf', '')
+                            if trade_etf:
+                                for s in str(trade_etf).replace('，', ',').split(','):
+                                    s = s.strip().upper()
+                                    # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
+                                    is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', s, re.IGNORECASE))
+                                    if s and not is_a_share: syms.add(s)
+                        self.symbols = list(syms)
+            except Exception as e:
+                print(f"[IBReader] 加载订阅代码列表异常: {e}")
             
             if not self.connected:
                 print(f"[IBReader] 未连接，等待 {self.retry_delay:.1f}s 后重试...")
@@ -221,19 +252,24 @@ class IBReader(EWrapper, EClient):
                     self.sources[sym] = "订阅请求中..."
                     # 💡 核心修复：初始化时间戳，给予长连接 60 秒的建立宽限期，防止开局就误触兜底机制
                     self.last_tick_time[sym] = time.time()
-                    print(f"[IBReader] 📡 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
+                    print(f"[IBReader] [INFO] 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
             
             # 2. 安全兜底看门狗 (Watchdog) - 检查长连接是否生效
             current_timestamp = time.time()
             fallback_needed = []
+            if not hasattr(self, '_last_fallback_time'):
+                self._last_fallback_time = {}
+                
             for sym in self.symbols:
                 last_tick = self.last_tick_time.get(sym, 0)
-                # 如果超过 60 秒没收到真实推送，说明账号无此权限或行情断流，加入兜底队列
-                if current_timestamp - last_tick > 60:
+                last_fallback = self._last_fallback_time.get(sym, 0)
+                # 如果超过 60 秒没收到真实推送，并且距离上次历史快照请求已超过 300 秒，则允许再次加入兜底队列
+                if (current_timestamp - last_tick > 60) and (current_timestamp - last_fallback > 300):
                     fallback_needed.append(sym)
-
+ 
             if fallback_needed:
                 for sym in fallback_needed:
+                    self._last_fallback_time[sym] = current_timestamp
                     req_id_snap = self._get_next_req_id()
                     c_snap = Contract()
                     c_snap.symbol, c_snap.secType, c_snap.exchange, c_snap.currency = sym, "STK", "OVERNIGHT", "USD"
@@ -250,10 +286,12 @@ class IBReader(EWrapper, EClient):
                         self.prices[sym]['ask'] = price # 快照拿不到Ask，用Bid平替
                         self.sources[sym] = "安全快照"
                         self.last_update_time = datetime.now()
+                        # 重置 last_tick_time 以符合 60 秒常规检测，但下次兜底仍受 300 秒限制保护
+                        self.last_tick_time[sym] = current_timestamp
             
             if self.prices:
                 log_msg = ", ".join([f"{k}=${v.get('bid',0):.2f}({self.sources.get(k,'')})" for k, v in self.prices.items() if isinstance(v, dict)])
-                print(f"[IBReader] 📊 已更新: {log_msg}")
+                print(f"[IBReader] [INFO] 已更新: {log_msg}")
             
             # 长连接模式下，循环短暂停留即可，底层的 tickPrice 会毫秒级疯狂更新字典。只有走到兜底才需要长休眠防封禁。
             time.sleep(30 if fallback_needed else 5)
@@ -261,7 +299,7 @@ class IBReader(EWrapper, EClient):
     def nextValidId(self, orderId: int):
         super().nextValidId(orderId)
         self.next_order_id = orderId
-        print(f"[IBReader] ✅ 获取到下一个可用订单 ID: {orderId}")
+        print(f"[IBReader] [OK] 获取到下一个可用订单 ID: {orderId}")
 
     def error(self, reqId, *args):
         if len(args) >= 2:
@@ -276,19 +314,19 @@ class IBReader(EWrapper, EClient):
             return
             
         if errorCode in [2103, 2105]:
-            print(f"[IBReader] ⚠️ IB数据农场连接断开 (代码 {errorCode}): {errorString} - 这将导致长连接无数据！")
+            print(f"[IBReader] [WARNING] IB数据农场连接断开 (代码 {errorCode}): {errorString} - 这将导致长连接无数据！")
             return
             
         # 智能诊断：拦截典型的“无行情订阅权限”错误码
         if errorCode in [354, 10090, 10167, 10168]:
-            print(f"[IBReader] 💡 提示 (代码 {errorCode}): 您的账号无美股实时行情订阅权限，系统已自动转入【安全快照】兜底模式，不影响套利运行。")
+            print(f"[IBReader] [INFO] 提示 (代码 {errorCode}): 您的账号无美股实时行情订阅权限，系统已自动转入【安全快照】兜底模式，不影响套利运行。")
             return
             
-        print(f"[IBReader] ⚠️ Error {errorCode} (ReqId: {reqId}): {errorString}")
+        print(f"[IBReader] [WARNING] Error {errorCode} (ReqId: {reqId}): {errorString}")
         
         # 🛡️ 核心修复：如果一个同步请求(如历史数据)发生错误，必须设置其Event，否则主线程会卡死
         if reqId in self.req_events:
-            print(f"[IBReader] 💡 提示: 请求 {reqId} 发生错误，已解除其等待锁。")
+            print(f"[IBReader] [INFO] 提示: 请求 {reqId} 发生错误，已解除其等待锁。")
             self.req_events[reqId].set()
 
         if errorCode in [502, 504, 1100, 1101, 1102]:

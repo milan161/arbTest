@@ -101,9 +101,11 @@ class SinaRealtimeFetcher(BaseRealtimeFetcher):
                         "last_price": last_price,
                         "price_change": round(price_change, 2),
                         "volume": volume,
-                        "amount": round(amount / 10000, 2), # 转换为万元
-                        "ask": [ask1],
-                        "bid": [float(parts[6])],
+                        "amount": round(amount / 10000, 2), # 转换为了万元
+                        "ask": [float(parts[21]), float(parts[23]), float(parts[25]), float(parts[27]), float(parts[29])],
+                        "ask_vol": [int(parts[20]), int(parts[22]), int(parts[24]), int(parts[26]), int(parts[28])],
+                        "bid": [float(parts[11]), float(parts[13]), float(parts[15]), float(parts[17]), float(parts[19])],
+                        "bid_vol": [int(parts[10]), int(parts[12]), int(parts[14]), int(parts[16]), int(parts[18])],
                         "time": f"{parts[30]} {parts[31]}",
                         "source": self.name
                     }

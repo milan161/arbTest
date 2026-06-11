@@ -115,11 +115,11 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?)
                 ''', historical_sources)
 
-            conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95, target_type TEXT DEFAULT 'ETF')''')
             conn.execute('''CREATE TABLE IF NOT EXISTS jsl_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95)''')
-            try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN pos_ratio REAL DEFAULT 0.95')
+            try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
             except sqlite3.OperationalError: pass
-            try: conn.execute('ALTER TABLE jsl_fund_list ADD COLUMN pos_ratio REAL DEFAULT 0.95')
+            try: conn.execute('ALTER TABLE jsl_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
             except sqlite3.OperationalError: pass
 
             # JSL Index history and realtime tables
@@ -168,6 +168,39 @@ class DatabaseManager:
                 )
             ''')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_intraday_code_date ON fund_intraday_quotes(fund_code, date)')
+
+            # [V4.6] 新增实盘交易对账表 (强化多账号与快速赎回支持)
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fund_code TEXT NOT NULL,
+                    fund_name TEXT,
+                    account_suffix TEXT, -- 账号尾号 (如 1 或 6)
+                    action TEXT, -- BUY / SELL / REDEEM
+                    volume INTEGER,
+                    price REAL,
+                    amount REAL,
+                    hedge_symbol TEXT,
+                    hedge_price REAL,
+                    hedge_vol INTEGER,
+                    fees REAL DEFAULT 0,
+                    trade_date TEXT DEFAULT (date('now', 'localtime')),
+                    remind_date TEXT, -- 赎回提醒日
+                    status TEXT DEFAULT 'ACTIVE', -- ACTIVE / CLOSED
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # [V4.6] 基金费率与佣金设置表
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS fund_fees (
+                    fund_code TEXT PRIMARY KEY,
+                    redemption_fee_rate REAL DEFAULT 0.5, -- 正常赎回费率 (%)
+                    commission_rate REAL DEFAULT 0, -- 券商返佣或折扣 (%)
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
 
             conn.commit()
             conn.close()

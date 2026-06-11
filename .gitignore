@@ -1,7 +1,13 @@
+# === ArbDashboard 专用私密文件夹 ===
+ArbDashboard/backend/private/
+ArbDashboard/frontend/src/private/
+ArbDashboard/backend/core/private/
+
 # === 私密配置 ===
 account_private.py
 arb_config.yaml
 *.local.py
+.env
 
 # === 禁止上传的指定文件 ===
 LOFarb/LOF004_sandbox.py

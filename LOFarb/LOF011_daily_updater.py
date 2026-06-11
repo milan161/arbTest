@@ -95,7 +95,7 @@ class DailyUpdater(BaseApp):
                 local_path = os.path.join(local_sync_dir, remote_file)
                 
                 # [性能优化] 如果数据库已经同步过该日期，且本地已存在该文件，则直接跳过读取，减少内存压力
-                sync_key = "woody_lof_batch"
+                sync_key = f"{data_type}_vps_sync"
                 if os.path.exists(local_path) and self.db.is_access_synced_today(file_date, sync_key):
                     # self.logger.info(f"   ⏩ [VPS] 日期 {file_date} 已同步，跳过读取。")
                     continue
@@ -316,11 +316,36 @@ class DailyUpdater(BaseApp):
         self.logger.info("=== 步骤三：抓取汇率（人民币中间价） ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
 
+        # Level 0: 尝试从 VPS 增量同步汇率数据并入库
+        vps_fx_data = self._try_sync_all_from_vps('fx')
+        if vps_fx_data:
+            self.logger.info(f"🔄 [VPS] 发现 {len(vps_fx_data)} 份历史汇率数据，正在同步入库...")
+            for item in vps_fx_data:
+                file_date = item['date']
+                content = item['content']
+                try:
+                    date_info = content.get('date')
+                    usd_val = content.get('usd_cny_mid')
+                    hkd_val = content.get('hkd_cny_mid')
+                    if date_info and usd_val:
+                        date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
+                        self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
+                        self.logger.info(f"   ✅ [VPS] 同步入库汇率: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
+                        # 标记云端文件在此日期已完成同步
+                        self.db.mark_access_synced(file_date, 'fx_vps_sync')
+                        # 只有当同步得到的汇率真实日期就是今天（或更晚），我们才认为今日汇率已同步完成
+                        if date_info_str >= today_str:
+                            self.db.mark_access_synced(today_str, source='official_exchange_rate')
+                except Exception as e:
+                    self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 汇率时出错: {e}")
+
+        # 检查今天是否已经同步到最新的汇率
         if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
-            self.logger.info("✅ 今日已获取过人民币中间价，跳过。")
+            self.logger.info("✅ 今日已同步过人民币中间价，跳过实时抓取。")
             return
 
-        # TODO: 暂时使用 data_fetcher 作为过渡，后续可全量迁移至 HistoricalDataManager
+        # Level 1: 实时抓取作为兜底
+        self.logger.info("📡 [Level 1] 尝试实时抓取人民币中间价...")
         from arbcore.fetchers.data_fetcher import data_fetcher
         exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
         if exchange_rate_data:
@@ -332,7 +357,14 @@ class DailyUpdater(BaseApp):
                     hkd_val = exchange_rate_data.get('hkd_cny_mid')
                     self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
                     self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
-                    self.db.mark_access_synced(today_str, source='official_exchange_rate')
+                    
+                    # 关键修复：只有当抓取到的汇率实际生效日期是今天（或更晚）时，才标记今日已同步
+                    # 如果抓到的是昨天的日期，说明今天最新的还没更新，我们绝不标记今日同步，以便稍后重试
+                    if date_info_str >= today_str:
+                        self.db.mark_access_synced(today_str, source='official_exchange_rate')
+                        self.logger.info(f"✅ 成功获取到今日 ({today_str}) 最新汇率，已打标。")
+                    else:
+                        self.logger.warning(f"⚠️ 抓取到的汇率日期为过去日期 ({date_info_str})，未更新到今天，因此不标记今日已同步。")
                 except Exception as e:
                     self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
@@ -372,6 +404,7 @@ class DailyUpdater(BaseApp):
         """步骤四：抓取各基金的净值和收盘价"""
         self.logger.info("=== 步骤四：抓取各基金最新净值和收盘价 (标准库模式) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
+        current_hour = datetime.now().hour
 
         for fund in self.config.get('funds', []):
             code = str(fund.get('code', ''))
@@ -388,6 +421,47 @@ class DailyUpdater(BaseApp):
                         self.db.save_unified_history(date_str=d_str, fund_code=code, volume=row.get('volume'), turnover_rate=row.get('turnover_rate'))
                     self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
                     self.logger.info(f"✅ [{code}] 历史价格同步完成")
+
+            # --- 2. 获取东财净值 ---
+            def get_prev_trading_day(dt):
+                t = dt - timedelta(days=1)
+                while t.weekday() >= 5: t -= timedelta(days=1)
+                return t
+                
+            t_1_date = get_prev_trading_day(datetime.now())
+            t_2_date = get_prev_trading_day(t_1_date)
+            
+            # 15:00之前预期只有T-2的净值，15:00之后预期会有T-1的净值
+            expected_nav_date = t_2_date.strftime('%Y-%m-%d') if current_hour < 15 else t_1_date.strftime('%Y-%m-%d')
+            
+            conn = self.db._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(date) FROM fund_data WHERE fund_code = ? AND nav IS NOT NULL", (code,))
+            max_nav_row = cursor.fetchone()
+            conn.close()
+            
+            db_max_nav_date = max_nav_row[0] if max_nav_row and max_nav_row[0] else "2000-01-01"
+            
+            if db_max_nav_date >= expected_nav_date:
+                if current_hour < 15:
+                    self.logger.info(f"⏳ [{code}] 当前未到15:00，T-1净值未发。本地已拥有T-2及之前最新净值({db_max_nav_date})，暂不请求东财。")
+                else:
+                    self.logger.info(f"✅ [{code}] 数据库已存在预期最新净值 ({db_max_nav_date})，跳过东财接口...")
+                self.db.mark_access_synced(today_str, source=f'lof_nav_{code}')
+                continue
+                
+            self.logger.info(f"🔍 [{code}] 数据库最新净值({db_max_nav_date})落后于预期进度({expected_nav_date})，前往东财获取...")
+            nav_df = self.hist_manager.get_nav(code, source="eastmoney")
+            if not nav_df.empty:
+                latest_nav_date = nav_df['date'].max().strftime('%Y-%m-%d')
+                self.logger.info(f"✅ [{code}] 获取到历史净值，最新日期: {latest_nav_date}")
+                for _, row in nav_df.iterrows():
+                    d_str = row['date'].strftime('%Y-%m-%d')
+                    self._safe_save_fund_data(date_str=d_str, fund_code=code, nav=row['nav'])
+                if latest_nav_date >= expected_nav_date:
+                    self.db.mark_access_synced(today_str, source=f'lof_nav_{code}')
+            else:
+                self.logger.warning(f"⚠️ [{code}] 东财接口未返回任何净值数据。")
 
     def step5_fetch_usa_market_data(self):
         """步骤五：抓取美股市场交易数据"""
