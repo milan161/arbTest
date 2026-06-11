@@ -50,7 +50,13 @@ class DynamicValuationCalculator:
             )
             for _, r in etf_df.iterrows():
                 # 保留完整符号（如 ^USO-EU），不要去掉 ^ 前缀
-                base_row[r['symbol']] = r['price']
+                sym = r['symbol']
+                base_row[sym] = r['price']
+                # 同时存一份不带 ^ 的以防匹配失败
+                if sym.startswith('^'):
+                    base_row[sym[1:]] = r['price']
+                else:
+                    base_row['^' + sym] = r['price']
 
             self._base_data_cache[fund_code] = base_row
             return base_row
