@@ -38,13 +38,13 @@ class DynamicValuationCalculator:
             # 联表查询：净值 + 因子 + 汇率
             query = """
                 SELECT 
-                    a.date, a.nav, a.price as close, 
+                    a.date, COALESCE(a.nav, b.nav) as nav, a.price as close, 
                     c.usd_cny_mid as exchange_rate,
                     b.position, b.hedge, b.calibration
-                FROM fund_data a
-                JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
-                JOIN exchange_rate c ON a.date = c.date
-                WHERE a.fund_code = ? AND a.nav IS NOT NULL AND a.nav > 0
+                FROM unified_fund_history a
+                LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
+                LEFT JOIN exchange_rate c ON a.date = c.date
+                WHERE a.fund_code = ? AND COALESCE(a.nav, b.nav) IS NOT NULL AND COALESCE(a.nav, b.nav) > 0
                 ORDER BY a.date DESC LIMIT 1
             """
             df = pd.read_sql(query, conn, params=(fund_code,))

@@ -339,13 +339,13 @@ class FundService:
                 
                 if not metrics_df.empty:
                     # 关键：锁定最新有效净值日期
-                    valid_navs = metrics_df.dropna(subset=['nav'])
+                    valid_navs = metrics_df[metrics_df['nav'] > 0]
                     if not valid_navs.empty:
                         metrics['nav'] = valid_navs.iloc[0]['nav']
                         metrics['nav_date'] = valid_navs.iloc[0]['date']
                     
                     # 锁定最新静态估值
-                    valid_vals = metrics_df.dropna(subset=['static_val'])
+                    valid_vals = metrics_df[metrics_df['static_val'] > 0]
                     if not valid_vals.empty and float(valid_vals.iloc[0]['static_val']) > 0:
                         val = float(valid_vals.iloc[0]['static_val'])
                         # 🚀 脏数据拦截：如果 static_val 偏离 nav 超过 50%（如 0.0476 vs 1.78），必定是异常脏数据，强制使用 nav
@@ -393,11 +393,14 @@ class FundService:
 
                 # 2. [V4.0] 灵魂逻辑：现价必须从实时接口获取（毫秒级），用于套利计算
                 if self.market_data_service:
-                    rt = self.market_data_service.get_realtime_quote(code)
-                    if rt and rt.get('price'):
-                        metrics['price'] = rt['price']  # 毫秒级实时价格
-                        if rt.get('amount'):
-                            metrics['volume'] = rt['amount']
+                    try:
+                        rt = self.market_data_service.get_realtime_quote(code)
+                        if rt and rt.get('price'):
+                            metrics['price'] = rt['price']  # 毫秒级实时价格
+                            if rt.get('amount'):
+                                metrics['volume'] = rt['amount']
+                    except Exception as e:
+                        logger.error(f"Error getting realtime quote for {code}: {e}")
                 
                 # 3. [V6.1 核心机制升级] 永远优先实时计算最新估值，仅在实时计算失败时才从采样表进行历史兜底
                 metrics['rt_val'] = None
@@ -494,13 +497,19 @@ class FundService:
                     # 3.3 【美股原油/黄金等高价值一篮子基金】 - 保持原有基于 lof_config.yaml 的矩阵公式推演
                     calculator = self._get_calculator() if not metrics.get('rt_val') else None
                     if calculator:
-                        # 获取基金配置
-                        fund_config = self.config_service.get_full_config().get('funds', [])
-                        fund_cfg = None
-                        for f in fund_config:
-                            if str(f.get('code')) == code:
-                                fund_cfg = f
-                                break
+                        # 获取基金配置(动态从数据库构建，彻底废弃 yaml)
+                        fund_cfg = {
+                            "code": code,
+                            "trade_etf": fund.get('related_index', ''),
+                            "holdings": {"equity_ratio": float(fund.get('pos_ratio') or 0.95) * 100},
+                            "trade_future": "CL" if "原油" in str(fund.get('fund_name')) else ("GC" if "金" in str(fund.get('fund_name')) else ("AG0" if "白银" in str(fund.get('fund_name')) else ""))
+                        }
+                        try:
+                            basket_df = pd.read_sql("SELECT underlying_symbol as symbol, weight FROM fund_basket_weights WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)", conn, params=(code, code))
+                            if not basket_df.empty:
+                                fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
+                        except:
+                            pass
                         
                         if fund_cfg:
                             # 获取最新汇率
@@ -519,7 +528,7 @@ class FundService:
                                 # 获取实时 ETF 价格
                                 current_etfs = {}
                                 if self.market_data_service:
-                                    portfolio = fund_cfg.get('valuation_portfolio', []) or fund_cfg.get('hedging_portfolio', [])
+                                    portfolio = fund_cfg.get('valuation_portfolio', [])
                                     for item in portfolio:
                                         sym = item.get('symbol', '').replace('^', '')
                                         # 去掉地区后缀，得到基础代码 USO/GLD
@@ -695,7 +704,7 @@ class FundService:
 
             # [核心修复] 锚点追溯：确保 nav_date 和 nav 永远不是空的
             # 如果第一行没有 nav，我们需要往后找
-            valid_nav_rows = df.dropna(subset=['nav'])
+            valid_nav_rows = df[df['nav'] > 0]
             if not valid_nav_rows.empty:
                 latest_nav = valid_nav_rows.iloc[0]['nav']
                 latest_nav_date = valid_nav_rows.iloc[0]['date']
@@ -713,6 +722,10 @@ class FundService:
             # 清理所有 NaN 和 Infinity 以符合 JSON 规范
             import numpy as np
             df = df.replace([np.inf, -np.inf], np.nan)
+            # 汇率和净值如果有空缺，往历史记录找（因为倒序，用 bfill）
+            if 'usd_cny_mid' in df.columns:
+                df['usd_cny_mid'] = df['usd_cny_mid'].bfill()
+            df['nav'] = df['nav'].bfill()
             df = df.fillna(0)
 
             # 2. 为前端摘要页准备一个特殊的第一行 (注入最新锚点信息)

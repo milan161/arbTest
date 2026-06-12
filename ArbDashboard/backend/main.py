@@ -409,13 +409,30 @@ async def get_fund_basket(code: str):
 @app.get("/api/fund/{code}/valuation_meta")
 async def get_fund_valuation_meta(code: str):
     try:
-        # 1. 获取 YAML 配置中的基金信息
-        cfg = config_manager_service.load_config()
-        funds = cfg.get('funds', [])
-        fund_cfg = next((f for f in funds if str(f.get('code')) == code), None)
-        if not fund_cfg:
-            return {"status": "error", "message": f"Fund {code} not found in config"}
+        # 1. 获取数据库中的基金信息
+        conn = fund_service.db._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT fund_name, related_index, pos_ratio FROM unified_fund_list WHERE fund_code=?", (code,))
+        f_row = cursor.fetchone()
+        if not f_row:
+            return {"status": "error", "message": f"Fund {code} not found in database"}
             
+        trade_future = ""
+        if "原油" in str(f_row[0]) or "USO" in str(f_row[1]): trade_future = "CL"
+        elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]): trade_future = "GC"
+        elif "白银" in str(f_row[0]): trade_future = "AG0"
+            
+        fund_cfg = {
+            "code": code,
+            "trade_etf": f_row[1] or '',
+            "position": float(f_row[2] or 0.95) * 100,
+            "trade_future": trade_future
+        }
+        
+        basket_df = pd.read_sql("SELECT underlying_symbol as symbol, weight FROM fund_basket_weights WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)", conn, params=(code, code))
+        if not basket_df.empty:
+            fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
+        
         # 2. 获取底层的 calculator 基准数据
         calculator = fund_service._get_calculator()
         base_data = calculator.get_base_data(code) if calculator else None
@@ -428,6 +445,8 @@ async def get_fund_valuation_meta(code: str):
                     base_etf_price = base_data.get(trade_etf) or base_data.get(f"^{trade_etf}")
                     base_nav = base_data.get('nav')
                     base_pos = base_data.get('position')
+                    if base_pos is None or float(base_pos) <= 0:
+                        base_pos = float(fund_cfg.get('position', 95.0)) / 100.0
                     base_fx = base_data.get('exchange_rate')
                     if base_etf_price and base_nav and base_pos and base_fx:
                         calc_hedge = (float(base_etf_price) * float(base_fx)) / (float(base_nav) * float(base_pos))
@@ -441,7 +460,7 @@ async def get_fund_valuation_meta(code: str):
         latest_fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else 7.0
         
         # 4. 获取最新实时行情 (用于标的 ETF 价格和期货价格)
-        portfolio = fund_cfg.get('valuation_portfolio', []) or fund_cfg.get('hedging_portfolio', [])
+        portfolio = fund_cfg.get('valuation_portfolio', [])
         etf_symbols = []
         for item in portfolio:
             sym = item.get('symbol', '').replace('^', '')
@@ -453,29 +472,37 @@ async def get_fund_valuation_meta(code: str):
             
         realtime_quotes = {}
         for sym in etf_symbols:
-            q = market_data_service.get_realtime_quote(sym) if market_data_service else None
-            if q:
-                realtime_quotes[sym] = {
-                    'price': q.get('price'),
-                    'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                    'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
-                    'source': q.get('source', '')
-                }
-            else:
+            try:
+                q = market_data_service.get_realtime_quote(sym) if market_data_service else None
+                if q:
+                    realtime_quotes[sym] = {
+                        'price': q.get('price'),
+                        'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
+                        'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                        'source': q.get('source', '')
+                    }
+                else:
+                    realtime_quotes[sym] = None
+            except Exception as e:
+                logger.error(f"Error getting quote for {sym}: {e}")
                 realtime_quotes[sym] = None
             
         future_symbol = fund_cfg.get('trade_future', '')
         future_quote = None
         if future_symbol:
-            q = market_data_service.get_realtime_quote(future_symbol) if market_data_service else None
-            if q:
-                future_quote = {
-                    'price': q.get('price'),
-                    'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                    'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
-                    'source': q.get('source', '')
-                }
-            else:
+            try:
+                q = market_data_service.get_realtime_quote(future_symbol) if market_data_service else None
+                if q:
+                    future_quote = {
+                        'price': q.get('price'),
+                        'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
+                        'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                        'source': q.get('source', '')
+                    }
+                else:
+                    future_quote = None
+            except Exception as e:
+                logger.error(f"Error getting future quote for {future_symbol}: {e}")
                 future_quote = None
             
         # 5. 获取 T-1 基准估值日数据
@@ -487,7 +514,7 @@ async def get_fund_valuation_meta(code: str):
                 FROM unified_fund_history h
                 LEFT JOIN exchange_rate r ON h.date = r.date
                 LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
-                WHERE h.fund_code = ? 
+                WHERE h.fund_code = ? AND COALESCE(h.nav, f.nav) IS NOT NULL AND COALESCE(h.nav, f.nav) > 0
                 ORDER BY h.date DESC LIMIT 1
             """, (code,))
             row = cursor.fetchone()
