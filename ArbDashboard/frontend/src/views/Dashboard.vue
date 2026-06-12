@@ -10,26 +10,26 @@
                   <template #icon><n-icon><Bot /></n-icon></template>
                   {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
                 </n-tag>
-                <n-tag :type="(marketOverview.active_sources || []).includes('tdx') ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasTdx ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     通达信
                 </n-tag>
                 <div style="display: flex; gap: 4px; justify-content: center;">
-                    <n-tag :type="(marketOverview.active_sources || []).some(s => s.includes('IB') && !s.includes('未运行')) ? 'success' : 'warning'" size="small" round style="font-weight: bold; flex: 1; justify-content: center; cursor: pointer;" @click="reconnectIB">
+                    <n-tag :type="hasIb ? 'success' : 'warning'" size="small" round style="font-weight: bold; flex: 1; justify-content: center; cursor: pointer;" @click="reconnectIB">
                         <template #icon><n-icon><Zap /></n-icon></template>
                         IB
                     </n-tag>
                 </div>
                 
-                <n-tag :type="(marketOverview.active_sources || []).includes('galaxy') ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasGalaxy ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     银河QMT
                 </n-tag>
-                <n-tag :type="(marketOverview.active_sources || []).includes('guojin') ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasGuojin ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     国金QMT
                 </n-tag>
-                <n-tag :type="(marketOverview.active_sources || []).some(s => s.includes('富途')) ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasFutu ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     富途
                 </n-tag>
@@ -148,32 +148,20 @@ const marketOverview = ref({
   stats: { fund_count: 0, system_health: 0 } as any
 })
 
-const domesticSources = computed(() => {
-  const sources = (marketOverview.value.active_sources || []) as string[]
-  const domesticNames = ['TDX', 'QMT', 'SINA', '新浪', '银河', '国金', 'GALAXY']
-  return sources
-    .filter(s => domesticNames.some(d => s.toUpperCase().includes(d)))
-    .map(s => {
-      const upper = s.toUpperCase()
-      if (upper.includes('TDX')) return '通达信'
-      if (upper.includes('QMT')) return 'QMT'
-      if (upper.includes('SINA') || upper.includes('新浪')) return '新浪'
-      return s
-    })
+const hasTdx = computed(() => (marketOverview.value.active_sources || []).includes('tdx'))
+const hasIb = computed(() => {
+  const sources = marketOverview.value.active_sources || []
+  return sources.some(s => s.includes('IB') && !s.includes('未运行'))
 })
-
-const foreignSources = computed(() => {
-  const sources = (marketOverview.value.active_sources || []) as string[]
-  const foreignNames = ['IB', 'FUTU', '富途', 'INTERACTIVE']
-  return sources
-    .filter(s => foreignNames.some(f => s.toUpperCase().includes(f)))
-    .map(s => {
-      const upper = s.toUpperCase()
-      if (s === 'IB (未运行)') return s
-      if (upper.includes('IB')) return 'IB'
-      if (upper.includes('FUTU') || upper.includes('富途')) return '富途'
-      return s
-    })
+const hasIbNotRunning = computed(() => {
+  const sources = marketOverview.value.active_sources || []
+  return sources.some(s => s.includes('IB (未运行)'))
+})
+const hasGalaxy = computed(() => (marketOverview.value.active_sources || []).includes('galaxy'))
+const hasGuojin = computed(() => (marketOverview.value.active_sources || []).includes('guojin'))
+const hasFutu = computed(() => {
+  const sources = marketOverview.value.active_sources || []
+  return sources.some(s => s.includes('富途'))
 })
 
 const reconnectingIB = ref(false)
