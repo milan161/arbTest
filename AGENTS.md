@@ -364,6 +364,53 @@ source = get_symbol_source('GLD')  # → 'IB'
 # 根据 source 选择对应的 fetcher
 ```
 
+#### 8.4.3 SQLite 历史权重查询重影问题 ❌
+
+**错误**：大一统数据库迁移后，直接 SELECT 权重表
+```sql
+SELECT underlying_symbol, weight FROM fund_basket_weights WHERE fund_code=?
+-- 结果：由于数据库保留了历史日期的权重记录，这会返回几百条重复的 ETF 权重，导致前端解析崩溃。
+```
+
+**正确**：必须增加对最新日期的过滤
+```sql
+SELECT underlying_symbol as symbol, weight FROM fund_basket_weights 
+WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)
+```
+
+#### 8.4.4 API 异常熔断与防崩溃 ❌
+
+**错误**：在 `for` 循环中批量获取实时行情而不加 `try-except`
+```python
+# 一旦 QMT (xtquant) 或 TDX 突然断线，抛出 Exception，整个 API 接口直接 500 崩溃，前端显示白屏。
+rt = market_data_service.get_realtime_quote(code)
+```
+
+**正确**：**必须**为底层行情驱动添加熔断保护（Error Boundary）
+```python
+try:
+    rt = market_data_service.get_realtime_quote(code)
+except Exception as e:
+    logger.error(f"Error getting quote for {code}: {e}")
+    rt = None  # 优雅降级，前端继续展示 T-1 数据
+```
+
+#### 8.4.5 对冲比例 (Hedge) 兜底逻辑 ❌
+
+**错误**：直接依赖 `fund_daily_factors` 表里的 `hedge` 字段
+```python
+# 如果某天 VPS 数据抓取失败或对应标的（如 160723 嘉实原油）没有录入 position，导致数据库里 hedge 为 None。
+# 前端收到 null 的 hedge，会直接隐藏建仓股数和一篮子明细拆解！
+```
+
+**正确**：如果在 `base_data` 中发现 `position` 为 `None`，必须动态读取 `fund_cfg` 里的静态默认仓位（如 95%）来反向推演出 `hedge` 并补齐。
+```python
+base_pos = base_data.get('position')
+if base_pos is None or float(base_pos) <= 0:
+    base_pos = float(fund_cfg.get('position', 95.0)) / 100.0
+# 依据公式重新推算: (ETF价 * 汇率) / (LOF基准净值 * 仓位比例)
+```
+
 ---
 
 ## 九、开发规范
