@@ -154,6 +154,24 @@ HK_STOCK_MAP = {
     '00941': 'FUTU',   # 中国移动
     '01398': 'FUTU',   # 工商银行
     '02318': 'FUTU',   # 中国平安
+    '00883': 'FUTU',   # 中国海洋石油
+}
+
+# [V7.2] 混合基金成分股（美股）强制走富途分流
+# 减轻 IB 负担，IB 仅处理核心套利标的 (GLD, USO, XOP等)
+US_STOCK_FUTU_MAP = {
+    'TSM': 'FUTU',    # 台积电
+    'NVDA': 'FUTU',   # 英伟达
+    'SNDK': 'FUTU',   # 闪迪
+    'MU': 'FUTU',     # 美光科技
+    'GOOGL': 'FUTU',  # 谷歌
+    'AVGO': 'FUTU',   # 博通
+    'ASML': 'FUTU',   # 阿斯麦
+    'AAPL': 'FUTU',   # 苹果
+    'MSFT': 'FUTU',   # 微软
+    'AMZN': 'FUTU',   # 亚马逊
+    'META': 'FUTU',   # Meta
+    'TSLA': 'FUTU',   # 特斯拉
 }
 
 # 期货映射表（从通达信获取）
@@ -251,6 +269,7 @@ SYMBOL_SOURCE_MAP = {}
 SYMBOL_SOURCE_MAP.update(US_ETF_MAP)
 SYMBOL_SOURCE_MAP.update(CN_ETF_MAP)
 SYMBOL_SOURCE_MAP.update(HK_STOCK_MAP)
+SYMBOL_SOURCE_MAP.update(US_STOCK_FUTU_MAP) # 添加富途美股专属分流
 SYMBOL_SOURCE_MAP.update(FUTURES_MAP)
 SYMBOL_SOURCE_MAP.update(INDEX_MAP)
 SYMBOL_SOURCE_MAP.update(WOODY_MAP)  # 添加 Woody 映射表

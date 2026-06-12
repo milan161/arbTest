@@ -10,6 +10,11 @@ import random
 import os
 import sys
 import builtins
+import logging
+
+# 屏蔽 IBAPI 底层的 INFO 级别刷屏日志
+logging.getLogger('ibapi.client').setLevel(logging.WARNING)
+logging.getLogger('ibapi.wrapper').setLevel(logging.WARNING)
 
 # Windows GBK encoding safe print helper
 def print(*args, **kwargs):
@@ -23,10 +28,22 @@ def print(*args, **kwargs):
         except:
             pass
 
-from ibapi.client import EClient
-from ibapi.wrapper import EWrapper
-from ibapi.contract import Contract
-from ibapi.order import Order
+try:
+    from ibapi.client import EClient
+    from ibapi.wrapper import EWrapper
+    from ibapi.contract import Contract
+    from ibapi.order import Order
+except ImportError:
+    class EClient:
+        def __init__(self, *args, **kwargs): pass
+        def connect(self, *args, **kwargs): pass
+        def disconnect(self, *args, **kwargs): pass
+        def isConnected(self, *args, **kwargs): return False
+    class EWrapper:
+        def __init__(self, *args, **kwargs): pass
+    class Contract: pass
+    class Order: pass
+    print("Warning: ibapi not installed. IBReader will not function.")
 
 class IBReader(EWrapper, EClient):
     def __init__(self, client_id=None, on_price_update=None, db_manager=None):
@@ -137,7 +154,10 @@ class IBReader(EWrapper, EClient):
             req_id_prev = self._get_next_req_id()
             req_ids.append(req_id_prev)
             c_prev = Contract()
-            c_prev.symbol, c_prev.secType, c_prev.exchange, c_prev.currency = sym, "STK", "SMART", "USD"
+            c_prev.symbol = sym
+            c_prev.secType = "IND" if sym == "VIX" else "STK"
+            c_prev.exchange = "CBOE" if sym == "VIX" else "SMART"
+            c_prev.currency = "USD"
             self.req_events[req_id_prev] = threading.Event()
             self.reqHistoricalData(req_id_prev, c_prev, "", "1 D", "1 day", "TRADES", 1, 1, False, [])
             # 🛡️ 增加微小延时，防止瞬间并发多个历史请求触发 IB 的 Pacing Violation (防刷限制)
@@ -177,38 +197,21 @@ class IBReader(EWrapper, EClient):
         while self.running:
             # 兼容原有的 YAML 动态读取，并且优先支持从数据库加载白名单
             try:
-                loaded = False
-                if self.db_manager:
-                    conn = self.db_manager._get_conn()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT config_json FROM data_source_config WHERE module = 'ib_config' AND source_name = 'whitelist'")
-                    row = cursor.fetchone()
-                    conn.close()
-                    if row and row[0]:
-                        import json
-                        whitelist = json.loads(row[0]).get('symbols', [])
-                        if whitelist:
-                            self.symbols = whitelist
-                            loaded = True
+                # [V7.2] 废除白名单机制，改为自动拉取所有分配给 IB 的美股 ETF
+                from arbcore.config.symbol_source_map import SYMBOL_SOURCE_MAP
+                syms = set()
+                for sym, source in SYMBOL_SOURCE_MAP.items():
+                    if source == 'IB':
+                        # 过滤A股和港股代码
+                        is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
+                        if not is_a_share:
+                            syms.add(sym)
                 
-                if not loaded:
-                    with open('lof_config.yaml', 'r', encoding='utf-8') as f:
-                        cfg = yaml.safe_load(f)
-                        syms = set(["GLD", "USO", "XOP", "SLV", "SPY", "QQQ"])
-                        for fund in cfg.get('funds', []):
-                            for h in fund.get('valuation_portfolio', []):
-                                sym = h.get('symbol', '').split('-')[0].replace('^', '')
-                                # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
-                                is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
-                                if sym and not is_a_share: syms.add(sym)
-                            trade_etf = fund.get('trade_etf', '')
-                            if trade_etf:
-                                for s in str(trade_etf).replace('，', ',').split(','):
-                                    s = s.strip().upper()
-                                    # 过滤A股和港股代码：5-6位纯数字或SH/SZ前缀
-                                    is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', s, re.IGNORECASE))
-                                    if s and not is_a_share: syms.add(s)
-                        self.symbols = list(syms)
+                if syms:
+                    self.symbols = list(syms)
+                else:
+                    # 极端情况回退
+                    self.symbols = ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
             except Exception as e:
                 print(f"[IBReader] 加载订阅代码列表异常: {e}")
             
@@ -246,7 +249,10 @@ class IBReader(EWrapper, EClient):
                     self.mkt_req_ids[req_id] = sym
                     
                     c = Contract()
-                    c.symbol, c.secType, c.exchange, c.currency = sym, "STK", "OVERNIGHT", "USD"
+                    c.symbol = sym
+                    c.secType = "IND" if sym == "VIX" else "STK"
+                    c.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
+                    c.currency = "USD"
                     # snapshot=False 开启持续长连接推送
                     self.reqMktData(req_id, c, "", False, False, [])
                     self.sources[sym] = "订阅请求中..."
@@ -272,7 +278,10 @@ class IBReader(EWrapper, EClient):
                     self._last_fallback_time[sym] = current_timestamp
                     req_id_snap = self._get_next_req_id()
                     c_snap = Contract()
-                    c_snap.symbol, c_snap.secType, c_snap.exchange, c_snap.currency = sym, "STK", "OVERNIGHT", "USD"
+                    c_snap.symbol = sym
+                    c_snap.secType = "IND" if sym == "VIX" else "STK"
+                    c_snap.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
+                    c_snap.currency = "USD"
                     self.req_events[req_id_snap] = threading.Event()
                     # 兜底请求必须是 BID，获取无滑点盘口
                     self.reqHistoricalData(req_id_snap, c_snap, "", "1800 S", "1 min", "BID", 0, 1, False, [])
@@ -290,8 +299,9 @@ class IBReader(EWrapper, EClient):
                         self.last_tick_time[sym] = current_timestamp
             
             if self.prices:
-                log_msg = ", ".join([f"{k}=${v.get('bid',0):.2f}({self.sources.get(k,'')})" for k, v in self.prices.items() if isinstance(v, dict)])
-                print(f"[IBReader] [INFO] 已更新: {log_msg}")
+                pass
+                # 屏蔽高频盘口刷屏，保持后台清爽
+                # print(f"[IBReader] [INFO] 已更新: {log_msg}")
             
             # 长连接模式下，循环短暂停留即可，底层的 tickPrice 会毫秒级疯狂更新字典。只有走到兜底才需要长休眠防封禁。
             time.sleep(30 if fallback_needed else 5)

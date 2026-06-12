@@ -1,10 +1,282 @@
 import os
 import sys
+import json
+import time
+import threading
 import pandas as pd
 from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# [V7.1] 内置东财SSE白银期货长连接阅读器
+# 程序3独立直连东财推流，无需依赖程序1(5000端口)
+# ============================================================
+class SSEFuturesReader:
+    """
+    东财上期所白银期货(AGm)实时推流读取器。
+    - 常驻后台线程，长连接到 https://81.futsseapi.eastmoney.com/sse/113_agm_qt
+    - 自动重连，自动解析价格、结算价、VWAP
+    - 程序3与程序1同时运行时，互不冲突（各自独立连接SSE推流，读同一组数据）
+    """
+    def __init__(self):
+        self.ag0_price = 0.0
+        self.ag0_settlement = 0.0
+        self.ag0_vwap = 0.0
+        self.running = False
+        self._thread = None
+
+    def start(self):
+        """启动后台SSE监听线程（幂等：已运行则跳过）"""
+        if self.running:
+            return
+        self.running = True
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True, name="SSE-Silver")
+        self._thread.start()
+        logger.info("[SSE] 白银期货SSE后台线程已启动 (东财 113_agm_qt)")
+
+    def stop(self):
+        self.running = False
+
+    def _is_trading_time(self) -> bool:
+        """沪银交易时段：周一~周五 09:00-11:30, 13:30-15:00, 21:00-次日03:00; 周六 00:00-03:00"""
+        import time as _t
+        now = _t.localtime()
+        h, m, wd = now.tm_hour, now.tm_min, now.tm_wday
+        if 0 <= wd <= 4:
+            if (h == 9 and m >= 0) or h == 10 or (h == 11 and m < 30): return True
+            if (h == 13 and m >= 30) or h == 14 or (h == 15 and m == 0): return True
+            if h >= 21 or h < 3: return True
+        elif wd == 5 and h < 3: return True
+        return False
+
+    def _listen_loop(self):
+        import requests
+        url = "https://81.futsseapi.eastmoney.com/sse/113_agm_qt"
+        retry_delay = 2.0
+        while self.running:
+            if not self._is_trading_time():
+                time.sleep(15)
+                continue
+            try:
+                res = requests.get(url, stream=True, timeout=(5, 60),
+                                   verify=False, proxies={"http": None, "https": None})
+                if res.status_code == 200:
+                    retry_delay = 2.0
+                    for line in res.iter_lines():
+                        if not self.running:
+                            break
+                        if line:
+                            decoded = line.decode('utf-8', errors='replace')
+                            if decoded.startswith('data:'):
+                                try:
+                                    d = json.loads(decoded[5:]).get('qt', {})
+                                    if 'p' in d:
+                                        self.ag0_price = float(d['p'])
+                                    if 'fzjsj' in d and d['fzjsj'] != '-':
+                                        self.ag0_settlement = float(d['fzjsj'])
+                                    elif 'rzjsj' in d and d['rzjsj'] != '-':
+                                        self.ag0_settlement = float(d['rzjsj'])
+                                    if 'cje' in d and 'vol' in d and d.get('vol', 0) > 0:
+                                        self.ag0_vwap = d['cje'] / (d['vol'] * 15)
+                                    elif 'av' in d and d['av'] != '-':
+                                        self.ag0_vwap = float(d['av'])
+                                except Exception:
+                                    pass
+                res.close()
+            except Exception as e:
+                logger.debug(f"[SSE] 白银长连接断开: {e}，{retry_delay:.0f}s后重连...")
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60.0)
+
+
+# 全局单例 —— 在模块第一次被导入时创建，随后自动启动
+_sse_reader = SSEFuturesReader()
+_sse_reader.start()
+
+def get_index_change_percent(symbol: str) -> float:
+    """
+    [新浪/腾讯指数极速接口] 直接拉取指数日内涨跌幅百分比
+    无感对接国内指数（000xxx, 399xxx）、恒生指数HSI等，无需频繁维护静态基准价
+    """
+    import requests
+    headers_sina = {
+        'Referer': 'https://finance.sina.com.cn/',
+        'Accept': 'text/event-stream'  # [V7.2] 借鉴长连接头部以提高稳定性
+    }
+    headers_tencent = {
+        'Referer': 'https://finance.qq.com/',
+        'User-Agent': 'Mozilla/5.0'
+    }
+    
+    clean_sym = symbol.strip().upper()
+    if clean_sym.endswith('.CSI'):
+        clean_sym = clean_sym[:-4]
+    
+    try:
+        # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
+        if 'HSTECH' in clean_sym:
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSTECH", headers=headers_sina, timeout=1.5)
+            if r.status_code == 200 and '="' in r.text:
+                parts = r.text.split('"')[1].split(',')
+                if len(parts) >= 9:
+                    logger.info(f"[INDEX-SINA] 获取港股指数 HSTECH 涨跌幅: {parts[8]}%")
+                    return float(parts[8])
+        elif 'HSCEI' in clean_sym:
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=1.5)
+            if r.status_code == 200 and '="' in r.text:
+                parts = r.text.split('"')[1].split(',')
+                if len(parts) >= 9:
+                    logger.info(f"[INDEX-SINA] 获取港股指数 HSCEI 涨跌幅: {parts[8]}%")
+                    return float(parts[8])
+        elif 'HSI' in clean_sym:
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=1.5)
+            if r.status_code == 200 and '="' in r.text:
+                parts = r.text.split('"')[1].split(',')
+                if len(parts) >= 9:
+                    logger.info(f"[INDEX-SINA] 获取港股指数 HSI 涨跌幅: {parts[8]}%")
+                    return float(parts[8])
+                    
+        # 2. A股指数 (6位代码)
+        elif clean_sym.isdigit() and len(clean_sym) == 6:
+            # 优先尝试新浪接口
+            if clean_sym.startswith('399') or clean_sym.startswith('159') or clean_sym.startswith('3999'):
+                url = f"http://hq.sinajs.cn/list=s_sz{clean_sym}"
+            else:
+                url = f"http://hq.sinajs.cn/list=s_sh{clean_sym}"
+                
+            r = requests.get(url, headers=headers_sina, timeout=1.5)
+            if r.status_code == 200 and '="' in r.text:
+                parts = r.text.split('"')[1].split(',')
+                if len(parts) >= 4 and float(parts[3]) != 0.0:
+                    logger.info(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
+                    return float(parts[3])
+                    
+            # [V7.2] 新浪降级策略：使用腾讯接口兜底 (完美解决新浪没有中证指数的问题)
+            prefix = 'sz' if clean_sym.startswith(('399', '159')) else 'sh'
+            url_tencent = f"http://qt.gtimg.cn/q={prefix}{clean_sym}"
+            r_tc = requests.get(url_tencent, headers=headers_tencent, timeout=1.5)
+            if r_tc.status_code == 200 and 'v_' in r_tc.text:
+                tc_parts = r_tc.text.split('"')[1].split('~')
+                if len(tc_parts) >= 33:
+                    logger.info(f"[INDEX-TENCENT] 兜底获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
+                    return float(tc_parts[32])
+    except Exception as e:
+        logger.debug(f"Index fetch failed for {symbol}: {e}")
+    return 0.0
+
+def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
+    """
+    [V6.0 性能优化] 批量预取新浪/腾讯指数数据，将 O(N) 降低为 O(1)
+    返回 { "399300": {"price": 4000.0, "pct": 1.63}, ... }
+    """
+    if not symbols:
+        return {}
+        
+    import requests
+    headers_sina = {
+        'Referer': 'https://finance.sina.com.cn/',
+        'Accept': 'text/event-stream'
+    }
+    headers_tencent = {
+        'Referer': 'https://finance.qq.com/',
+        'User-Agent': 'Mozilla/5.0'
+    }
+    
+    sina_codes = []
+    tencent_codes = []
+    symbol_map = {}  # code -> original_symbol
+    tencent_symbol_map = {} # tc_code -> original_symbol
+    
+    for sym in symbols:
+        if not sym or sym == '-':
+            continue
+        clean_sym = sym.strip().upper()
+        if clean_sym.endswith('.CSI'):
+            clean_sym = clean_sym[:-4]
+            
+        if clean_sym.isdigit() and len(clean_sym) == 6:
+            if clean_sym.startswith('399') or clean_sym.startswith('159') or clean_sym.startswith('3999'):
+                sina_codes.append(f"s_sz{clean_sym}")
+                tencent_codes.append(f"sz{clean_sym}")
+            else:
+                sina_codes.append(f"s_sh{clean_sym}")
+                tencent_codes.append(f"sh{clean_sym}")
+            symbol_map[clean_sym] = sym
+            tencent_symbol_map[clean_sym] = sym
+                
+        elif 'HSTECH' in clean_sym:
+            sina_codes.append("rt_hkHSTECH")
+            tencent_codes.append("hkHSTECH")
+            symbol_map['HSTECH'] = sym
+            tencent_symbol_map['HSTECH'] = sym
+        elif 'HSCEI' in clean_sym:
+            sina_codes.append("rt_hkHSCEI")
+            tencent_codes.append("hkHSCEI")
+            symbol_map['HSCEI'] = sym
+            tencent_symbol_map['HSCEI'] = sym
+        elif 'HSI' in clean_sym:
+            sina_codes.append("rt_hkHSI")
+            tencent_codes.append("hkHSI")
+            tencent_symbol_map['HSI'] = sym
+            
+    res = {}
+    
+    # 1. 尝试从新浪获取
+    if sina_codes:
+        url = f"http://hq.sinajs.cn/list={','.join(sina_codes)}"
+        try:
+            r = requests.get(url, headers=headers_sina, timeout=2.0)
+            if r.status_code == 200:
+                for line in r.text.splitlines():
+                    if '="' not in line: continue
+                    var_name = line.split('=')[0].strip()
+                    parts = line.split('"')[1].split(',')
+                    
+                    if var_name.startswith('var hq_str_s_sh') or var_name.startswith('var hq_str_s_sz'):
+                        code = var_name[-6:]
+                        if len(parts) >= 4 and float(parts[3]) != 0.0:
+                            if code in symbol_map:
+                                res[symbol_map[code]] = {"price": float(parts[1]), "pct": float(parts[3])}
+                                logger.info(f"[INDEX-SINA] 获取A股指数 {symbol_map[code]} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                    elif var_name.startswith('var hq_str_rt_hk'):
+                        code = var_name.split('rt_hk')[1]
+                        if len(parts) >= 9:
+                            if code in symbol_map:
+                                res[symbol_map[code]] = {"price": float(parts[6]), "pct": float(parts[8])}
+                                logger.info(f"[INDEX-SINA] 获取港股指数 {symbol_map[code]} 价格: {parts[6]} 涨跌幅: {parts[8]}%")
+        except Exception as e:
+            logger.warning(f"预取新浪指数异常: {e}")
+            
+    # 2. 对于新浪没拿到数据的指数，用腾讯接口批量兜底
+    missing_tc_codes = []
+    missing_tc_keys = []
+    for tc_code, tc_req in zip(symbol_map.keys(), tencent_codes):
+        if symbol_map[tc_code] not in res:
+            missing_tc_codes.append(tc_req)
+            missing_tc_keys.append(tc_code)
+            
+    if missing_tc_codes:
+        url_tc = f"http://qt.gtimg.cn/q={','.join(missing_tc_codes)}"
+        try:
+            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
+            if r_tc.status_code == 200:
+                for line in r_tc.text.split(';'):
+                    if 'v_' not in line or '=' not in line: continue
+                    var_name = line.split('=')[0].strip()
+                    data_str = line.split('=')[1].strip(' "')
+                    tc_parts = data_str.split('~')
+                    
+                    if len(tc_parts) >= 33:
+                        code = tc_parts[2] # e.g. 000922, HSI
+                        if code in tencent_symbol_map:
+                            res[tencent_symbol_map[code]] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
+                            logger.info(f"[INDEX-TENCENT] 兜底获取指数 {tencent_symbol_map[code]} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
+        except Exception as e:
+            logger.warning(f"预取腾讯指数兜底异常: {e}")
+            
+    return res
 
 class FundService:
     def __init__(self, db, market_data_service=None, config_service=None):
@@ -31,18 +303,23 @@ class FundService:
         """
         conn = self.db._get_conn()
         try:
-            funds_df = pd.read_sql_query("SELECT fund_code, fund_name, category, related_index FROM unified_fund_list", conn)
+            funds_df = pd.read_sql_query("SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list", conn)
             if watchlist and not funds_df.empty:
                 watchlist_strs = [str(w) for w in watchlist]
                 funds_df = funds_df[funds_df['fund_code'].astype(str).isin(watchlist_strs)]
             
-            status_df = pd.read_sql_query("SELECT fund_code, purchase_status, redemption_status FROM fund_purchase_status", conn)
+            # 从 fund_info 表读取用户爬虫获取的状态和费率
+            status_df = pd.read_sql_query("SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee FROM fund_info", conn)
             status_dict = status_df.set_index('fund_code').to_dict('index')
             
             if funds_df is None or funds_df.empty:
                 logger.warning("未获取到基金列表，返回空数据")
                 return []
             
+            # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅，用于加速国内LOF与QDII亚洲的实时估值计算
+            all_related_indices = funds_df['related_index'].dropna().tolist()
+            index_changes_map = prefetch_index_changes(all_related_indices)
+
             result = []
             for _, fund in funds_df.iterrows():
                 if fund is None:
@@ -69,8 +346,15 @@ class FundService:
                     
                     # 锁定最新静态估值
                     valid_vals = metrics_df.dropna(subset=['static_val'])
-                    if not valid_vals.empty:
-                        metrics['static_val'] = valid_vals.iloc[0]['static_val']
+                    if not valid_vals.empty and float(valid_vals.iloc[0]['static_val']) > 0:
+                        val = float(valid_vals.iloc[0]['static_val'])
+                        # 🚀 脏数据拦截：如果 static_val 偏离 nav 超过 50%（如 0.0476 vs 1.78），必定是异常脏数据，强制使用 nav
+                        if metrics.get('nav', 0) > 0 and abs(val - metrics['nav']) / metrics['nav'] > 0.5:
+                            metrics['static_val'] = metrics['nav']
+                        else:
+                            metrics['static_val'] = val
+                    else:
+                        metrics['static_val'] = metrics.get('nav', 0)
                     
                     # 历史价格兜底
                     valid_prices = metrics_df.dropna(subset=['price'])
@@ -80,8 +364,26 @@ class FundService:
                     # 恢复基本面的缺失字段 (成交额、份额、换手率等)
                     for col in ['volume', 'shares', 'shares_added', 'turnover_rate']:
                         valid_series = metrics_df.dropna(subset=[col])
-                        metrics[col] = valid_series.iloc[0][col] if not valid_series.empty else 0
+                        metrics[col] = float(valid_series.iloc[0][col]) if not valid_series.empty else 0.0
                         
+                    # 🚀 动态计算缺失的“新增(万)”份额
+                    if metrics.get('shares_added') == 0.0:
+                        valid_shares = metrics_df.dropna(subset=['shares'])
+                        if len(valid_shares) >= 2:
+                            shares_t = float(valid_shares.iloc[0]['shares'])
+                            shares_t1 = float(valid_shares.iloc[1]['shares'])
+                            metrics['shares_added'] = float(shares_t - shares_t1)
+                            
+                    # 🚀 动态计算缺失的“换手率”
+                    if metrics.get('turnover_rate') == 0.0:
+                        vol = metrics.get('volume', 0)
+                        sh = metrics.get('shares', 0)
+                        pr = metrics.get('price', 0)
+                        # 假设 volume 是成交额(RMB)，shares 是万份
+                        if vol > 0 and sh > 0 and pr > 0:
+                            # 换手率 = 成交额 / (份额(万) * 10000 * 价格)
+                            metrics['turnover_rate'] = vol / (sh * 10000.0 * pr)
+
                     # 计算前收盘价用于涨跌幅计算
                     # 注意：unified_fund_history 存的是历史日结数据，所以它的第 0 行就是昨天的收盘价
                     if not valid_prices.empty:
@@ -103,7 +405,94 @@ class FundService:
                 
                 # 尝试实时计算估值
                 try:
-                    calculator = self._get_calculator()
+                    # 3.1 【白银基金 161226 特殊行情特判】 - 完全同步自程序 1（东财 SSE 接口）的稳定算法
+                    if code == '161226':
+                        import requests
+                        ag_future_price, settlement_price, vwap = 0.0, 0.0, 0.0
+                        
+                        # [优先级1] 本程序自带的东财SSE长连接阅读器（最精准，无需程序1）
+                        if _sse_reader.ag0_price > 0 and _sse_reader.ag0_settlement > 0:
+                            ag_future_price = _sse_reader.ag0_price
+                            settlement_price = _sse_reader.ag0_settlement
+                            vwap = _sse_reader.ag0_vwap
+                        
+                        # [优先级2] 若SSE还没数据（刚启动），尝试从程序1(5000端口)获取
+                        if ag_future_price <= 0 or settlement_price <= 0:
+                            try:
+                                r = requests.get("http://127.0.0.1:5000/api/futures", timeout=1.0)
+                                if r.status_code == 200:
+                                    f_data = r.json()
+                                    ag0 = f_data.get('AG0', {})
+                                    ag_future_price = float(ag0.get('price', 0))
+                                    settlement_price = float(ag0.get('settlement', 0))
+                                    vwap = float(ag0.get('vwap', 0))
+                            except:
+                                pass
+                        
+                        # [优先级3] 降级：新浪 nf_AG0 接口兜底
+                        if ag_future_price <= 0 or settlement_price <= 0:
+                            try:
+                                headers = {'Referer': 'https://finance.sina.com.cn/'}
+                                r = requests.get("http://hq.sinajs.cn/list=nf_AG0", headers=headers, timeout=1.5)
+                                if r.status_code == 200 and '="' in r.text:
+                                    parts = r.text.split('"')[1].split(',')
+                                    if len(parts) >= 11:
+                                        ag_future_price = float(parts[8])   # 最新价
+                                        settlement_price = float(parts[10])  # 昨结算价
+                                        # 新浪接口 part[9] 即为今日动态结算均价(VWAP)
+                                        vwap = float(parts[9]) if len(parts) > 9 else 0.0
+                            except:
+                                pass
+                                
+                        nav_home = float(metrics.get('nav', 0))
+                        if ag_future_price > 0 and settlement_price > 0 and nav_home > 0:
+                            # 🚀 为了让前端展示 AG0 盘口数据
+                            metrics['ag0_price'] = ag_future_price
+                            metrics['ag0_settlement'] = settlement_price
+                            
+                            # 参考估值 (rt_val) = 昨天净值 * (实时成交价 / 昨结算价)
+                            rt_val = nav_home * (ag_future_price / settlement_price)
+                            metrics['rt_val'] = round(rt_val, 4)
+                            if metrics['price'] > 0:
+                                metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                                
+                            # 🚀 官方估值 (static_val) = 昨天净值 * (VWAP / 昨结算价)
+                            if vwap > 0:
+                                metrics['static_val'] = round(nav_home * (vwap / settlement_price), 4)
+                            else:
+                                # 如果盘中没取到 vwap，就降级为 NAV (避免出现脏数据)
+                                metrics['static_val'] = nav_home
+                                
+                            # 联动计算官方溢价
+                            if metrics['static_val'] > 0 and metrics.get('price', 0) > 0:
+                                metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
+
+
+                    # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 直连新浪指数接口，不占用美股 API，免去自选条件直接计算
+                    if not metrics.get('rt_val'):
+                        rel_idx = fund.get('related_index')
+                        nav_home = float(metrics.get('nav', 0))
+                        if rel_idx and rel_idx != '-' and nav_home > 0:
+                            idx_data = index_changes_map.get(rel_idx)
+                            pct = 0.0
+                            if idx_data is not None and isinstance(idx_data, dict):
+                                pct = idx_data.get('pct', 0.0)
+                                metrics['index_close'] = idx_data.get('price', 0.0)
+                            else:
+                                pct = get_index_change_percent(rel_idx)
+                            
+                            # 🚀 把最新涨跌幅赋值给 metrics 供看板展示
+                            metrics['index_pct'] = pct
+                            
+                            if pct != 0.0:
+                                pos = float(fund.get('pos_ratio') or 0.95)
+                                rt_val = nav_home * (1.0 + pos * (pct / 100.0))
+                                metrics['rt_val'] = round(rt_val, 4)
+                                if metrics.get('price', 0) > 0:
+                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+
+                    # 3.3 【美股原油/黄金等高价值一篮子基金】 - 保持原有基于 lof_config.yaml 的矩阵公式推演
+                    calculator = self._get_calculator() if not metrics.get('rt_val') else None
                     if calculator:
                         # 获取基金配置
                         fund_config = self.config_service.get_full_config().get('funds', [])
@@ -169,6 +558,11 @@ class FundService:
                                                 fx_ratio = 1.0
                                                 # 如果支持获取汇率日内波动，可以在这里添加 fx_ratio = 1 + fx_pct / 100
                                                 index_ratio = idx_price / index_b
+                                                
+                                                # 🚀 把最新指数价格和涨跌幅赋值给 metrics 供看板展示
+                                                metrics['index_close'] = idx_price
+                                                metrics['index_pct'] = (index_ratio - 1) * 100
+                                                
                                                 val_res = b_nav * (1 + position * (index_ratio * fx_ratio - 1))
                                                 if val_res > 0:
                                                     metrics['rt_val'] = round(val_res, 4)
@@ -222,10 +616,22 @@ class FundService:
                 if 'price_change' in fund_dict and fund_dict['price_change']:
                     fund_dict['price_change'] = round(float(fund_dict['price_change']), 2)
                 
-                # 状态
-                st = status_dict.get(code, {})
+                # 状态与费率
+                pure_code = code.split('.')[0] if '.' in code else code
+                st = status_dict.get(pure_code) or status_dict.get(code) or {}
                 fund_dict['purchase_status'] = st.get('purchase_status', '未知')
                 fund_dict['redemption_status'] = st.get('redemption_status', '未知')
+                fund_dict['purchase_fee'] = st.get('purchase_fee', '-')
+                fund_dict['redemption_fee'] = st.get('redemption_fee', '-')
+                
+                # 指数信息
+                fund_dict['idx_code'] = fund.get('idx_code', '-')
+                fund_dict['idx_name'] = fund.get('idx_name', '-')
+
+                # 💡 强力防 NaN 注入：将所有 pd.isna 的值转换为 None，防止 json 序列化抛出 ValueError
+                for k, v in list(fund_dict.items()):
+                    if pd.isna(v):
+                        fund_dict[k] = None
 
                 result.append(fund_dict)
             logger.info(f"Dashboard数据生成完成，共 {len(result)} 只基金")

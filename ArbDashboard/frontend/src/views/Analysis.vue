@@ -75,15 +75,15 @@
          <div style="display: flex; flex-direction: column; gap: 2px;">
             <!-- 第1行: T-2 基准日 -->
             <div class="base-info-row" style="display: flex; gap: 12px; font-size: 13px; color: #475569; align-items: center; font-weight: 500;">
-               <div style="width: 155px;">📅 <strong>【T-2 基准日】</strong> {{ meta?.base_data?.date || '-' }}</div>
+               <div style="width: 160px;"><strong>【T-2 基准日】</strong> {{ meta?.base_data?.date ? meta.base_data.date.substring(5) : '-' }}</div>
                <n-divider vertical style="margin: 0;" />
-               <div style="width: 170px;">💰 <strong>净值</strong> <span style="color: #1e3a8a; font-weight: bold; font-family: monospace;">{{ Number(meta?.base_data?.nav || 0).toFixed(4) }}</span></div>
+               <div style="width: 140px;">💰 <strong>净值</strong> <span style="color: #1e3a8a; font-weight: bold; font-family: monospace;">{{ Number(meta?.base_data?.nav || 0).toFixed(4) }}</span></div>
                <n-divider vertical style="margin: 0;" />
-               <div style="width: 130px;">💱 <strong>汇率</strong> <span style="font-family: monospace;">{{ Number(meta?.base_data?.exchange_rate || 0).toFixed(4) }}</span></div>
+               <div style="width: 110px;">💱 <strong>汇率</strong> <span style="font-family: monospace;">{{ Number(meta?.base_data?.exchange_rate || 0).toFixed(4) }}</span></div>
                <n-divider vertical style="margin: 0;" />
                <div style="flex: 1; display: flex; align-items: center; gap: 4px;">
                   <span>📊 <strong>ETF收盘价</strong></span>
-                  <span style="font-family: monospace; color: #0369a1;">{{ baseEtfsText.replace(/:/g, '') }}</span>
+                  <span style="font-family: monospace; color: #0369a1; font-size: 11.5px; letter-spacing: -0.5px;">{{ baseEtfsText.replace(/:/g, '') }}</span>
                </div>
                <template v-if="meta?.fund_config?.trade_future">
                   <n-divider vertical style="margin: 0;" />
@@ -93,24 +93,24 @@
             
             <!-- 第2行: T-1 估值日 -->
             <div v-if="meta?.t1_data && meta?.t1_data?.date" class="base-info-row" style="display: flex; gap: 12px; font-size: 13px; color: #1e293b; align-items: center; font-weight: 500; border-top: 1px dashed #e2e8f0; padding-top: 4px; margin-top: 4px;">
-               <div style="width: 155px;">📅 <strong>【T-1 估值日】</strong> {{ meta?.t1_data?.date || '-' }}</div>
+               <div style="width: 160px;"><strong>【T-1 估值日】</strong> {{ meta?.t1_data?.date ? meta.t1_data.date.substring(5) : '-' }}</div>
                <n-divider vertical style="margin: 0;" />
-               <div style="width: 170px;">💰 <strong>估值</strong> <span style="color: #1565c0; font-weight: bold; font-family: monospace;">{{ Number(meta?.t1_data?.static_val || 0).toFixed(4) }}</span></div>
+               <div style="width: 140px;">💰 <strong>估值</strong> <span style="color: #1565c0; font-weight: bold; font-family: monospace;">{{ Number(meta?.t1_data?.static_val || 0).toFixed(4) }}</span></div>
                <n-divider vertical style="margin: 0;" />
-               <div style="width: 130px;">💱 <strong>汇率</strong> <span style="font-family: monospace;">{{ Number(meta?.t1_data?.exchange_rate || 0).toFixed(4) }}</span></div>
+               <div style="width: 110px;">💱 <strong>汇率</strong> <span style="font-family: monospace;">{{ Number(meta?.t1_data?.exchange_rate || 0).toFixed(4) }}</span></div>
                <n-divider vertical style="margin: 0;" />
                <div style="flex: 1; display: flex; align-items: center; gap: 4px;">
                   <span>📊 <strong>ETF收盘价</strong></span>
                   <span v-if="meta?.t1_data?.etfs_info">
                      <span v-for="(info, idx) in meta.t1_data.etfs_info" :key="info.symbol">
-                        <span style="font-family: monospace; color: #0f766e;">{{ info.symbol }} {{ info.price.toFixed(2) }} </span>
-                        <span :style="{ color: info.pct_change > 0 ? '#d32f2f' : '#388e3c', fontFamily: 'monospace', fontWeight: 'bold' }">
+                        <span style="font-family: monospace; color: #0f766e; font-size: 11.5px; letter-spacing: -0.5px;">{{ info.symbol }} {{ info.price.toFixed(2) }} </span>
+                        <span :style="{ color: info.pct_change > 0 ? '#d32f2f' : '#388e3c', fontFamily: 'monospace', fontWeight: 'bold', fontSize: '11px', letterSpacing: '-0.5px' }">
                            ({{ info.pct_change > 0 ? '+' : '' }}{{ info.pct_change.toFixed(2) }}%)
                         </span>
-                        <span v-if="idx < meta.t1_data.etfs_info.length - 1" style="color: #999; margin: 0 4px;">|</span>
+                        <span v-if="idx < meta.t1_data.etfs_info.length - 1" style="color: #999; margin: 0 2px;">|</span>
                      </span>
                   </span>
-                  <span v-else style="font-family: monospace; color: #0f766e;">{{ (meta?.t1_data?.etfs_text || '-').replace(/:/g, '') }}</span>
+                  <span v-else style="font-family: monospace; color: #0f766e; font-size: 11.5px; letter-spacing: -0.5px;">{{ (meta?.t1_data?.etfs_text || '-').replace(/:/g, '') }}</span>
                </div>
                <template v-if="meta?.fund_config?.trade_future">
                   <n-divider vertical style="margin: 0;" />
@@ -120,10 +120,10 @@
 
             <!-- 第3行: 实时数据（字段顺序与前两行一致：LOF价格 → 汇率 → ETF实时价） -->
             <div class="base-info-row" style="display: flex; gap: 12px; font-size: 13px; color: #0f172a; align-items: center; font-weight: 500; border-top: 1px dashed #e2e8f0; padding-top: 4px; margin-top: 4px;">
-               <div style="width: 155px;">📍 <strong>【实时数据】</strong></div>
+               <div style="width: 160px;">📍 <strong>【实时数据】</strong></div>
                <n-divider vertical style="margin: 0;" />
-               <div style="width: 170px; display: flex; align-items: center; gap: 4px;">
-                  <strong style="color:#d32f2f;">A股LOF测试单价</strong>
+               <div style="width: 140px; display: flex; align-items: center; gap: 0;">
+                  <strong style="color:#d32f2f; width: 60px; display: inline-block;">LOF价</strong>
                   <input 
                      type="number" 
                      v-model.number="simLofPrice" 
@@ -132,11 +132,11 @@
                   >
                </div>
                <n-divider vertical style="margin: 0;" />
-               <div style="width: 130px;">💱 <strong style="color:#1976d2;">{{ rateHeaderName }}</strong> <span style="font-size: 14px; font-weight: bold; color: #1976d2; font-family: monospace;">{{ Number(latestExchangeRateInput).toFixed(4) }}</span></div>
+               <div style="width: 110px;">💱 <strong style="color:#1976d2;">汇率</strong> <span style="font-size: 14px; font-weight: bold; color: #1976d2; font-family: monospace;">{{ Number(latestExchangeRateInput).toFixed(4) }}</span></div>
                <n-divider vertical style="margin: 0;" />
                <div style="flex: 1; display: flex; align-items: center; gap: 4px;">
                   <strong style="color: #64748b;">标的实时价</strong>
-                  <span style="font-family: monospace; font-weight: bold; color: #d97706;">{{ realtimeEtfsText.replace(/:/g, '') }}</span>
+                  <span style="font-family: monospace; font-weight: bold; color: #d97706; font-size: 11.5px; letter-spacing: -0.5px;">{{ realtimeEtfsText.replace(/:/g, '') }}</span>
                </div>
             </div>
          </div>
@@ -148,11 +148,12 @@
          <div style="background: #f0f8ff; padding: 8px 14px; border-radius: 8px; border: 1px solid #bae6fd; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
             <div style="display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%;">
                <!-- 左侧 -->
-               <div style="flex: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                  <span style="font-size:15px; font-weight:bold; color:#0284c7; width: 95px;">ETF实时估值</span>
-                  <div v-for="item in uniqueValuationSymbols" :key="item.symbol" style="display: flex; align-items: center; gap: 4px;">
-                     <span style="color:#1565c0; font-size:14px; font-weight:bold;">{{ item.symbol }}:</span>
-                     <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 75px; padding: 3px; font-size: 14px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center;" :data-sym="item.symbol">
+               <div style="flex: 1; display: flex; align-items: center; flex-wrap: wrap;">
+                  <span style="font-size:15px; font-weight:bold; color:#0284c7; width: 185px;">ETF实时估值</span>
+                  <div v-for="(item, index) in uniqueValuationSymbols" :key="item.symbol" style="display: flex; align-items: center;">
+                     <span v-if="index === 0" style="color:#1565c0; font-size:14px; font-weight:bold; width: 60px; text-align: right; padding-right: 6px;">{{ item.symbol }}:</span>
+                     <span v-else style="color:#1565c0; font-size:14px; font-weight:bold; padding-right: 6px; padding-left: 12px;">{{ item.symbol }}:</span>
+                     <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center;" :data-sym="item.symbol">
                   </div>
                </div>
                
@@ -185,6 +186,14 @@
                <span>对冲值: <span style="color:#1565c0; font-family: monospace;">{{ (meta?.base_data?.hedge || 0).toFixed(4) }}</span></span>
                <span>敞口: <span style="color:#e65100; font-family: monospace;">{{ lofQtyEtf ? lofQtyEtf.exposure.toFixed(2) : '-' }}元</span></span>
                <span>锚点ETF: {{ lofQtyEtf ? lofQtyEtf.etfQty : '-' }}</span>
+            </div>
+            <!-- 一篮子详细拆解 -->
+            <div v-if="lofQtyEtf && lofQtyEtf.breakdown && lofQtyEtf.breakdown.length > 1" style="display: flex; justify-content: center; font-size: 11px; color: #1565c0; margin-top: 2px;">
+              <span>一篮子拆解: 
+                <span v-for="(item, idx) in lofQtyEtf.breakdown" :key="item.symbol" style="font-family: monospace; font-weight: bold;">
+                  {{ item.symbol }}={{ item.qty }}股<span v-if="idx < lofQtyEtf.breakdown.length - 1">, </span>
+                </span>
+              </span>
             </div>
          </div>
 
@@ -450,7 +459,7 @@ const watchlist = ref<string[]>(JSON.parse(localStorage.getItem('watchlist') || 
 const categoryMap: Record<string, string[]> = {
   'gold_oil': ['黄金原油'],
   'qdii_us': ['纯ETF', 'QDII欧美', '混合跨境', '指数'],
-  'qdii_asia': ['QDII 亚洲'],
+  'qdii_asia': ['QDII 亚洲', 'QDII亚洲'],
   'domestic_lof': ['指数LOF', '其他', '国内LOF'],
   'silver': ['白银']
 }
@@ -459,7 +468,7 @@ const categoryMap: Record<string, string[]> = {
 // 对于亚洲、国内LOF、白银等，隐藏盘口对冲和下单组件
 const isComplexCategory = computed(() => {
   const cat = meta.value?.fund_config?.category || ''
-  const simpleCategories = ['QDII 亚洲', '国内LOF', '指数LOF', '白银', '其他']
+  const simpleCategories = ['QDII 亚洲', 'QDII亚洲', '国内LOF', '指数LOF', '白银', '其他']
   return !simpleCategories.includes(cat)
 })
 
@@ -520,6 +529,7 @@ const t2Nav = ref(0)
 const t1StaticVal = ref(0)
 const depth = reactive({ ask: [0,0,0,0,0], ask_vol: [0,0,0,0,0], bid: [0,0,0,0,0], bid_vol: [0,0,0,0,0], source: '', price: 0 })
 const isLofPriceInitialized = ref(false)
+const isHedgePriceInitialized = ref(false)
 
 // 实时估值计算器新增反应状态
 const meta = ref<any>(null)
@@ -888,7 +898,33 @@ const lofQtyEtf = computed(() => {
     finalLofQty = Math.round((targetCapitalEtf.value / simLofPrice.value) / 100) * 100
     finalEtfQty = Math.max(1, Math.round(finalLofQty / etfHedge))
   }
-  return { lofQty: finalLofQty, etfQty: finalEtfQty, exposure: targetCapitalEtf.value * pos }
+  
+  // 更加牛逼的一篮子拆解逻辑 (按照权重切分各ETF的数量)
+  let portfolioBreakdown = []
+  const portfolio = cfg.valuation_portfolio || cfg.hedging_portfolio || []
+  if (portfolio.length > 1) {
+    // 实际建仓的 LOF 对应的目标 RMB 敞口
+    const targetExposureRMB = finalLofQty * simLofPrice.value * pos
+    const currentFx = parseFloat(latestExchangeRateInput.value) || 0
+    if (currentFx > 0) {
+      const targetExposureUSD = targetExposureRMB / currentFx
+      for (const p of portfolio) {
+        const fullSym = p.symbol || ''
+        const cleanSym = fullSym.replace(/^\^/, '').split('-')[0].toUpperCase()
+        const cPrice = parseFloat(testEtfPrices[cleanSym]) || 0
+        const weight = (parseFloat(p.weight) || 0) / 100.0
+        if (cPrice > 0 && weight > 0) {
+          const qty = (targetExposureUSD * weight) / cPrice
+          portfolioBreakdown.push({
+            symbol: fullSym,
+            qty: qty.toFixed(1)
+          })
+        }
+      }
+    }
+  }
+  
+  return { lofQty: finalLofQty, etfQty: finalEtfQty, exposure: targetCapitalEtf.value * pos, breakdown: portfolioBreakdown }
 })
 
 // 期货校准对冲数量计算
@@ -1087,6 +1123,17 @@ const fetchValuationMeta = async () => {
             }
           }
           testEtfPrices[sym] = (qVal || defaultPrice) as number
+        }
+      }
+      
+      const tradeEtf = res.data.fund_config?.trade_etf
+      if (tradeEtf && res.data.realtime_quotes[tradeEtf]) {
+        const qObj = res.data.realtime_quotes[tradeEtf]
+        if (qObj && typeof qObj === 'object') {
+          if (!isHedgePriceInitialized.value && qObj.bid > 0) {
+            hedgePrice.value = qObj.bid
+            isHedgePriceInitialized.value = true
+          }
         }
       }
       

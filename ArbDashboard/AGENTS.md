@@ -141,7 +141,7 @@ d:\Study\arbTest\arbcore\
   - **港股股票历史收盘价**：富途数据库
   - **美股指数实时价格**：新浪（待确认，暂未使用）
   - **Woody API数据源**：只有Woody数据源认识^前缀和-EU/-JP/-HK后缀的锚点符号
-  - **Woody API原始数据路径**：`D:\Study\arbTest\LOFarb\data\woodyAPI\Data_woody_lof_YYYYMMDD_HHMM.json`
+  - **Woody API原始数据路径**：`D:\Study\arbTest\data\woodyAPI\Data_woody_lof_YYYYMMDD_HHMM.json`
 - **同步脚本**：`backend/scripts/sync_from_json_config.py`
 - **锚点（Anchor）概念**：
   - 锚点是Woody发明的概念，指基金跟踪的标的物带有区域后缀（`-EU`欧洲、`-JP`日本、`-HK`香港）

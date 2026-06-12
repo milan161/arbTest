@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from typing import List, Dict, Optional, Any
 from .base import BaseRealtimeFetcher
 from .guojin import GuojinQmtFetcher
@@ -117,9 +117,6 @@ class RealtimeMarketManager:
 
                     if self.symbols:
                         fetcher.subscribe(self.symbols)
-                    
-                    if source_name_key != "sina":
-                        break
                 else:
                     msg = f"数据源连接失败: {source_name_cn}"
                     if self.system_status: self.system_status.add_milestone("WARNING", msg)
