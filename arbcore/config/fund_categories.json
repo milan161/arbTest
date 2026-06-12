@@ -7,7 +7,7 @@
   },
   "valuation_object_types": {
     "SINGLE_ETF": "单ETF（无锚点）- 跟踪单一ETF，无区域后缀，如XOP、QQQ、SPY。实时估值分子和分母都用同一个符号。历史收盘价来自Woody API（netvalue字段）或IB/TDX数据库",
-    "MULTI_ETF_ANCHOR": "多ETF（有锚点）- 同一ETF在不同交易所的锚点，如^USO-EU、^GLD-JP、^USO-HK。分子是底层ETF实时价格（去掉^和-EU/-JP/-HK后缀），分母是Woody API的历史收盘价。**只有Woody数据源认识这种带^前缀和-EU/-JP/-HK后缀的符号**。Woody API原始数据格式见：D:\\Study\\arbTest\\LOFarb\\data\\woodyAPI\\Data_woody_lof_*.json",
+    "MULTI_ETF_ANCHOR": "多ETF（有锚点）- 同一ETF在不同交易所的锚点，如^USO-EU、^GLD-JP、^USO-HK。分子是底层ETF实时价格（去掉^和-EU/-JP/-HK后缀），分母是Woody API的历史收盘价。**只有Woody数据源认识这种带^前缀和-EU/-JP/-HK后缀的符号**。Woody API原始数据格式见：D:\\Study\\arbTest\\data\\woodyAPI\\Data_woody_lof_*.json",
     "MULTI_ASSET": "多资产混合 - 跟踪多个股票/ETF/基金，如501225、501312、160644。需要分别获取多个资产的价格",
     "CROSS_MARKET": "跨市场混合 - 跟踪跨市场资产（美股+A股），如501225跟踪SOXX（美股）+ SZ159560（A股）",
     "US_INDEX": "美股指数 - 跟踪美股指数（.INX标普500、.NDX纳斯达克100），调用指数数据获取函数，考虑13-15小时时差"
@@ -21,7 +21,7 @@
     "港股股票历史收盘价": "富途数据库",
     "美股指数实时价格": "新浪（待确认，暂未使用）",
     "Woody API数据源": "只有Woody数据源认识^前缀和-EU/-JP/-HK后缀的锚点符号",
-    "Woody API原始数据路径": "D:\\Study\\arbTest\\LOFarb\\data\\woodyAPI\\Data_woody_lof_YYYYMMDD_HHMM.json"
+    "Woody API原始数据路径": "D:\\Study\\arbTest\\data\\woodyAPI\\Data_woody_lof_YYYYMMDD_HHMM.json"
   },
   "categories": {
     "黄金原油": {

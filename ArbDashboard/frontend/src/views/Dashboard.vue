@@ -5,38 +5,47 @@
       <n-gi :span="8">
         <n-card size="small" :bordered="false" class="stat-card">
           <div style="text-align: center; width: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; height: 100%;">
-            <div style="display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; width: 100%;">
-                <n-tag :type="engineRunning ? 'info' : 'warning'" size="small" round style="font-weight: bold; cursor: pointer;" @click="router.push('/auto-trade')">
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 100%;">
+                <n-tag :type="engineRunning ? 'info' : 'warning'" size="small" round style="font-weight: bold; cursor: pointer; justify-content: center;" @click="router.push('/auto-trade')">
                   <template #icon><n-icon><Bot /></n-icon></template>
                   {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
                 </n-tag>
-                <n-tag :type="domesticSources.length > 0 ? 'success' : 'error'" size="small" round style="font-weight: bold;">
+                <n-tag :type="(marketOverview.active_sources || []).includes('tdx') ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
                     <template #icon><n-icon><Zap /></n-icon></template>
-                    {{ domesticSources.length > 0 ? `国内: ${domesticSources.join('/')}` : '国内: 未连接' }}
+                    通达信
                 </n-tag>
-                <n-tag :type="foreignSources.length > 0 ? 'success' : 'error'" size="small" round style="font-weight: bold;">
+                <div style="display: flex; gap: 4px; justify-content: center;">
+                    <n-tag :type="(marketOverview.active_sources || []).some(s => s.includes('IB') && !s.includes('未运行')) ? 'success' : 'warning'" size="small" round style="font-weight: bold; flex: 1; justify-content: center; cursor: pointer;" @click="reconnectIB">
+                        <template #icon><n-icon><Zap /></n-icon></template>
+                        IB
+                    </n-tag>
+                </div>
+                
+                <n-tag :type="(marketOverview.active_sources || []).includes('galaxy') ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
                     <template #icon><n-icon><Zap /></n-icon></template>
-                    {{ foreignSources.length > 0 ? `美港: ${foreignSources.join('/')}` : '美港: 未连接' }}
+                    银河QMT
+                </n-tag>
+                <n-tag :type="(marketOverview.active_sources || []).includes('guojin') ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                    <template #icon><n-icon><Zap /></n-icon></template>
+                    国金QMT
+                </n-tag>
+                <n-tag :type="(marketOverview.active_sources || []).some(s => s.includes('富途')) ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                    <template #icon><n-icon><Zap /></n-icon></template>
+                    富途
                 </n-tag>
             </div>
-            <n-text depth="3" style="font-size: 10px; white-space: nowrap;">扫描全场（实时计算信号）</n-text>
+            <n-text style="font-size: 11px; font-weight: bold; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; white-space: nowrap; margin-top: 2px; color: #555; letter-spacing: 0.5px;">点击切换启动/停止</n-text>
           </div>
         </n-card>
       </n-gi>
 
       <!-- 系统里程碑日志 - 占据2/3宽度 -->
       <n-gi :span="16">
-        <n-card size="small" :bordered="false" class="stat-card log-card" content-style="padding: 0;">
-          <div class="log-header">
-             <div class="flex items-center gap-1">
-                <n-icon color="#3b82f6" size="14"><Database /></n-icon>
-                <span class="font-bold text-xs text-blue-800">系统运行里程碑 (详细日志)</span>
-             </div>
-             <n-button quaternary circle size="tiny" @click="fetchData">
-                <template #icon><n-icon><Zap /></n-icon></template>
-             </n-button>
-          </div>
-          <div class="milestone-scroll-box">
+        <n-card size="small" :bordered="false" class="stat-card log-card" content-style="padding: 0; position: relative;">
+          <n-button quaternary circle size="tiny" @click="fetchData" style="position: absolute; right: 4px; top: 4px; z-index: 10;">
+            <template #icon><n-icon><Zap /></n-icon></template>
+          </n-button>
+          <div class="milestone-scroll-box" style="padding-top: 4px; height: 100%;">
              <div class="milestone-grid">
                 <div v-for="(m, i) in milestones" :key="i" class="milestone-cell">
                    <span class="m-time">{{ m.time }}</span>
@@ -84,6 +93,11 @@
 
     <!-- 历史对账详情弹窗 -->
     <n-modal v-model:show="showHistoryModal" preset="card" :title="`[历史记录] ${selectedFund?.fund_code} - ${selectedFund?.fund_name}`" style="width: 95%; max-width: 1500px;">
+      <div v-if="selectedFund" style="margin-bottom: 16px; display: flex; gap: 24px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px;">
+        <div><strong>关联指数：</strong> {{ selectedFund.idx_name || '-' }} ({{ selectedFund.idx_code || '-' }})</div>
+        <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
+        <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
+      </div>
       <div class="history-table-wrapper">
         <n-data-table
           :columns="historyColumns"
@@ -155,11 +169,43 @@ const foreignSources = computed(() => {
     .filter(s => foreignNames.some(f => s.toUpperCase().includes(f)))
     .map(s => {
       const upper = s.toUpperCase()
+      if (s === 'IB (未运行)') return s
       if (upper.includes('IB')) return 'IB'
       if (upper.includes('FUTU') || upper.includes('富途')) return '富途'
       return s
     })
 })
+
+const reconnectingIB = ref(false)
+const reconnectIB = async () => {
+  reconnectingIB.value = true
+  try {
+    const res = await axios.post('/api/system/reconnect_ib')
+    if (res.data.status === 'ok') {
+      message.success('IB 重连成功！')
+      fetchData()
+    } else {
+      message.error('IB 重连失败，请确保 TWS 已运行。')
+    }
+  } catch (e: any) {
+    message.error('重连请求失败: ' + e.message)
+  } finally {
+    reconnectingIB.value = false
+  }
+}
+
+const reconnectEngine = async () => {
+  try {
+    message.loading('正在重启国内行情引擎...', { duration: 1500 })
+    const res = await axios.post('/api/system/reconnect_engine')
+    if (res.data.status === 'ok') {
+      message.success('国内行情引擎重启成功！')
+      setTimeout(fetchData, 1000)
+    }
+  } catch (e: any) {
+    message.error('重启引擎失败: ' + e.message)
+  }
+}
 
 watch(watchlist, (newVal) => {
   localStorage.setItem('watchlist', JSON.stringify(newVal))
@@ -185,8 +231,8 @@ const filteredTableData = computed(() => {
 
   const tabMap: Record<string, string[]> = {
     '黄金原油': ['黄金原油', '黄金', '原油'],
-    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境'],
-    'QDII亚洲': ['QDII 亚洲'],
+    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
+    'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
     '国内LOF': ['指数LOF', '其他', '国内LOF'],
     '白银': ['白银', '白银LOF']
   }
@@ -357,10 +403,7 @@ const allColumns: DataTableColumns<any> = [
       return h('span', { class: 'num-cell compact', style: { color } }, (parseFloat(String(pct)) > 0 ? '+' : '') + Number(pct).toFixed(2) + '%')
     }
   },
-  {
-    title: '指数名称/代码', key: 'related_index', width: 92, align: 'center',
-    render(row: any) { return h(NText, { depth: 3, class: 'index-cell' }, { default: () => row.related_index || '-' }) }
-  },
+
   {
     title: '申购', key: 'purchase_status', width: 68, align: 'center',
     render(row: any) {
@@ -461,11 +504,40 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
 })
 
 const columns = computed<DataTableColumns<any>>(() => {
-  const hideIndexTabs = ['黄金原油', 'QDII欧美', 'QDII亚洲', '白银']
-  if (hideIndexTabs.includes(currentTab.value)) {
-    return allColumns.filter((col: any) => !['index_close', 'index_pct', 'related_index'].includes(col.key as string))
+  // 深拷贝以便动态修改表头
+  let cols = allColumns.map(c => ({...c}))
+
+  // 1. 动态重命名净值日期列
+  const t1Tabs = ['QDII亚洲', '国内LOF', '白银']
+  const t2Tabs = ['QDII欧美', '黄金原油', '混合跨境']
+  const navCol = cols.find(c => c.key === 'nav')
+  if (navCol) {
+    if (t1Tabs.includes(currentTab.value)) navCol.title = 'T-1日净值'
+    else if (t2Tabs.includes(currentTab.value)) navCol.title = 'T-2日净值'
+    else navCol.title = 'T-2/1日净值'
   }
-  return allColumns
+
+  // [V7.0] 白银 TAB 专属列与重命名
+  if (currentTab.value === '白银') {
+    cols.forEach(col => {
+      if (col.key === 'rt_val_display') col.title = '参考估值'
+      if (col.key === 'rt_premium') col.title = '参考溢价'
+      if (col.key === 'static_val_display') col.title = '官方估值'
+      if (col.key === 'static_premium') col.title = '官方溢价'
+    })
+    
+    const staticPremIndex = cols.findIndex(c => c.key === 'static_premium')
+    cols.splice(staticPremIndex + 1, 0, 
+      { title: '实时成交价(AG0)', key: 'ag0_price', width: 100, align: 'center', render(row: any) { return h('span', { class: 'num-cell' }, row.ag0_price ? row.ag0_price.toFixed(0) : '-') } },
+      { title: '昨结算价(AG0)', key: 'ag0_settlement', width: 100, align: 'center', render(row: any) { return h('span', { class: 'num-cell muted' }, row.ag0_settlement ? row.ag0_settlement.toFixed(0) : '-') } }
+    )
+  }
+
+  const hideIndexTabs = ['黄金原油', 'QDII欧美', '白银']
+  if (hideIndexTabs.includes(currentTab.value)) {
+    return cols.filter(c => c.key !== 'related_index' && c.key !== 'index_close' && c.key !== 'index_pct')
+  }
+  return cols
 })
 
 const tableScrollX = computed(() => {
@@ -519,7 +591,7 @@ const setupRefreshTimer = () => {
 }
 
 watch(currentTab, () => {
-  fetchData(true)
+  fetchData(false)
   setupRefreshTimer()
 })
 

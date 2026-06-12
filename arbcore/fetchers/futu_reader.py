@@ -86,8 +86,32 @@ class FutuReader:
                 self.ctx = OpenQuoteContext(host=self.host, port=self.port)
                 self.subscribed_codes = set()
             
-            # 转换为富途格式 (US.GLD, US.USO)
-            futu_codes = [f"US.{sym}" for sym in symbols]
+            # 区分美股和港股，并正确添加前缀
+            import re
+            futu_codes = []
+            valid_symbols = []
+            
+            for sym in symbols:
+                clean_sym = sym.lstrip('^')
+                for suffix in ['-EU', '-JP', '-HK']:
+                    if clean_sym.endswith(suffix):
+                        clean_sym = clean_sym[:-len(suffix)]
+                        break
+                
+                # 港股通常是5位纯数字
+                if re.match(r'^[0-9]{5}$', clean_sym):
+                    futu_codes.append(f"HK.{clean_sym}")
+                    valid_symbols.append(clean_sym)
+                # 美股代码通常为纯字母 (2-6位)
+                elif re.match(r'^[A-Za-z]{2,6}$', clean_sym):
+                    futu_codes.append(f"US.{clean_sym}")
+                    valid_symbols.append(clean_sym)
+                else:
+                    logger.debug(f"[富途] 自动过滤非适用代码: {sym}")
+            
+            if not futu_codes:
+                return True, "无适用富途的数据标的", self.prices
+
             new_codes = [c for c in futu_codes if c not in self.subscribed_codes]
             
             # 订阅新增加的股票，指定 Session.ALL 获取夜盘
@@ -104,7 +128,7 @@ class FutuReader:
             ret, data = self.ctx.get_stock_quote(futu_codes)
             if ret == 0:
                 for _, row in data.iterrows():
-                    code = row['code'].replace('US.', '')
+                    code = row['code'].replace('US.', '').replace('HK.', '')
                     bid = 0.0
                     ask = 0.0
                     last = 0.0

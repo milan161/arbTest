@@ -3,6 +3,7 @@
 
 import pandas as pd
 import logging
+import time
 from typing import Dict, Any, Optional
 from .valuation_math import calculate_magic_valuation, calculate_basket_valuation
 
@@ -13,15 +14,24 @@ class DynamicValuationCalculator:
         self.db = db_manager
         # 缓存 T-1 基准数据，避免盘中高频调用时反复查库卡死 IO
         self._base_data_cache = {}
+        self._cache_timestamp = {}
     
     def refresh_cache(self):
         """刷新基准数据缓存"""
         self._base_data_cache.clear()
+        self._cache_timestamp.clear()
 
     def get_base_data(self, fund_code: str) -> Optional[Dict[str, Any]]:
-        """获取 T-1 完美基准数据"""
+        """获取 T-1 完美基准数据 (自带 10 分钟自动过期机制)"""
+        current_time = time.time()
         if fund_code in self._base_data_cache:
-            return self._base_data_cache[fund_code]
+            # 10分钟 (600秒) 过期机制
+            if current_time - self._cache_timestamp.get(fund_code, 0) < 600:
+                return self._base_data_cache[fund_code]
+            else:
+                # 缓存过期，安全剔除
+                del self._base_data_cache[fund_code]
+
 
         conn = self.db._get_conn()
         try:
@@ -59,6 +69,7 @@ class DynamicValuationCalculator:
                     base_row['^' + sym] = r['price']
 
             self._base_data_cache[fund_code] = base_row
+            self._cache_timestamp[fund_code] = time.time()
             return base_row
         except Exception as e:
             logger.error(f"获取 {fund_code} 基准数据失败: {e}")

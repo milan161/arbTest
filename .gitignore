@@ -1,55 +1,63 @@
-# === ArbDashboard 专用私密文件夹 ===
+# =================================================================
+# 核心白名单：只上传跟 "程序3(ArbDashboard)" 与 "基座(arbcore)" 运行必须的代码
+# =================================================================
+
+# === ArbDashboard 专用私密文件夹 (绝对禁止上传) ===
 ArbDashboard/backend/private/
 ArbDashboard/frontend/src/private/
 ArbDashboard/backend/core/private/
 ArbDashboard/backend/core/auto_trade/
 
-# === 私密配置 ===
+# === 账号与私密配置 (绝对禁止上传) ===
 arbcore/config/account_private.py
+account_private.py
 arb_config.yaml
 *.local.py
 .env
 
-# === 禁止上传的指定文件 ===
-LOFarb/LOF004_sandbox.py
-LOFarb/LOF005_output.py
-LOFarb/LOF006_create_student_db.py
-LOFarb/deploy_vps.py
-
-# === 禁止上传的目录 ===
-LOFarb/ibapi/
-LOFarb/logs/
-LOFarb/my-ai/
-LOFarb/test/
-LOFarb/data/
-
-.gemini/
-ETFRotate/
-jsl/
-scripts/
-test_read_data/
-woodyAPI/
-公众号/
-woodykey轮动demo/
-/ArbDashboard_Next/
-logs/
-test/
-scratch/
-
-# === 压缩包/临时文件 ===
-ETFRotate*.zip
-GEMINI.md
-LOFarb/Gemini-Proxy.bat
-Gemini-Proxy
-push_to_vercel.py
-deploy_vps.py
-
-# === 数据库（只保留这两个） ===
+# === 数据库 (只保留表结构/基础表) ===
 database/*
 !database/arb_master_share.db
 !database/readme.txt
 
-# === 编辑器/系统垃圾 ===
+# === 非程序3的项目目录 (全部屏蔽) ===
+LOFarb/
+ETFRotate/
+jsl/
+ArbCoreProject/
+ArbDashboard_Next/
+
+# === 外部数据与废弃目录 (全部屏蔽) ===
+data/
+woodyAPI/
+woodykey轮动demo/
+scripts/
+scratch/
+test_read_data/
+.gemini/
+
+# === 文档、日志、自媒体内容与测试代码 (绝对禁止上传) ===
+docs/
+logs/
+test/
+tests/
+公众号文章/
+*.md
+!README.md
+!AGENTS.md
+
+# === 杂项文件/脚本 ===
+/*.py
+*.zip
+*.bat
+GEMINI.md
+Gemini-Proxy
+push_to_vercel.py
+deploy_vps.py
+*.txt
+!requirements.txt
+
+# === 编辑器与系统垃圾 ===
 .vscode/
 .idea/
 .git.bak/

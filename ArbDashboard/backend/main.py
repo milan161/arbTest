@@ -23,14 +23,35 @@ log_filename = datetime.now().strftime("%Y-%m-%d_%H%M%S.log")
 log_filepath = os.path.join(logs_dir, log_filename)
 
 log_format = '%(asctime)s - %(levelname)s - %(message)s - %(name)s'
-logging.basicConfig(
-    level=logging.INFO,
-    format=log_format,
-    handlers=[
-        logging.FileHandler(log_filepath, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
+
+class ColorFormatter(logging.Formatter):
+    COLORS = {
+        'DEBUG': '\033[94m',
+        'INFO': '\033[92m',       # Green
+        'WARNING': '\033[93m',    # Yellow
+        'ERROR': '\033[91m',      # Red
+        'CRITICAL': '\033[1;91m'  # Bold Red
+    }
+    RESET = '\033[0m'
+    
+    def format(self, record):
+        original_levelname = record.levelname
+        color = self.COLORS.get(original_levelname, self.RESET)
+        record.levelname = f"{color}{original_levelname}{self.RESET}"
+        formatted = super().format(record)
+        record.levelname = original_levelname
+        return formatted
+
+# Setup File Handler (no colors)
+file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+file_handler.setFormatter(logging.Formatter(log_format))
+
+# Setup Console Handler (with colors)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(ColorFormatter(log_format))
+
+# Configure Root Logger
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 logger = logging.getLogger("ArbNext")
 
 # [Master-Slave] 检查主交易程序 (LOFarb) 是否运行
@@ -128,9 +149,8 @@ else:
     else:
         raise RuntimeError(f"既找不到 {arbcore_dir}，也找不到 {fallback_dir}")
 
-# 1. [V3.11 统一数据库路径] 使用 D:\Study\arbTest\database\arb_master.db
-# 与其他程序（LOFarb、ARBdashboard、ETFrotate、JSL）保持同级目录
-root_db_path = r"D:\Study\arbTest\database\arb_master.db"
+# 1. [V3.11 统一数据库路径]
+root_db_path = os.path.abspath(os.path.join(workspace_root, "..", "database", "arb_master.db"))
 logger.info(f"📂 Using database at {root_db_path}")
 
 # Define project root (ArbDashboard directory)
@@ -181,8 +201,8 @@ else:
         trading_service = TradingService(db)
         logger.info("交易服务已就绪 (独立模式)")
         
-        # [V4.7] 严防死守：若通达信未启动且不是从机模式，显示强力警告并中断程序启动
-        if not trading_service.trade_manager or not getattr(trading_service.trade_manager, 'tdx_available', False):
+        # [V4.7] 严防死守：若通达信未启动且不是从机模式，显示强力警告并中断程序启动 (仅限 Windows)
+        if sys.platform == "win32" and (not trading_service.trade_manager or not getattr(trading_service.trade_manager, 'tdx_available', False)):
             import sys
             import time
             print("\n" + "="*80)
@@ -232,6 +252,11 @@ async def lifespan(app: FastAPI):
         # 1. [核心策略] 启动即运行一次 011 数据更新（异步，不需要通达信）
         # 011只读取历史数据并写入数据库，与通达信实时行情不冲突
         async def run_011_first():
+            if sys.platform != "win32":
+                logger.info("📊 [Cloud] 云端部署环境，静默跳过 011 本地数据更新任务")
+                system_status.add_milestone("INFO", "云端部署，跳过本地数据同步")
+                return
+
             logger.info("📊 启动时自动运行 011 数据更新任务...")
             system_status.add_milestone("INFO", "启动时自动运行 011 数据更新")
             # 调用 011 更新脚本
@@ -395,6 +420,21 @@ async def get_fund_valuation_meta(code: str):
         calculator = fund_service._get_calculator()
         base_data = calculator.get_base_data(code) if calculator else None
         
+        # 动态推演 Hedge 值（如果数据库里为空）
+        if base_data and (not base_data.get('hedge') or float(base_data.get('hedge', 0)) <= 0):
+            try:
+                trade_etf = fund_cfg.get('trade_etf', '')
+                if trade_etf:
+                    base_etf_price = base_data.get(trade_etf) or base_data.get(f"^{trade_etf}")
+                    base_nav = base_data.get('nav')
+                    base_pos = base_data.get('position')
+                    base_fx = base_data.get('exchange_rate')
+                    if base_etf_price and base_nav and base_pos and base_fx:
+                        calc_hedge = (float(base_etf_price) * float(base_fx)) / (float(base_nav) * float(base_pos))
+                        base_data['hedge'] = calc_hedge
+            except Exception as e:
+                logger.error(f"Failed to calculate missing hedge: {e}")
+        
         # 3. 获取最新汇率
         conn = fund_service.db._get_conn()
         fx_df = pd.read_sql("SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn)
@@ -460,6 +500,26 @@ async def get_fund_valuation_meta(code: str):
                     "calibration": float(row[4]) if row[4] is not None else 0.0
                 }
                 
+                # 如果没有独立校准值，查找全局期货校准值兜底
+                if t1_data["calibration"] == 0.0 and future_symbol:
+                    base_fsym = future_symbol
+                    if 'MGC' in future_symbol or 'GC' in future_symbol: base_fsym = 'GC'
+                    elif 'MCL' in future_symbol or 'CL' in future_symbol: base_fsym = 'CL'
+                    elif 'MNQ' in future_symbol or 'NQ' in future_symbol: base_fsym = 'NQ'
+                    elif 'MES' in future_symbol or 'ES' in future_symbol: base_fsym = 'ES'
+                    
+                    cursor.execute("""
+                        SELECT calibration FROM futures_daily 
+                        WHERE symbol = ? AND calibration IS NOT NULL 
+                        ORDER BY date DESC LIMIT 1
+                    """, (base_fsym,))
+                    crow = cursor.fetchone()
+                    if crow:
+                        t1_data["calibration"] = float(crow[0])
+                        if base_data:
+                            base_data['calibration'] = float(crow[0])
+                
+                
                 # 获取该 T-1 日期对应的 ETF 收盘价
                 etf_prices = []
                 for item in portfolio:
@@ -494,6 +554,21 @@ async def get_fund_valuation_meta(code: str):
                         "pct_change": pct_change
                     })
                 t1_data["etfs_info"] = etf_prices
+                
+                # 如果 T-1 的静态估值为 0，则利用 T-2 的基准数据和 T-1 的 ETF 收盘价进行动态推演
+                if t1_data["static_val"] <= 0 and base_data and calculator:
+                    try:
+                        t1_etfs = {info["symbol"].lstrip('^'): info["price"] for info in etf_prices}
+                        for info in etf_prices:
+                            t1_etfs[info["symbol"]] = info["price"]
+                        
+                        t1_fx = t1_data["exchange_rate"] if t1_data["exchange_rate"] > 0 else base_data.get("exchange_rate", 7.0)
+                        
+                        calc_res = calculator.calculate(fund_cfg, t1_fx, t1_etfs)
+                        if calc_res and calc_res.get('rt_val'):
+                            t1_data["static_val"] = float(calc_res['rt_val'])
+                    except Exception as e:
+                        logger.error(f"Failed to dynamically calculate T-1 static_val: {e}")
         except Exception as e:
             logger.warning(f"获取 T-1 估值日数据失败: {e}")
 
@@ -627,6 +702,32 @@ async def place_manual_order(request: Request):
         price=data.get('price'),
         broker=data.get('broker', 'tdx')
     )
+    return res
+
+@app.post("/api/system/reconnect_ib")
+async def reconnect_ib():
+    if market_data_service.ib_reader:
+        connected = market_data_service.ib_reader.connect_to_ib()
+        if connected:
+            system_status.add_milestone("INFO", "IB 客户端已成功重连")
+            return {"status": "ok", "message": "IB reconnected successfully"}
+        else:
+            system_status.add_milestone("WARNING", "IB 客户端连接失败，请检查 TWS 是否运行")
+            return {"status": "error", "message": "Failed to connect to IB"}
+    else:
+        from arbcore.fetchers.ib_reader import IBReader
+        market_data_service.ib_reader = IBReader(db_manager=db)
+        if market_data_service.ib_reader.connect_to_ib():
+            system_status.add_milestone("INFO", "IB 客户端已成功启动并连接")
+            return {"status": "ok", "message": "IB initialized and connected"}
+        else:
+            market_data_service.ib_reader = None
+            system_status.add_milestone("WARNING", "IB 客户端启动失败，请检查 TWS 是否运行")
+            return {"status": "error", "message": "Failed to initialize IB"}
+
+@app.post("/api/system/reconnect_engine")
+async def reconnect_engine():
+    res = market_data_service.restart_realtime_engine()
     return res
 
 @app.post("/api/system/trigger/{task}")
@@ -773,21 +874,6 @@ async def update_priorities(request: Request):
     market_data_service.restart_realtime_engine()
     return res
 
-@app.get("/api/config/ib_symbols")
-async def get_ib_symbols():
-    data = config_service.get_ib_symbols()
-    return {"status": "ok", "data": data}
-
-@app.post("/api/config/ib_symbols/update")
-async def update_ib_symbols(request: Request):
-    data = await request.json()
-    symbols = data.get('symbols', [])
-    res = config_service.update_ib_symbols(symbols)
-    # 💡 核心升级：实时通知 IBReader 重新拉取新名单并订阅，不用重启服务
-    if market_data_service.ib_reader:
-        market_data_service.ib_reader.symbols = config_service.get_ib_symbols()
-        logger.info(f"🔄 已动态向 IBReader 推送新订阅白名单: {market_data_service.ib_reader.symbols}")
-    return res
 
 # --- Market Data APIs ---
 @app.get("/api/market/realtime/{code}")
@@ -807,5 +893,61 @@ async def get_hist_price(code: str, start_date: str = None):
     data = market_data_service.get_historical_prices(code, start_date=start_date)
     return {"status": "ok", "data": data}
 
+# ==============================================================
+# [V6.5] 静态前端挂载 (公网部署与动静合一)
+# 允许使用 512M 小内存 VPS 同时提供 Backend API 和 Frontend
+# ==============================================================
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# 优先查找上一级目录的 frontend/dist
+frontend_dist_path = os.path.join(workspace_root, "frontend", "dist")
+
+if os.path.exists(frontend_dist_path):
+    logger.info(f"Detected frontend dist at {frontend_dist_path}, mounting static files.")
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")
+    
+    # 捕获所有非 API 的前端路由 (SPA Fallback)
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # 如果请求静态资源(favicon, etc)，直接返回
+        potential_file = os.path.join(frontend_dist_path, full_path)
+        if os.path.isfile(potential_file):
+            return FileResponse(potential_file)
+        # 否则统一返回 index.html 让 Vue Router 接管
+        return FileResponse(os.path.join(frontend_dist_path, "index.html"))
+
+def kill_port_owner(port: int):
+    """
+    [Windows 强力补丁] 启动前强行终止占用指定端口的旧残留进程，防止端口冲突闪退。
+    """
+    if sys.platform != "win32":
+        return
+    import subprocess
+    import re
+    import time
+    try:
+        # 运行 netstat -ano 查找处于 LISTENING 状态的对应端口行
+        output = subprocess.check_output(f'netstat -ano | findstr LISTENING | findstr :{port}', shell=True).decode('utf-8')
+        lines = output.strip().split('\n')
+        for line in lines:
+            if not line: continue
+            parts = re.split(r'\s+', line.strip())
+            if len(parts) >= 5:
+                # 最后一列为 PID，倒数第二列是 LISTENING
+                if parts[-2] == 'LISTENING':
+                    pid = int(parts[-1])
+                    if pid > 0 and pid != os.getpid():
+                        logger.info(f"🚨 [端口防护] 检测到端口 {port} 被旧进程 (PID: {pid}) 占用，正在强行终止释放端口...")
+                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        logger.info(f"✅ [端口防护] 成功终止旧进程 {pid}，端口 {port} 已释放。")
+                        time.sleep(1) # 稍等 1 秒让操作系统彻底释放句柄
+    except subprocess.CalledProcessError:
+        # findstr 没找到任何内容时会抛出 CalledProcessError，说明没有进程在监听此端口，为正常现象
+        pass
+    except Exception as e:
+        logger.error(f"⚠️ [端口防护] 清理端口 {port} 残留进程失败: {e}")
+
 if __name__ == "__main__":
+    kill_port_owner(8000)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

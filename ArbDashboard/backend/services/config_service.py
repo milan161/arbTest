@@ -59,36 +59,3 @@ class ConfigService:
         cms = ConfigManagerService(project_root)
         return cms.load_config()
 
-    def get_ib_symbols(self) -> List[str]:
-        """获取 IB/富途 的美股订阅白名单"""
-        try:
-            conn = self.db._get_conn()
-            cursor = conn.cursor()
-            cursor.execute("SELECT config_json FROM data_source_config WHERE module = 'ib_config' AND source_name = 'whitelist'")
-            row = cursor.fetchone()
-            conn.close()
-            if row and row[0]:
-                data = json.loads(row[0])
-                return data.get('symbols', ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"])
-        except Exception as e:
-            logger.error(f"Failed to get ib_symbols: {e}")
-        return ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
-
-    def update_ib_symbols(self, symbols: List[str]):
-        """更新 IB/富途 的美股订阅白名单"""
-        try:
-            # 过滤空值，转为大写，去除空格
-            clean_symbols = [s.strip().upper() for s in symbols if s.strip()]
-            config_json = json.dumps({"symbols": clean_symbols})
-            conn = self.db._get_conn()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO data_source_config (module, source_name, config_json)
-                VALUES ('ib_config', 'whitelist', ?)
-            """, (config_json,))
-            conn.commit()
-            conn.close()
-            return {"status": "ok", "message": "IB symbols whitelist updated"}
-        except Exception as e:
-            logger.error(f"Failed to update ib_symbols: {e}")
-            return {"status": "error", "message": str(e)}

@@ -1,6 +1,0 @@
-setup.py
-arbcore.egg-info/PKG-INFO
-arbcore.egg-info/SOURCES.txt
-arbcore.egg-info/dependency_links.txt
-arbcore.egg-info/requires.txt
-arbcore.egg-info/top_level.txt

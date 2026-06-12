@@ -83,9 +83,9 @@ class MarketDataService:
                 logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
                 return None
             elif self.ib_reader and not self.ib_reader.connected:
-                logger.warning(f"⚠️ IB未连接，美股ETF{symbol}将无法获取实时价格")
+                logger.debug(f"⚠️ IB未连接，美股ETF{symbol}将无法获取实时价格")
             else:
-                logger.warning(f"⚠️ IB Reader未初始化，美股ETF{symbol}将无法获取实时价格")
+                logger.debug(f"⚠️ IB Reader未初始化，美股ETF{symbol}将无法获取实时价格")
             
             # 2. [NEW] IB 不可用时，尝试富途
             if self.futu_reader:
@@ -146,6 +146,8 @@ class MarketDataService:
         # 实时检测 IB 的真实连接状态
         if self.ib_reader is not None and getattr(self.ib_reader, 'connected', False) and not any("IB" in s for s in sources):
             sources.append("IB (Ready)")
+        else:
+            sources.append("IB (未运行)")
         # 实时检测富途 OpenD 端口的真实连接状态（避免因 IB 优先级高未触发富途连接而导致状态不显示的问题）
         if self.futu_reader is not None and not any("富途" in s for s in sources):
             import socket

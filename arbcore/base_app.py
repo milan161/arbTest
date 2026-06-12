@@ -3,6 +3,11 @@ import os
 import sys
 import logging
 from datetime import datetime
+import io
+
+# 强制 sys.stdout 使用 UTF-8 (解决 Windows 控制台输出 emoji 时报错)
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # 🚀 强制全局禁用系统代理
 os.environ['NO_PROXY'] = '*'

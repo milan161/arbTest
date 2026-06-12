@@ -102,13 +102,6 @@ class IntradaySamplerService:
             except Exception as e:
                 logger.warning(f"⚠️ 获取汇率失败: {e}")
             
-            # 获取美股夜盘订阅白名单
-            try:
-                ib_whitelist = set(self.config_service.get_ib_symbols() or [])
-            except Exception as e:
-                logger.warning(f"获取订阅白名单失败，使用默认列表: {e}")
-                ib_whitelist = {"GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"}
-            
             # [修复] 构建完整符号的实时价格字典（如 ^INDA-EU → 35.5）
             current_etfs = {}
             
@@ -143,9 +136,9 @@ class IntradaySamplerService:
                     if symbol.upper().startswith(('SZ', 'SH')):
                         continue
                     
-                    # [核心安全阀] 过滤不在美股订阅白名单中的标的，不产生额外负荷
-                    if base_sym.upper() not in ib_whitelist:
-                        continue
+                    # [核心安全阀解除] 白名单限制已废除
+                    # 因为混合基金的重负载美股(TSMC, NVDA等)已经硬路由至富途分流
+                    # 剩下的核心套利ETF(GLD, USO, XOP等)不到20只，盈透(IB)完全可以全量接管夜盘流式订阅
                     
                     # 添加到待采集集合
                     us_etf_symbols.add(symbol)
