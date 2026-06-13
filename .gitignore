@@ -50,6 +50,7 @@ arb_config.yaml
 /*.py
 *.zip
 *.bat
+!/ArbDashboard/start_dashboard.bat
 GEMINI.md
 Gemini-Proxy
 push_to_vercel.py
