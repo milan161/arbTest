@@ -60,6 +60,7 @@ deploy_vps.py
 !requirements.txt
 
 # === 编辑器与系统垃圾 ===
+/ArbDashboard/*.png
 .vscode/
 .idea/
 .git.bak/
