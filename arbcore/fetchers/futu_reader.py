@@ -41,6 +41,7 @@ class FutuReader:
         self.subscribed_codes = set()
         self.last_connect_time = 0
         self.last_log_time = 0
+        self.disabled = False  # 如果连接失败，标记为禁用，防止无限重试
         
     def close(self):
         """关闭连接"""
@@ -53,20 +54,11 @@ class FutuReader:
             logger.info("[富途] 已关闭连接")
     
     def get_prices(self, symbols):
-        """
-        获取美股实时价格
-        
-        Args:
-            symbols: 股票代码列表，如 ['GLD', 'USO', 'SPY']
-            
-        Returns:
-            (success, message, prices_dict)
-            - success: bool, 是否成功
-            - message: str, 状态信息
-            - prices_dict: dict, {symbol: {'bid': ..., 'ask': ..., 'last': ...}}
-        """
         if not FUTU_AVAILABLE:
-            return False, "未安装 futu-api 库 (pip install futu-api)", self.prices
+            return False, "未安装 futu-api 库", self.prices
+            
+        if self.disabled:
+            return False, "富途API已被禁用 (连接曾被拒绝)", self.prices
             
         try:
             # 限制重连频率，避免富途OpenD未启动时狂刷错误
@@ -78,6 +70,7 @@ class FutuReader:
                 # 静音富途底层日志
                 try:
                     import futu
+                    futu.SysConfig.set_all_thread_daemon(True)
                     futu.SysConfig.set_client_info('ArbDashboard')
                 except:
                     pass
@@ -133,25 +126,33 @@ class FutuReader:
                     ask = 0.0
                     last = 0.0
                     
+                    def safe_float(val):
+                        if pd.isna(val) or val == 'N/A' or val == '': return 0.0
+                        try:
+                            return float(val)
+                        except:
+                            return 0.0
+
                     # 【核心逻辑】优先使用真正的买一价/卖一价
-                    if 'bid_price_0' in row and pd.notna(row['bid_price_0']) and float(row['bid_price_0']) > 0:
-                        bid = float(row['bid_price_0'])
-                    if 'ask_price_0' in row and pd.notna(row['ask_price_0']) and float(row['ask_price_0']) > 0:
-                        ask = float(row['ask_price_0'])
-                    if 'last_price' in row and pd.notna(row['last_price']) and float(row['last_price']) > 0:
-                        last = float(row['last_price'])
+                    bid_0 = safe_float(row.get('bid_price_0'))
+                    ask_0 = safe_float(row.get('ask_price_0'))
+                    last_0 = safe_float(row.get('last_price'))
+                    
+                    if bid_0 > 0: bid = bid_0
+                    if ask_0 > 0: ask = ask_0
+                    if last_0 > 0: last = last_0
                     
                     # 如果买一/卖一都缺失，使用夜盘/盘前/盘后/最新价作为兜底
                     if bid <= 0 or ask <= 0:
                         fallback_price = 0.0
-                        if 'overnight_price' in row and pd.notna(row['overnight_price']) and float(row['overnight_price']) > 0:
-                            fallback_price = float(row['overnight_price'])
-                        elif 'pre_price' in row and pd.notna(row['pre_price']) and float(row['pre_price']) > 0:
-                            fallback_price = float(row['pre_price'])
-                        elif 'after_price' in row and pd.notna(row['after_price']) and float(row['after_price']) > 0:
-                            fallback_price = float(row['after_price'])
-                        elif 'last_price' in row and pd.notna(row['last_price']) and float(row['last_price']) > 0:
-                            fallback_price = float(row['last_price'])
+                        overnight = safe_float(row.get('overnight_price'))
+                        pre = safe_float(row.get('pre_price'))
+                        after = safe_float(row.get('after_price'))
+                        
+                        if overnight > 0: fallback_price = overnight
+                        elif pre > 0: fallback_price = pre
+                        elif after > 0: fallback_price = after
+                        elif last_0 > 0: fallback_price = last_0
                         
                         if fallback_price > 0:
                             if bid <= 0:
@@ -192,7 +193,8 @@ class FutuReader:
             self.close()
             err_msg = str(e)
             if "refused" in err_msg.lower() or "10061" in err_msg:
-                logger.warning("[富途] 无法连接到OpenD")
+                logger.warning("[富途] 无法连接到OpenD，已永久禁用后续自动重试。如需使用请重启系统。")
+                self.disabled = True
                 return False, "富途API未运行 (连接被拒绝)", self.prices
             logger.error(f"[富途] 异常: {err_msg}")
             return False, f"富途接口异常: {err_msg}", self.prices

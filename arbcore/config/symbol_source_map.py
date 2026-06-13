@@ -223,11 +223,11 @@ FUTURES_MAP = {
     'IH': 'TDX',  # 上证50
     'IM': 'TDX',  # 中证1000
     
-    # 国际期货（通过通达信）
-    'GC': 'TDX',  # COMEX黄金
-    'CL': 'TDX',  # 纽约原油
-    'HG': 'TDX',  # COMEX铜
-    'SI': 'TDX',  # COMEX白银
+    # 国际期货（新浪延时数据兜底）
+    'GC': 'SINA',  # COMEX黄金
+    'CL': 'SINA',  # 纽约原油
+    'HG': 'SINA',  # COMEX铜
+    'SI': 'SINA',  # COMEX白银
 }
 
 # 指数映射表（从新浪获取）

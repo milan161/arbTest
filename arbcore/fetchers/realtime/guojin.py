@@ -103,7 +103,9 @@ class GuojinQmtFetcher(BaseRealtimeFetcher):
         qmt_symbol = self.normalize_symbol(symbol)
         full_tick = self.xtdata.get_full_tick([qmt_symbol])
         if qmt_symbol in full_tick:
-            return self._format_tick(qmt_symbol, full_tick[qmt_symbol])
+            tick = full_tick[qmt_symbol]
+            if isinstance(tick, dict):
+                return self._format_tick(qmt_symbol, tick)
         return None
 
     def normalize_symbol(self, symbol: str) -> str:

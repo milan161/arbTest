@@ -221,7 +221,7 @@ const filteredTableData = computed(() => {
     '黄金原油': ['黄金原油', '黄金', '原油'],
     'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
     'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
-    '国内LOF': ['指数LOF', '其他', '国内LOF'],
+    '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
     '白银': ['白银', '白银LOF']
   }
 
@@ -533,33 +533,18 @@ const tableScrollX = computed(() => {
 })
 
 const fetchData = async (isSilent = false) => {
-  if (!isSilent) loading.value = true
+  // 只有第一次加载或确实没有数据时才显示全局转圈，避免切 Tab 时闪烁
+  if (!isSilent && tableData.value.length === 0) loading.value = true
   try {
     const params: any = {}
-    const highFreqTabs = ['自选', '黄金原油', 'QDII欧美']
-    
-    // 如果处于高频更新 Tab，拼装 watchlist 参数以减小后端处理负荷
-    if (highFreqTabs.includes(currentTab.value)) {
-      let codes: string[] = []
-      if (currentTab.value === '自选') {
-        codes = watchlist.value
-      } else if (tableData.value.length > 0) {
-        const tabMap: Record<string, string[]> = {
-          '黄金原油': ['黄金原油', '黄金', '原油'],
-          'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境']
-        }
-        const targetCategories = tabMap[currentTab.value] || []
-        codes = tableData.value
-          .filter((item: any) => targetCategories.includes(item.category))
-          .map((item: any) => item.fund_code)
-      }
-      if (codes.length > 0) {
-        params.watchlist = codes.join(',')
-      }
+    if (currentTab.value === '自选') {
+      params.watchlist = watchlist.value.join(',')
+    } else {
+      params.category = currentTab.value
     }
 
     const [dashRes, marketRes, milestoneRes, engineRes] = await Promise.all([
-      axios.get('/api/dashboard', { params }), 
+      axios.get('/api/dashboard', { params }),  
       axios.get('/api/market/overview'), 
       axios.get('/api/system/milestones'), 
       axios.get('/api/auto_trade/status')
@@ -579,6 +564,7 @@ const setupRefreshTimer = () => {
 }
 
 watch(currentTab, () => {
+  tableData.value = [] // 切换 Tab 时清空旧数据，触发 loading 并防止闪烁错误的旧数据
   fetchData(false)
   setupRefreshTimer()
 })

@@ -199,27 +199,16 @@ else:
         # 如果主程序没运行，尝试启动交易服务 (仅供测试或单机模式)
         from services.trading_service import TradingService
         trading_service = TradingService(db)
-        logger.info("交易服务已就绪 (独立模式)")
         
-        # [V4.7] 严防死守：若通达信未启动且不是从机模式，显示强力警告并中断程序启动 (仅限 Windows)
+        # [V4.7] 修改：放开通达信强制绑定限制，允许系统在只有 QMT 的情况下启动
         if sys.platform == "win32" and (not trading_service.trade_manager or not getattr(trading_service.trade_manager, 'tdx_available', False)):
-            import sys
-            import time
+            logger.warning("交易通道部分受限 (未检测到通达信登录)")
             print("\n" + "="*80)
-            print("!!! 致命错误：未检测到已成功连接的【通达信】交易账户！ !!!")
-            print("="*80)
-            print("👉 原因分析：")
-            print("   1. 本地【通达信客户端 (TdxW.exe)】尚未启动，或未成功登录交易账号。")
-            print("   2. tqcenter 插件无法取得有效的 stock_account 句柄。")
-            print("\n👉 解决办法：")
-            print("   1) 请先手动双击启动并登录【通达信交易客户端】。")
-            print("   2) 确保通达信的 tqcenter 插件成功载入。")
-            print("   3) 重新双击运行 start_dashboard.bat 启动看板系统。")
-            print("="*80)
-            print("正在安全退出系统后端服务，请按任意键关闭窗口并重启通达信...\n")
-            time.sleep(2)
-            sys.exit(1)
-            
+            print("提示: tdx_available = False (如果您仅使用 QMT 交易，这完全正常)。")
+            print("系统将继续启动...")
+            print("="*80 + "\n")
+        else:
+            logger.info("交易服务已就绪 (独立模式)")
     except SystemExit:
         sys.exit(1)
     except Exception as e:
@@ -259,9 +248,9 @@ async def lifespan(app: FastAPI):
 
             logger.info("📊 启动时自动运行 011 数据更新任务...")
             system_status.add_milestone("INFO", "启动时自动运行 011 数据更新")
-            # 调用 011 更新脚本
-            lofarb_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "LOFarb"))
-            script_path = os.path.join(lofarb_dir, "LOF011_daily_updater.py")
+            # 调用 011 (指向统一的 daily_updater.py) 更新脚本
+            scripts_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
+            script_path = os.path.join(scripts_dir, "daily_updater.py")
             
             # [V4.1] 尝试多种 Python 路径
             python_exe_candidates = [
@@ -280,15 +269,15 @@ async def lifespan(app: FastAPI):
             
             if python_exe and os.path.exists(script_path):
                 try:
-                    subprocess.Popen([python_exe, script_path], cwd=lofarb_dir)
-                    logger.info("✅ 011 任务已在后台启动")
+                    subprocess.Popen([python_exe, script_path], cwd=scripts_dir)
+                    logger.info("✅ 011 任务已在后台启动 (daily_updater)")
                     system_status.add_milestone("SUCCESS", "011 数据更新任务已启动")
                 except Exception as e:
                     logger.error(f"❌ 011 任务启动失败: {e}")
                     system_status.add_milestone("ERROR", f"011 任务启动失败: {e}")
             else:
-                logger.warning(f"⚠️ 011 脚本不存在: {script_path}")
-                system_status.add_milestone("WARNING", "011 脚本路径不存在")
+                logger.info(f"ℹ️ 未检测到 011 脚本，跳过自动更新")
+                system_status.add_milestone("INFO", "未检测到 011 脚本，跳过自动更新")
         
         asyncio.create_task(run_011_first())
 
@@ -352,7 +341,7 @@ async def get_health():
 # (已在服务初始化前定义)
 
 @app.get("/api/dashboard")
-async def get_dashboard(watchlist: str = None):
+async def get_dashboard(watchlist: str = None, category: str = None):
     """Unified dashboard data for both LOF and JSL
     [V6.0] 接收前端传递的自选基金列表，用于采样服务过滤
     """
@@ -367,7 +356,10 @@ async def get_dashboard(watchlist: str = None):
     try:
         import traceback
         # 传递自选列表，按需仅计算自选基金，极大地加速响应
-        data = fund_service.get_unified_dashboard_data(watchlist=_active_watchlist if watchlist else None)
+        data = fund_service.get_unified_dashboard_data(
+            watchlist=_active_watchlist if watchlist else None,
+            category=category
+        )
         return {"status": "ok", "data": data}
     except Exception as e:
         msg = f"Dashboard API Error: {e}"
@@ -509,12 +501,13 @@ async def get_fund_valuation_meta(code: str):
         t1_data = {}
         try:
             cursor = conn.cursor()
+            # T-1 估值日是统一历史记录里的最新日期记录
             cursor.execute("""
                 SELECT h.date, COALESCE(h.nav, f.nav) as nav, h.static_val, r.usd_cny_mid, h.calibration 
                 FROM unified_fund_history h
                 LEFT JOIN exchange_rate r ON h.date = r.date
                 LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
-                WHERE h.fund_code = ? AND COALESCE(h.nav, f.nav) IS NOT NULL AND COALESCE(h.nav, f.nav) > 0
+                WHERE h.fund_code = ?
                 ORDER BY h.date DESC LIMIT 1
             """, (code,))
             row = cursor.fetchone()
@@ -727,9 +720,55 @@ async def place_manual_order(request: Request):
         code=data.get('code'),
         volume=data.get('volume'),
         price=data.get('price'),
-        broker=data.get('broker', 'tdx')
+        broker=data.get('broker', 'tdx'),
+        account_id=data.get('account_id')
     )
     return res
+
+@app.get("/api/system/accounts")
+async def get_accounts():
+    """从隐私配置获取交易账号列表供前端渲染，不暴露给Git"""
+    try:
+        from arbcore.config.account_private import YH_ACCOUNT_LIST
+        return {"status": "ok", "data": YH_ACCOUNT_LIST}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": {}}
+
+@app.post("/api/system/accounts")
+async def save_accounts(request: Request):
+    """保存交易账号列表到 account_private.py"""
+    try:
+        data = await request.json()
+        accounts = data.get("accounts", {})
+        
+        import os
+        import re
+        # 定位 account_private.py
+        file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "arbcore", "config", "account_private.py")
+        
+        if not os.path.exists(file_path):
+            return {"status": "error", "message": "account_private.py 不存在"}
+            
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        # 构建新的字典字符串
+        dict_str = "YH_ACCOUNT_LIST = {\n"
+        for k in ["1", "2", "3", "4", "5", "6"]:
+            val = accounts.get(k, "")
+            label = "备用" if k == "6" else f"周{['一','二','三','四','五'][int(k)-1]}使用"
+            dict_str += f'    "{k}": "{val}",  # {label}\n'
+        dict_str += "}"
+        
+        # 使用正则替换
+        new_content = re.sub(r'YH_ACCOUNT_LIST\s*=\s*\{[^}]*\}', dict_str, content)
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+            
+        return {"status": "ok", "message": "账号保存成功，已写入隐私配置"}
+    except Exception as e:
+        return {"status": "error", "message": f"保存失败: {str(e)}"}
 
 @app.post("/api/system/reconnect_ib")
 async def reconnect_ib():
@@ -760,11 +799,11 @@ async def reconnect_engine():
 @app.post("/api/system/trigger/{task}")
 async def trigger_task(task: str):
     import subprocess
-    # [FIX] 脚本路径计算 - LOFarb 在 arbTest 目录下（与ArbDashboard同级）
-    # backend -> ArbDashboard -> arbTest -> LOFarb
+    # [FIX] 脚本路径计算 - 彻底解耦 LOFarb，指向统一的 arbcore/scripts/daily_updater.py
+    scripts_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
     lofarb_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "LOFarb"))
     task_map = {
-        "011": os.path.join(lofarb_dir, "LOF011_daily_updater.py"),
+        "011": os.path.join(scripts_dir, "daily_updater.py"),
         "012": os.path.join(lofarb_dir, "LOF012_calculate_static_valuation.py")
     }
     if task not in task_map:
@@ -977,4 +1016,4 @@ def kill_port_owner(port: int):
 
 if __name__ == "__main__":
     kill_port_owner(8000)
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", access_log=False)

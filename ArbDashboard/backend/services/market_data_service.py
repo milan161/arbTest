@@ -51,6 +51,11 @@ class MarketDataService:
         - 去掉 ^ 前缀
         - 去掉 -EU, -JP, -HK 等地区后缀
         """
+        import datetime
+        # 按照中国时间判断，如果当前是周六或周日，则直接返回None，不去爬任何实时数据 (周末跳过)
+        if datetime.datetime.now().weekday() >= 5:
+            return None
+            
         symbol = symbol.strip().upper().lstrip('^')
         # 去掉地区后缀（如 -EU, -JP, -HK）
         for suffix in ['-EU', '-JP', '-HK']:
@@ -58,8 +63,11 @@ class MarketDataService:
                 symbol = symbol[:-len(suffix)]
                 break
         
-        # [FIX] 美股ETF优先从IB获取，IB失败则使用富途
-        if US_SYMBOL_PATTERN.match(symbol):
+        from arbcore.config.symbol_source_map import get_symbol_source
+        source = get_symbol_source(symbol)
+        
+        # [FIX] 根据 source 决定是否走美股通道
+        if source == 'IB':
             # 1. 尝试从 IB 获取
             if self.ib_reader and self.ib_reader.connected:
                 # 直接访问IBReader的prices字典
@@ -83,11 +91,35 @@ class MarketDataService:
                 logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
                 return None
             elif self.ib_reader and not self.ib_reader.connected:
-                logger.debug(f"⚠️ IB未连接，美股ETF{symbol}将无法获取实时价格")
+                logger.debug(f"⚠️ IB未连接，美股ETF{symbol}尝试回退至富途")
             else:
-                logger.debug(f"⚠️ IB Reader未初始化，美股ETF{symbol}将无法获取实时价格")
+                logger.debug(f"⚠️ IB Reader未初始化，美股ETF{symbol}尝试回退至富途")
             
-            # 2. [NEW] IB 不可用时，尝试富途
+            # 2. [NEW] IB 不可用时，兜底尝试富途
+            if self.futu_reader:
+                try:
+                    success, msg, prices = self.futu_reader.get_prices([symbol])
+                    if success and symbol in prices:
+                        quote = prices[symbol]
+                        bid = quote.get('bid', 0)
+                        ask = quote.get('ask', 0)
+                        last = quote.get('last', 0)
+                        return {
+                            'symbol': symbol,
+                            'price': last if last > 0 else bid,
+                            'bid': bid,
+                            'ask': ask if ask > 0 else bid,
+                            'amount': 0,
+                            'source': '富途(兜底)'
+                        }
+                    else:
+                        logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
+                except Exception as e:
+                    logger.error(f"⚠️ 富途兜底获取{symbol}异常: {e}")
+            return None # [FIX] 无论如何，美股不能继续往下走A股引擎
+                    
+        elif source == 'FUTU':
+            # 直接走富途通道
             if self.futu_reader:
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
@@ -108,6 +140,7 @@ class MarketDataService:
                         logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
                 except Exception as e:
                     logger.error(f"⚠️ 富途获取{symbol}异常: {e}")
+            return None # [FIX] 无论如何，美股不能继续往下走A股引擎
         
         # A股/港股/期货从RealtimeMarketManager获取
         if symbol not in self.realtime_manager.symbols:

@@ -12,11 +12,9 @@ class ConfigManagerService:
     """
     def __init__(self, project_root):
         # 兼容 project_root 为 D:\Study\arbTest\ArbDashboard 或 D:\Study\arbTest
-        path1 = os.path.join(project_root, "LOFarb", "lof_config.yaml")
-        if os.path.exists(path1):
-            self.config_path = path1
-        else:
-            self.config_path = os.path.join(os.path.dirname(project_root), "LOFarb", "lof_config.yaml")
+        # 彻底废弃 LOFarb，统一从 arbcore/scripts/lof_config.yaml 加载配置
+        base_dir = project_root if os.path.exists(os.path.join(project_root, "arbcore")) else os.path.dirname(project_root)
+        self.config_path = os.path.normpath(os.path.join(base_dir, "arbcore", "scripts", "lof_config.yaml"))
 
     def load_config(self) -> Dict[str, Any]:
         if not os.path.exists(self.config_path):

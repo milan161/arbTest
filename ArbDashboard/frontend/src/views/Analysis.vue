@@ -310,7 +310,8 @@
             <div class="sandbox-layout" style="display: flex; flex-direction: column; gap: 8px;">
                <!-- 下单区-1: A股 LOF -->
                <div style="width: 100%; display: flex; align-items: center; gap: 6px; background: #fff5f5; padding: 6px 10px; border-radius: 6px; border: 1px solid #ffcdd2; flex-wrap: wrap; box-sizing: border-box;">
-                  <n-select v-model:value="lofBroker" size="small" style="width: 100px;" :options="[ { label: '银河QMT', value: 'yinhe_qmt' }, { label: '通达信', value: 'tdx' } ]" />
+                  <span style="color:#666; font-size: 12px;">券商:</span>
+                  <n-select v-model:value="lofBroker" size="small" style="width: 130px;" :options="[ { label: '银河QMT', value: 'yinhe_qmt' }, { label: '通达信(华宝)', value: 'tdx' }, { label: '国金QMT', value: 'guojin_qmt' } ]" />
                   <span style="font-weight:bold; color:#d32f2f; font-size:13px;">{{ fundName }} ({{ fundCode }}):</span>
                   <div style="flex: 1; min-width: 5px;"></div>
                   <span style="color:#666; font-size: 12px; white-space: nowrap;">数量:</span>
@@ -342,6 +343,12 @@
 
             <!-- 下单按键区 -->
             <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 12px; border-top: 1px dashed #fed7aa; padding-top: 12px;">
+               <!-- 交易账号选择器 (多账号轮动策略) -->
+               <div style="display: flex; align-items: center; gap: 10px; background: #e0f2fe; padding: 8px 12px; border-radius: 6px; border: 1px solid #bae6fd;">
+                  <span style="font-weight:bold; color:#0369a1; font-size:13px; white-space:nowrap;">🏦 交易账号:</span>
+                  <n-select v-model:value="selectedAccountId" :options="accountOptions" size="small" style="flex: 1;" placeholder="智能默认推荐" />
+               </div>
+               
                <!-- 第一行：买入/开仓按键 -->
                <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
                   <n-button type="success" style="flex: 1; min-width: 110px; font-weight:bold;" @click="sendOrder('BUY', 'lof')">{{ fundCode }} 折价买入</n-button>
@@ -386,9 +393,12 @@
                </div>
 
                <!-- 期货实时价格 (CL, GC, etc.) -->
-               <div v-if="meta?.fund_config?.trade_future" 
+               <div v-if="meta?.fund_config?.trade_future && (showFutCalib || showPureFut)" 
                     style="background: #fff3e0; padding: 6px 10px; border-radius: 6px; border: 1px solid #fef08a; display: flex; flex-direction: column; gap: 4px;">
-                  <div style="font-weight: bold; color: #d97706; font-size: 12px;">📊 {{ meta?.fund_config?.trade_future }} 实时盘口:</div>
+                  <div style="font-weight: bold; color: #d97706; font-size: 12px; display: flex; justify-content: space-between; align-items: center;">
+                     <span>📊 {{ meta?.fund_config?.trade_future }} 实时盘口:</span>
+                     <span style="font-size: 10px; color: #78350f; font-weight: normal;">({{ meta?.future_quote?.source || '新浪' }})</span>
+                  </div>
                   <div style="display: flex; justify-content: space-between; font-size: 12px;">
                      <span style="color:#2e7d32; font-weight:bold; cursor:pointer;" @click="testFutPrice = (typeof meta?.future_quote === 'object' ? meta?.future_quote?.bid : meta?.future_quote) || testFutPrice" title="点击填入买一价">
                         买一: <span style="font-family: monospace;">{{ (typeof meta?.future_quote === 'object' ? meta?.future_quote?.bid?.toFixed(2) : meta?.future_quote?.toFixed(2)) || '等待数据' }}</span>
@@ -548,7 +558,37 @@ const simEtfPrice = ref(0)
 const orderVol = ref(2000)
 const hedgeVol = ref(10)
 const hedgePrice = ref(0)
-const autoLog = ref(true)
+// 多账号轮动：智能推荐
+const selectedAccountId = ref('')
+const accountOptions = ref([
+  { label: '🤖 智能默认 (随星期自动切换)', value: '' }
+])
+
+const fetchAccounts = async () => {
+  try {
+    const res = await axios.get('/api/system/accounts')
+    if (res.data.status === 'ok' && res.data.data) {
+      const data = res.data.data
+      accountOptions.value = [
+        { label: '🤖 智能默认 (随星期自动切换)', value: '' },
+        { label: `周一户 (尾号${data['1']?.slice(-1) || '1'})`, value: data['1'] || 'account_1' },
+        { label: `周二户 (尾号${data['2']?.slice(-1) || '2'})`, value: data['2'] || 'account_2' },
+        { label: `周三户 (尾号${data['3']?.slice(-1) || '3'})`, value: data['3'] || 'account_3' },
+        { label: `周四户 (尾号${data['4']?.slice(-1) || '4'})`, value: data['4'] || 'account_4' },
+        { label: `周五户 (尾号${data['5']?.slice(-1) || '5'})`, value: data['5'] || 'account_5' },
+        { label: `备用账号`, value: data['6'] || 'account_6' }
+      ]
+      
+      // 根据星期几自动推荐账号 (1=周一, 5=周五)
+      const dayOfWeek = new Date().getDay()
+      if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+          selectedAccountId.value = data[dayOfWeek.toString()] || `account_${dayOfWeek}`
+      }
+    }
+  } catch (e) {
+    console.error("获取交易账号失败", e)
+  }
+}
 
 let realtimeTimer: any = null
 
@@ -1176,7 +1216,7 @@ const sendOrder = async (action: string, brokerType: 'lof' | 'ib' | 'ib_future')
     p = testFutPrice.value; v = targetLotsFuture.value; sym = meta.value?.fund_config?.trade_future || ''; broker = 'ib'
   }
   try {
-    const res = await axios.post('/api/trading/order', { action, code: sym, volume: v, price: p, broker })
+    const res = await axios.post('/api/trading/order', { action, code: sym, volume: v, price: p, broker, account_id: selectedAccountId.value })
     if (res.data.status === 'ok') {
       message.success(`下单成功: ${res.data.message}`)
       if (autoLog.value) {
@@ -1218,6 +1258,7 @@ const pollRealtime = async () => {
 
 onMounted(() => {
     loadFilterSettings()
+    fetchAccounts()
     if (fundCode.value) fetchAll()
     else fetchDashboard()
     realtimeTimer = setInterval(pollRealtime, 3000)

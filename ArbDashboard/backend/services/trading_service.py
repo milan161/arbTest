@@ -34,8 +34,8 @@ class TradingService:
                         logger.info("TradingService 成功挂载 TradeManager (TDX已就绪)")
                         system_status.add_milestone("SUCCESS", "交易管理器已挂载，通达信就绪")
                     else:
-                        logger.warning("TradeManager 已挂载，但 TDX 处于未连接状态")
-                        system_status.add_milestone("WARNING", "通达信接口未初始化，请检查客户端是否开启")
+                        logger.info("TradeManager 已挂载，通达信未登录交易账号（当前为只读看盘模式）")
+                        system_status.add_milestone("INFO", "通达信交易未登录 (不影响极速行情)")
                 else:
                     logger.info("TradingService 成功挂载 TradeManager")
             except ImportError:
@@ -102,7 +102,7 @@ class TradingService:
         except:
             return {"balance": 0, "available": 0, "market_value": 0}
 
-    def execute_order(self, action: str, code: str, volume: int, price: float, broker: str = 'tdx') -> Dict[str, Any]:
+    def execute_order(self, action: str, code: str, volume: int, price: float, broker: str = 'tdx', account_id: str = None) -> Dict[str, Any]:
         """执行下单"""
         if not self.trade_manager:
             return {"status": "error", "message": "交易引擎未加载"}
@@ -114,7 +114,8 @@ class TradingService:
             action=action, 
             symbol=symbol,
             volume=int(volume),
-            price=float(price)
+            price=float(price),
+            account_id=account_id
         )
         
         # 安全处理 msg 为空或 None 的情况

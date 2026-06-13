@@ -171,7 +171,8 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
     [V6.0 性能优化] 批量预取新浪/腾讯指数数据，将 O(N) 降低为 O(1)
     返回 { "399300": {"price": 4000.0, "pct": 1.63}, ... }
     """
-    if not symbols:
+    import datetime
+    if not symbols or datetime.datetime.now().weekday() >= 5:
         return {}
         
     import requests
@@ -295,7 +296,7 @@ class FundService:
                 logger.error(f"初始化估值计算器失败: {e}")
         return self._calculator
 
-    def get_unified_dashboard_data(self, watchlist: List[str] = None) -> List[Dict[str, Any]]:
+    def get_unified_dashboard_data(self, watchlist: List[str] = None, category: str = None) -> List[Dict[str, Any]]:
         """
         [V3.8] 终极工业版 - 彻底解决 0 和 None 值的显示 Bug
         [V4.6] 全面防御性编程 - 防止所有 NoneType 错误
@@ -304,9 +305,21 @@ class FundService:
         conn = self.db._get_conn()
         try:
             funds_df = pd.read_sql_query("SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list", conn)
+            
             if watchlist and not funds_df.empty:
                 watchlist_strs = [str(w) for w in watchlist]
                 funds_df = funds_df[funds_df['fund_code'].astype(str).isin(watchlist_strs)]
+            elif category and not funds_df.empty:
+                tabMap = {
+                    '黄金原油': ['黄金原油', '黄金', '原油'],
+                    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
+                    'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
+                    '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
+                    '白银': ['白银', '白银LOF']
+                }
+                target_cats = tabMap.get(category, [category])
+                funds_df = funds_df[funds_df['category'].isin(target_cats)]
+
             
             # 从 fund_info 表读取用户爬虫获取的状态和费率
             status_df = pd.read_sql_query("SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee FROM fund_info", conn)
@@ -482,17 +495,16 @@ class FundService:
                                 pct = idx_data.get('pct', 0.0)
                                 metrics['index_close'] = idx_data.get('price', 0.0)
                             else:
-                                pct = get_index_change_percent(rel_idx)
+                                pct = 0.0  # [FIX] 移除阻塞的同步兜底请求，防止周末前端疯狂转圈圈
                             
                             # 🚀 把最新涨跌幅赋值给 metrics 供看板展示
                             metrics['index_pct'] = pct
                             
-                            if pct != 0.0:
-                                pos = float(fund.get('pos_ratio') or 0.95)
-                                rt_val = nav_home * (1.0 + pos * (pct / 100.0))
-                                metrics['rt_val'] = round(rt_val, 4)
-                                if metrics.get('price', 0) > 0:
-                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                            pos = float(fund.get('pos_ratio') or 0.95)
+                            rt_val = nav_home * (1.0 + pos * (pct / 100.0))
+                            metrics['rt_val'] = round(rt_val, 4)
+                            if metrics.get('price', 0) > 0:
+                                metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
 
                     # 3.3 【美股原油/黄金等高价值一篮子基金】 - 保持原有基于 lof_config.yaml 的矩阵公式推演
                     calculator = self._get_calculator() if not metrics.get('rt_val') else None
