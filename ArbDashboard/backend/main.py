@@ -503,7 +503,7 @@ async def get_fund_valuation_meta(code: str):
             cursor = conn.cursor()
             # T-1 估值日是统一历史记录里的最新日期记录
             cursor.execute("""
-                SELECT h.date, COALESCE(h.nav, f.nav) as nav, h.static_val, r.usd_cny_mid, h.calibration 
+                SELECT h.date, COALESCE(h.nav, f.nav) as nav, h.static_val, r.usd_cny_mid, h.calibration, h.price 
                 FROM unified_fund_history h
                 LEFT JOIN exchange_rate r ON h.date = r.date
                 LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
@@ -517,7 +517,8 @@ async def get_fund_valuation_meta(code: str):
                     "nav": float(row[1]) if row[1] is not None else 0.0,
                     "static_val": float(row[2]) if row[2] is not None else 0.0,
                     "exchange_rate": float(row[3]) if row[3] is not None else 0.0,
-                    "calibration": float(row[4]) if row[4] is not None else 0.0
+                    "calibration": float(row[4]) if row[4] is not None else 0.0,
+                    "price": float(row[5]) if row[5] is not None else 0.0
                 }
                 
                 # 如果没有独立校准值，查找全局期货校准值兜底

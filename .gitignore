@@ -45,7 +45,6 @@ arb_config.yaml
 /公众号文章/
 *.md
 !README.md
-!AGENTS.md
 
 # === 杂项文件/脚本 ===
 /*.py

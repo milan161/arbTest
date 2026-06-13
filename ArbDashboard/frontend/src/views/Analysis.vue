@@ -1193,6 +1193,9 @@ const fetchValuationMeta = async () => {
         } else if (currentPrice.value > 0) {
           simLofPrice.value = currentPrice.value
           isLofPriceInitialized.value = true
+        } else if (res.data.t1_data && res.data.t1_data.price > 0) {
+          simLofPrice.value = res.data.t1_data.price
+          isLofPriceInitialized.value = true
         } else if (bd.close > 0) {
           simLofPrice.value = bd.close
           isLofPriceInitialized.value = true
