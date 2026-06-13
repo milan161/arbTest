@@ -44,7 +44,7 @@ arb_config.yaml
 /tests/
 /公众号文章/
 *.md
-!README.md
+!/README.md
 
 # === 杂项文件/脚本 ===
 /*.py
