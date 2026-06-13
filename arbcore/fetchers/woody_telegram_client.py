@@ -6,9 +6,16 @@ from typing import Union, List, Dict, Any
 
 import time
 
-# 添加 woodyAPI 目录到 Python 路径
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../woodyAPI')))
-from _mytoken import BOT_TOKEN
+# 添加 woodyAPI 目录到 Python 路径 (兼容老旧脚本结构)
+try:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../woodyAPI')))
+    from _mytoken import BOT_TOKEN
+except ImportError:
+    try:
+        # 兜底：从统一的本地私密配置导入
+        from arbcore.config.account_private import BOT_Key as BOT_TOKEN
+    except ImportError:
+        BOT_TOKEN = ""
 
 def post_json_array_to_telegram(
     data_array: Union[Dict[str, Any], List[Any]], 
