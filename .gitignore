@@ -52,6 +52,11 @@ ArbDashboard/backend/core/database/
 *.md
 !/README.md
 
+# === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
+*.xlsx
+*.xls
+*.csv
+
 # === 杂项文件/脚本 ===
 /*.py
 *.zip
