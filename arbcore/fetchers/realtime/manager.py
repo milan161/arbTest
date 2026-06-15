@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List, Dict, Optional, Any
 from .base import BaseRealtimeFetcher
 from .guojin import GuojinQmtFetcher
@@ -8,6 +9,16 @@ from .tdx import TdxRealtimeFetcher
 from .tencent import TencentRealtimeFetcher
 
 logger = logging.getLogger(__name__)
+
+# 数据源连接重试配置
+MAX_CONNECT_RETRIES = 3          # 最大重试次数（含首次）
+CONNECT_RETRY_DELAY = 3          # 重试间隔（秒）
+# 需要启动客户端的消息提示映射
+CLIENT_STARTUP_HINTS = {
+    "tdx":    "⚠️ 通达信客户端未运行（已检测{retries}次均失败），请前往主面板启动通达信交易终端",
+    "guojin": "⚠️ 国金QMT（xtquant）未运行（已检测{retries}次均失败），请前往主面板启动国金极速交易终端",
+    "galaxy": "⚠️ 银河QMT客户端未运行（已检测{retries}次均失败），请前往主面板启动银河QMT并加载v4.0脚本",
+}
 
 class RealtimeMarketManager:
     """
@@ -108,18 +119,34 @@ class RealtimeMarketManager:
                     if self.system_status: self.system_status.add_milestone("ERROR", msg)
                     continue
 
-                if fetcher.connect():
+                # [3次重试机制] 首次失败后再试2次，3次全失败才放弃并提示用户
+                connected = False
+                client_source_keys = {"tdx", "guojin", "galaxy"}
+                for attempt in range(1, MAX_CONNECT_RETRIES + 1):
+                    if fetcher.connect():
+                        connected = True
+                        break
+                    if attempt < MAX_CONNECT_RETRIES:
+                        logger.warning(f"⏳ {source_name_cn} 连接失败 (第{attempt}次)，{CONNECT_RETRY_DELAY}秒后第{attempt+1}次重试...")
+                        time.sleep(CONNECT_RETRY_DELAY)
+
+                if connected:
                     fetcher.set_on_update(self._on_internal_update)
                     self.active_fetchers[source_name_key] = fetcher
                     msg = f"数据源已成功挂载: {source_name_cn}"
                     logger.info(f"✅ {msg}")
                     if self.system_status: self.system_status.add_milestone("SUCCESS", msg)
-
                     if self.symbols:
                         fetcher.subscribe(self.symbols)
                 else:
-                    msg = f"数据源连接失败: {source_name_cn}"
-                    if self.system_status: self.system_status.add_milestone("WARNING", msg)
+                    # 需要启动客户端的数据源给出明确提示；纯API源（sina/tencent）只报连接失败
+                    if source_name_key in client_source_keys:
+                        hint = CLIENT_STARTUP_HINTS.get(source_name_key, "⚠️ {source} 客户端未运行（已检测{retries}次均失败）")
+                        user_msg = hint.format(retries=MAX_CONNECT_RETRIES)
+                    else:
+                        user_msg = f"数据源连接失败: {source_name_cn}"
+                    logger.warning(user_msg)
+                    if self.system_status: self.system_status.add_milestone("WARNING", user_msg)
         
         # 如果没有任何主源成功，尝试启动新浪兜底
         if not self.active_fetchers and "sina" in self.priority_list:
@@ -144,12 +171,16 @@ class RealtimeMarketManager:
             self._on_update_callback(symbol, quote)
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """按照优先级从活跃源中获取行情"""
+        """按照优先级从活跃源中获取行情，异常熔断保护"""
         for source_name in (self.priority_list or ["tdx", "guojin", "galaxy", "tencent", "sina"]):
             if source_name in self.active_fetchers:
-                quote = self.active_fetchers[source_name].get_quote(symbol)
-                if quote and quote.get('price', 0) > 0:
-                    return quote
+                try:
+                    quote = self.active_fetchers[source_name].get_quote(symbol)
+                    if quote and quote.get('price', 0) > 0:
+                        return quote
+                except Exception as e:
+                    logger.warning(f"数据源 {source_name} 获取行情异常 ({symbol}): {e}, 降级至下一数据源")
+                    continue
         return None
 
     def stop(self):

@@ -25,6 +25,13 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         self.quotes = {}
 
     def connect(self) -> bool:
+        # 周末免打扰：如果是周末，直接返回 False 拒绝连接行情推送长连接，防止端口被无意义的长连接常驻抢占
+        import datetime
+        now = datetime.datetime.now()
+        if now.weekday() >= 5:
+            logger.info("📅 [周末避让] 今天是周末，行情引擎拒绝建立与银河QMT Socket的长连接，以确保下单通道绝对干净空闲。")
+            return False
+            
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(5.0)
@@ -53,7 +60,7 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         cmd = f"SUBSCRIBE,{','.join(qmt_codes)}\n"
         try:
             self.sock.sendall(cmd.encode('utf-8'))
-            logger.info(f"✅ 银河QMT 已发送订阅请求: {qmt_codes}")
+            logger.debug(f"✅ 银河QMT 已发送订阅请求: {qmt_codes}")
         except Exception as e:
             logger.error(f"银河QMT 订阅失败: {e}")
 
@@ -79,17 +86,40 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
     def _process_message(self, msg: str):
         if msg.startswith("TICK,"):
             parts = msg.split(',')
-            # 新版 TICK 消息有 15 个字段 (0-14)
-            if len(parts) >= 15:
-                symbol_full = parts[1]
-                symbol = symbol_full.split('.')[0]
+            symbol_full = parts[1]
+            symbol = symbol_full.split('.')[0]
+            
+            # v4.0 push_ticks 短格式: TICK,code,lastPrice,volume,timetag (5字段)
+            if len(parts) == 5:
+                last_price = float(parts[2]) if parts[2] else 0
+                volume = float(parts[3]) if parts[3] else 0
+                quote = {
+                    "symbol": symbol,
+                    "price": last_price,
+                    "last_price": last_price,
+                    "price_change": 0,
+                    "volume": volume,
+                    "amount": 0,
+                    "ask": [last_price, 0, 0, 0, 0],
+                    "ask_vol": [0, 0, 0, 0, 0],
+                    "bid": [last_price, 0, 0, 0, 0],
+                    "bid_vol": [0, 0, 0, 0, 0],
+                    "time": time.time(),
+                    "source": self.name
+                }
+                with self.lock:
+                    self.quotes[symbol] = quote
+                self._notify_update(symbol, quote)
+                return
+            
+            # 完整版 TICK 消息有 25+ 字段 (含5档买卖盘口)
+            if len(parts) >= 25:
                 last_price = float(parts[2]) if parts[2] else 0
                 volume = float(parts[3]) if parts[3] else 0
                 ask1 = float(parts[4]) if parts[4] else 0
                 
-                # 提取昨收和成交额
-                pre_close = float(parts[13]) if parts[13] else 0
-                amount = float(parts[14]) if parts[14] else 0
+                pre_close = float(parts[24]) if parts[24] else 0
+                amount = float(parts[25]) if parts[25] else 0
                 
                 # 核心逻辑：卖一价优先
                 price = ask1 if ask1 > 0 else last_price

@@ -49,7 +49,7 @@
              <div class="milestone-grid">
                 <div v-for="(m, i) in milestones" :key="i" class="milestone-cell">
                    <span class="m-time">{{ m.time }}</span>
-                   <span class="m-msg" :class="m.level.toLowerCase()">{{ m.message }}</span>
+                   <span class="m-msg" :class="(m.level || 'info').toLowerCase()">{{ m.message }}</span>
                 </div>
              </div>
              <div v-if="milestones.length === 0" class="text-center text-gray-400 py-4" style="font-size: 10px;">
@@ -116,60 +116,52 @@
 <script setup lang="ts">
 import { ref, onMounted, h, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import {
-  NGrid, NGi, NCard, NStatistic, NIcon, NText, NInput,
-  NButton, NDataTable, NTag, useMessage, NDivider, NTabs, NTabPane, NModal
+  NGrid, NGi, NCard, NIcon, NText, NInput,
+  NButton, NDataTable, NTag, useMessage, NTabs, NTabPane, NModal
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
-import { Zap, Bot, Star, StarOff, Database, Target, History } from 'lucide-vue-next'
-import axios from 'axios'
+import { Zap, Bot, Star, StarOff, History } from 'lucide-vue-next'
+
+// --- 新架构导入 ---
+import { useFundStore, useMarketStore, useAppStore } from '../store'
+import { formatPrice, formatValuation, formatPercent, formatPremium,
+         formatVolume, formatShares, formatSharesChange, formatTurnoverRate,
+         formatIndexPrice, priceColor, shortDate, cleanFundName } from '../utils'
+import { getFundHistory } from '../api'
 
 const router = useRouter()
 const message = useMessage()
-const loading = ref(false)
-const tableData = ref<any[]>([])
-const milestones = ref<any[]>([])
-const searchKeyword = ref('')
-const currentTab = ref('自选')
-const engineRunning = ref(false)
-const watchlist = ref<string[]>(JSON.parse(localStorage.getItem('watchlist') || '[]'))
-let refreshTimer: any = null
 
-// 历史对账相关
+// ===== Stores =====
+const fundStore = useFundStore()
+const marketStore = useMarketStore()
+const appStore = useAppStore()
+
+// ===== 从 Store 解构响应式状态（保持与模板同名的变量，避免改模板） =====
+const { tableData, loading, currentTab, searchKeyword, watchlist,
+        filteredTableData, fundHistory } = storeToRefs(fundStore)
+const { engineRunning, milestones } = storeToRefs(appStore)
+const { overview: marketOverview, hasTdx, hasIb, hasIbNotRunning,
+        hasGalaxy, hasGuojin, hasFutu } = storeToRefs(marketStore)
+
+// ===== 本地状态（无需进 Store） =====
 const showHistoryModal = ref(false)
 const selectedFund = ref<any>(null)
-const fundHistory = ref<any[]>([])
+let refreshTimer: any = null
 
-const marketOverview = ref({
-  rates: { usd_cny_mid: 0, hkd_cny_mid: 0 } as any,
-  usd_change: 0,
-  hkd_change: 0,
-  active_sources: [],
-  stats: { fund_count: 0, system_health: 0 } as any
-})
+// ===== Watch 自选持久化 =====
+watch(watchlist, (newVal) => {
+  localStorage.setItem('watchlist', JSON.stringify(newVal))
+}, { deep: true })
 
-const hasTdx = computed(() => (marketOverview.value.active_sources || []).includes('tdx'))
-const hasIb = computed(() => {
-  const sources = marketOverview.value.active_sources || []
-  return sources.some(s => s.includes('IB') && !s.includes('未运行'))
-})
-const hasIbNotRunning = computed(() => {
-  const sources = marketOverview.value.active_sources || []
-  return sources.some(s => s.includes('IB (未运行)'))
-})
-const hasGalaxy = computed(() => (marketOverview.value.active_sources || []).includes('galaxy'))
-const hasGuojin = computed(() => (marketOverview.value.active_sources || []).includes('guojin'))
-const hasFutu = computed(() => {
-  const sources = marketOverview.value.active_sources || []
-  return sources.some(s => s.includes('富途'))
-})
-
-const reconnectingIB = ref(false)
+// ===== 方法 =====
 const reconnectIB = async () => {
-  reconnectingIB.value = true
+  appStore.reconnectingIB = true
   try {
-    const res = await axios.post('/api/system/reconnect_ib')
-    if (res.data.status === 'ok') {
+    const data = await appStore.reconnectIB()
+    if (data.status === 'ok') {
       message.success('IB 重连成功！')
       fetchData()
     } else {
@@ -178,15 +170,15 @@ const reconnectIB = async () => {
   } catch (e: any) {
     message.error('重连请求失败: ' + e.message)
   } finally {
-    reconnectingIB.value = false
+    appStore.reconnectingIB = false
   }
 }
 
 const reconnectEngine = async () => {
   try {
     message.loading('正在重启国内行情引擎...', { duration: 1500 })
-    const res = await axios.post('/api/system/reconnect_engine')
-    if (res.data.status === 'ok') {
+    const data = await appStore.reconnectEngine()
+    if (data.status === 'ok') {
       message.success('国内行情引擎重启成功！')
       setTimeout(fetchData, 1000)
     }
@@ -195,51 +187,15 @@ const reconnectEngine = async () => {
   }
 }
 
-watch(watchlist, (newVal) => {
-  localStorage.setItem('watchlist', JSON.stringify(newVal))
-}, { deep: true })
-
-const toggleWatchlist = (code: string) => {
-  const index = watchlist.value.indexOf(code)
-  if (index > -1) {
-    watchlist.value.splice(index, 1)
-  } else {
-    watchlist.value.push(code)
-  }
+const openHistory = async (fund: any) => {
+  selectedFund.value = fund
+  showHistoryModal.value = true
+  await fundStore.fetchFundHistory(fund.fund_code)
 }
 
-const filteredTableData = computed(() => {
-  let data = tableData.value || []
-
-  if (currentTab.value === '自选') {
-    return data.filter((item: any) => watchlist.value.includes(item.fund_code))
-  }
-
-  data = data.filter((item: any) => !['161125', '161130'].includes(item.fund_code))
-
-  const tabMap: Record<string, string[]> = {
-    '黄金原油': ['黄金原油', '黄金', '原油'],
-    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
-    'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
-    '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
-    '白银': ['白银', '白银LOF']
-  }
-
-  const targetCategories = tabMap[currentTab.value] || [currentTab.value]
-  data = data.filter((item: any) => targetCategories.includes(item.category))
-
-  if (searchKeyword.value) {
-    const kw = searchKeyword.value.toLowerCase()
-    data = data.filter((item: any) =>
-      (item.fund_code || '').toLowerCase().includes(kw) ||
-      (item.fund_name || '').toLowerCase().includes(kw)
-    )
-  }
-
-  return data
-})
-
 const pagination = { pageSize: 100 }
+
+const toggleWatchlist = (code: string) => fundStore.toggleWatchlist(code)
 
 const rowProps = (row: any) => {
   return {
@@ -253,18 +209,34 @@ const rowProps = (row: any) => {
   }
 }
 
-const openHistory = async (fund: any) => {
-    selectedFund.value = fund
-    showHistoryModal.value = true
-    try {
-        const res = await axios.get(`/api/fund/${fund.fund_code}/history`)
-        if (res.data.status === 'ok') {
-            fundHistory.value = res.data.data
-        }
-    } catch (e) {
-        message.error('加载历史对账数据失败')
-    }
+const fetchData = async (isSilent = false) => {
+  if (!isSilent && filteredTableData.value.length === 0) loading.value = true
+  try {
+    await Promise.all([
+      fundStore.fetchDashboard(isSilent),
+      marketStore.fetchOverview(),
+      appStore.fetchSystemStatus()
+    ])
+  } catch (err) { console.error('获取数据失败', err) } finally { loading.value = false }
 }
+
+const setupRefreshTimer = () => {
+  if (refreshTimer) clearInterval(refreshTimer)
+  const interval = fundStore.refreshInterval
+  refreshTimer = setInterval(() => fetchData(true), interval)
+}
+
+watch(currentTab, () => {
+  // [V8.1] 保留旧数据不闪白，后台静默刷新；filteredTableData 自动切换分类
+  fetchData(true)
+  setupRefreshTimer()
+})
+
+onMounted(() => {
+  fetchData()
+  setupRefreshTimer()
+})
+onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 
 const allColumns: DataTableColumns<any> = [
   {
@@ -284,17 +256,14 @@ const allColumns: DataTableColumns<any> = [
   },
   {
     title: '名称', key: 'fund_name', width: 118, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
-    render(row: any) { 
-      // 删除名称最后的"LOF"后缀
-      const name = row.fund_name || ''
-      const cleanName = name.replace(/LOF$/, '')
-      return h('span', { class: 'fund-name-cell' }, cleanName) 
+    render(row: any) {
+      return h('span', { class: 'fund-name-cell' }, cleanFundName(row.fund_name))
     }
   },
   {
     title: '现价', key: 'price', width: 64, align: 'center',
     sorter: (a: any, b: any) => (a.price || 0) - (b.price || 0),
-    render(row: any) { const p = row.price || 0; return h('span', { class: 'num-cell' }, p > 0 ? p.toFixed(3) : '-') }
+    render(row: any) { return h('span', { class: 'num-cell' }, formatPrice(row.price)) }
   },
   {
     title: '涨跌幅', key: 'price_change', width: 82, align: 'center',
@@ -302,63 +271,53 @@ const allColumns: DataTableColumns<any> = [
     render(row: any) {
       const chg = row.price_change || 0
       if (chg === 0 && (!row.price || row.price === 0)) return '-'
-      const color = chg > 0 ? '#f44336' : (chg < 0 ? '#4caf50' : '#888')
-      return h('span', { class: 'num-cell strong', style: { color } }, (chg > 0 ? '+' : '') + chg.toFixed(2) + '%')
+      return h('span', { class: 'num-cell strong', style: { color: priceColor(chg) } }, formatPercent(chg, 2))
     }
   },
   {
     title: '实时估值', key: 'rt_val_display', width: 78, align: 'center',
     render(row: any) {
-      const val = row.rt_val
-      if (val !== null && val !== undefined && val > 0) {
-        return h('span', { class: 'num-cell strong' }, val.toFixed(4))
-      }
+      if (row.rt_val && row.rt_val > 0) return h('span', { class: 'num-cell strong' }, row.rt_val.toFixed(4))
       return h('span', { class: 'num-cell muted' }, '-')
     }
   },
   {
     title: '实时溢价', key: 'rt_premium', width: 82, align: 'center',
     render(row: any) {
-      const val = row.rt_val
-      if (val !== null && val !== undefined && val > 0 && row.price && row.price > 0) {
-        const p = (row.price / val - 1) * 100
-        const color = p > 0 ? '#f44336' : '#4caf50'
-        return h('span', { class: 'num-cell strong compact', style: { color } }, (p > 0 ? '+' : '') + p.toFixed(3) + '%')
-      }
-      return h('span', { class: 'num-cell muted' }, '-')
+      if (!row.rt_val || !row.price) return h('span', { class: 'num-cell muted' }, '-')
+      const p = (row.price / row.rt_val - 1) * 100
+      return h('span', { class: 'num-cell strong compact', style: { color: priceColor(p) } }, formatPremium(p))
     }
   },
   {
     title: 'T-2/1日净值', key: 'nav', width: 82, align: 'center',
-    render(row: any) { const nav = row.nav || 0; return nav > 0 ? h('span', { class: 'num-cell muted' }, nav.toFixed(4)) : '-' }
+    render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.nav)) }
   },
   {
     title: '净值日期', key: 'nav_date', width: 66, align: 'center',
-    render(row: any) { return h(NText, { depth: 3, class: 'date-cell' }, { default: () => row.nav_date && row.nav_date !== '-' ? row.nav_date.substring(5) : '-' }) }
+    render(row: any) { return h(NText, { depth: 3, class: 'date-cell' }, { default: () => shortDate(row.nav_date) }) }
   },
   {
     title: '静态估值', key: 'static_val_display', width: 78, align: 'center',
-    render(row: any) { const val = row.static_val || 0; return val > 0 ? h('span', { class: 'num-cell muted' }, val.toFixed(4)) : '-' }
+    render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.static_val)) }
   },
   {
     title: '静态溢价', key: 'static_premium', width: 82, align: 'center',
     sorter: (a: any, b: any) => (a.static_premium || 0) - (b.static_premium || 0),
     render(row: any) {
-      const premium = row.static_premium || 0
-      if (premium === 0) return '-'
-      const color = premium > 0 ? '#f44336' : '#4caf50'
-      return h('span', { class: 'num-cell compact', style: { color } }, (premium > 0 ? '+' : '') + premium.toFixed(3) + '%')
+      if (!row.static_premium) return '-'
+      return h('span', { class: 'num-cell compact', style: { color: priceColor(row.static_premium) } }, formatPremium(row.static_premium))
     }
   },
   {
     title: '成交额(万)', key: 'volume', width: 100, align: 'right',
     sorter: (a: any, b: any) => (a.volume || 0) - (b.volume || 0),
-    render(row: any) { return h('span', { class: 'num-cell muted' }, row.volume ? Number(row.volume).toFixed(2) : '-') }
+    render(row: any) { return h('span', { class: 'num-cell muted' }, formatVolume(row.volume)) }
   },
   {
     title: '份额(万)', key: 'shares', width: 72, align: 'right',
     sorter: (a: any, b: any) => (a.shares || 0) - (b.shares || 0),
-    render(row: any) { return h('span', { class: 'num-cell muted' }, row.shares ? Number(row.shares).toFixed(0) : '-') }
+    render(row: any) { return h('span', { class: 'num-cell muted' }, formatShares(row.shares)) }
   },
   {
     title: '新增(万)', key: 'shares_added', width: 68, align: 'right',
@@ -366,29 +325,22 @@ const allColumns: DataTableColumns<any> = [
     fixedHeader: true,
     render(row: any) {
       const added = row.shares_added || 0
-      const color = added > 0 ? '#f44336' : (added < 0 ? '#4caf50' : '#888')
-      return h('span', { class: 'num-cell compact', style: { color } }, added === 0 ? '-' : (added > 0 ? '+' : '') + Number(added).toFixed(0))
+      return h('span', { class: 'num-cell compact', style: { color: priceColor(added) } }, formatSharesChange(row.shares_added))
     }
   },
   {
       title: '换手率', key: 'turnover_rate', width: 64, align: 'center',
-      render(row: any) {
-        let tr = row.turnover_rate
-        if (tr === '-' || !tr) return '-'
-        return h('span', { class: 'num-cell muted' }, Number(tr).toFixed(2) + '%')
-      }
+      render(row: any) { return h('span', { class: 'num-cell muted' }, formatTurnoverRate(row.turnover_rate)) }
   },
   {
     title: '指数价', key: 'index_close', width: 72, align: 'center',
-    render(row: any) { const p = row.index_close || 0; return p > 0 ? h('span', { class: 'num-cell muted' }, p.toFixed(2)) : '-' }
+    render(row: any) { return h('span', { class: 'num-cell muted' }, formatIndexPrice(row.index_close)) }
   },
   {
     title: '指数涨跌幅', key: 'index_pct', width: 82, align: 'center',
     render(row: any) {
-      let pct = row.index_pct
-      if (!pct || pct === 0) return '-'
-      const color = parseFloat(String(pct)) > 0 ? '#f44336' : '#4caf50'
-      return h('span', { class: 'num-cell compact', style: { color } }, (parseFloat(String(pct)) > 0 ? '+' : '') + Number(pct).toFixed(2) + '%')
+      if (!row.index_pct) return '-'
+      return h('span', { class: 'num-cell compact', style: { color: priceColor(Number(row.index_pct)) } }, formatPercent(Number(row.index_pct), 2))
     }
   },
 
@@ -437,12 +389,12 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
         if (!val || val === 0) return '-'
         return h('div', { style: 'display: flex; flex-direction: column; align-items: center;' }, [
             h('span', { style: 'font-weight: 500;' }, val.toFixed(precision)),
-            chg ? h('span', { style: { fontSize: '10px', color: chg > 0 ? '#f44336' : '#4caf50', lineHeight: '1' } }, `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`) : null
+            chg ? h('span', { style: { fontSize: '10px', color: priceColor(chg), lineHeight: '1' } }, formatPercent(chg, 2)) : null
         ])
     }
 
     const baseCols: DataTableColumns<any> = [
-        { title: '日期', key: 'date', width: 70, align: 'center', render(row: any) { return row.date.substring(5) } },
+        { title: '日期', key: 'date', width: 70, align: 'center', render(row: any) { return shortDate(row.date) } },
         { title: '汇率', key: 'usd_cny_mid', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.usd_cny_mid, row.usd_cny_mid_chg) } },
         { title: '净值', key: 'nav', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.nav, row.nav_chg) } },
         { title: '收盘价', key: 'price', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.price, row.price_chg, 3) } },
@@ -452,28 +404,25 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
             render(row: any) {
                 const val = row.val_error_pct || 0
                 if (val === 0) return '-'
-                const color = val > 0 ? '#f44336' : '#4caf50'
-                return h('span', { style: { color, fontWeight: 'bold' } }, `${val > 0 ? '+' : ''}${val.toFixed(4)}%`)
+                return h('span', { style: { color: priceColor(val), fontWeight: 'bold' } }, formatPercent(val, 4))
             }
         },
         { 
             title: '静态溢价', key: 'static_premium', width: 85, align: 'center',
             render(row: any) {
                 const val = row.static_premium || 0
-                const color = val > 0 ? '#f44336' : '#4caf50'
-                return h('span', { style: { color } }, val === 0 ? '-' : val.toFixed(3) + '%')
+                if (val === 0) return '-'
+                return h('span', { style: { color: priceColor(val) } }, formatPremium(val))
             }
         },
-        { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, row.shares ? Number(row.shares).toFixed(0) : '-') } },
+        { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatShares(row.shares)) } },
         { 
             title: '新增(万)', key: 'shares_added', width: 80, align: 'center',
             render(row: any) { 
-                const added = row.shares_added || 0
-                const color = added > 0 ? '#f44336' : (added < 0 ? '#4caf50' : '#888')
-                return h('span', { style: { color, fontSize: '11px' } }, added === 0 ? '-' : (added > 0 ? '+' : '') + Number(added).toFixed(0))
+                return h('span', { style: { color: priceColor(Number(row.shares_added || 0)), fontSize: '11px' } }, formatSharesChange(row.shares_added))
             }
         },
-        { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { const tr = row.turnover_rate || 0; return h('span', { style: 'font-size: 12px;' }, tr === 0 ? '-' : tr.toFixed(2) + '%') } }
+        { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatTurnoverRate(row.turnover_rate)) } }
     ]
 
     if (fundHistory.value.length > 0) {
@@ -531,49 +480,6 @@ const columns = computed<DataTableColumns<any>>(() => {
 const tableScrollX = computed(() => {
   return columns.value.reduce((total, col: any) => total + Number(col.width || 80), 0)
 })
-
-const fetchData = async (isSilent = false) => {
-  // 只有第一次加载或确实没有数据时才显示全局转圈，避免切 Tab 时闪烁
-  if (!isSilent && tableData.value.length === 0) loading.value = true
-  try {
-    const params: any = {}
-    if (currentTab.value === '自选') {
-      params.watchlist = watchlist.value.join(',')
-    } else {
-      params.category = currentTab.value
-    }
-
-    const [dashRes, marketRes, milestoneRes, engineRes] = await Promise.all([
-      axios.get('/api/dashboard', { params }),  
-      axios.get('/api/market/overview'), 
-      axios.get('/api/system/milestones'), 
-      axios.get('/api/auto_trade/status')
-    ])
-    if (dashRes.data?.status === 'ok') tableData.value = dashRes.data.data || []
-    if (marketRes.data?.status === 'ok') marketOverview.value = marketRes.data.data || marketOverview.value
-    if (milestoneRes.data?.status === 'ok') milestones.value = milestoneRes.data.data || []
-    if (engineRes.data?.status === 'ok') engineRunning.value = engineRes.data.running
-  } catch (err) { console.error('获取数据失败', err) } finally { loading.value = false }
-}
-
-const setupRefreshTimer = () => {
-  if (refreshTimer) clearInterval(refreshTimer)
-  const highFreqTabs = ['自选', '黄金原油', 'QDII欧美']
-  const interval = highFreqTabs.includes(currentTab.value) ? 3000 : 30000
-  refreshTimer = setInterval(() => fetchData(true), interval)
-}
-
-watch(currentTab, () => {
-  tableData.value = [] // 切换 Tab 时清空旧数据，触发 loading 并防止闪烁错误的旧数据
-  fetchData(false)
-  setupRefreshTimer()
-})
-
-onMounted(() => { 
-  fetchData()
-  setupRefreshTimer() 
-})
-onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 </script>
 
 <style scoped>

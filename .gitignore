@@ -15,10 +15,16 @@ arb_config.yaml
 *.local.py
 .env
 
+# === 垃圾与测试数据库 ===
+**/arb_test.db
+ArbDashboard/backend/core/database/
+
 # === 数据库 (只保留表结构/基础表) ===
 /database/*
 !/database/arb_master_share.db
 !/database/readme.txt
+# 各目录下的实盘数据库（禁止上传）
+**/arb_master.db
 
 # === 非程序3的项目目录 (全部屏蔽) ===
 /LOFarb/
@@ -59,6 +65,11 @@ deploy_vps.py
 !readme.txt
 !requirements.txt
 
+# === AI 工具目录 ===
+.omo/
+.open-mem/
+.opencode/
+
 # === 编辑器与系统垃圾 ===
 /ArbDashboard/*.png
 .vscode/
@@ -68,9 +79,14 @@ __pycache__/
 node_modules/
 venv/
 dist/
+.vite/
 *.pyc
 *.pyo
 *.pyd
 *.log
 .DS_Store
 Thumbs.db
+
+# open-mem: Auto-generated folder context files.
+# Uncomment to exclude from version control (recommended for large projects):
+# **/AGENTS.md

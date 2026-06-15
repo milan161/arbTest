@@ -55,12 +55,8 @@ logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler]
 logger = logging.getLogger("ArbNext")
 
 # [Master-Slave] 检查主交易程序 (LOFarb) 是否运行
-import socket
+# 强制设为 False，防止 opencode cli 等占用 5000 端口导致误判为 Slave 只读模式
 lof_is_running = False
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.settimeout(0.1)
-    if sock.connect_ex(("127.0.0.1", 5000)) == 0:
-        lof_is_running = True
 
 # [V4.4] 强力补丁：全局唯一 TQ 抢占与锁定
 # 必须在所有业务模块导入之前执行，防止 TradeManager 或 RealtimeManager 产生冲突
@@ -188,6 +184,36 @@ except Exception as e:
 # [V3.11] 使用统一数据库路径 D:\Study\arbTest\database\arb_master.db
 db = DatabaseManager(db_path=root_db_path)
 
+def _print_data_source_banners():
+    """启动后统一打印各数据源连接状态（清晰的双层提醒标志）"""
+    rt = market_data_service.realtime_manager
+    active = rt.active_fetchers if rt else {}
+
+    sources = [
+        ("tdx",    "通达信",  "tdx" in active,
+         "如果您仅使用 QMT 交易，这完全正常"),
+        ("guojin", "国金QMT", "guojin" in active,
+         "如不使用国金 QMT 交易，这完全正常"),
+        ("galaxy", "银河QMT", "galaxy" in active,
+         "如不使用银河 QMT 交易，这完全正常"),
+        ("ib",     "IB 盈透证券",
+         market_data_service.ib_reader is not None and getattr(market_data_service.ib_reader, 'connected', False),
+         "如不使用 IB 交易，这完全正常"),
+        ("futu",   "富途 OpenD",
+         market_data_service.futu_reader is not None,
+         "如不使用富途行情，这完全正常"),
+    ]
+
+    for key, label, available, hint in sources:
+        if available:
+            print(f"\n✅ {label} 连接正常")
+        else:
+            print("\n" + "=" * 80)
+            print(f"提示: {key}_available = False ({hint})。")
+            print("您可稍后在页面顶部点击对应标签重新连接。")
+            print("系统将继续启动...")
+            print("=" * 80 + "\n")
+
 # 2. Initialize Services with DB instance
 config_service = ConfigService(db)
 # [V4.5 紧急隔离重构] 采用主从架构动态判断交易服务
@@ -216,6 +242,10 @@ else:
         import sys
         sys.exit(1) 
 _active_watchlist = []
+_nav_last_updated = {"time": None, "date": None}
+_nav_scheduled_today_date = ""
+_morning_refreshed_today = False
+_morning_refresh_time = None
 market_data_service = MarketDataService(db)
 fund_service = FundService(db, market_data_service=market_data_service, config_service=config_service)
 sampler_service = IntradaySamplerService(db, market_data_service, config_service)
@@ -291,7 +321,7 @@ async def lifespan(app: FastAPI):
         # 3. 启动实时行情引擎（延迟10秒，等 011 任务先跑起来）
         # 011 需要 1-2 分钟，通达信可以稍后启动
         async def start_mds_later():
-            await asyncio.sleep(10) # 等待 10 秒
+            await asyncio.sleep(10)
             try:
                 market_data_service.realtime_manager.start()
                 logger.info("✅ 实时行情引擎已在后台启动")
@@ -299,6 +329,10 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"❌ 实时行情引擎启动失败: {e}")
                 system_status.add_milestone("ERROR", f"实时行情引擎启动失败: {e}")
+
+            # 延迟获取各数据源连接状态，确保所有异步初始化已完成
+            await asyncio.sleep(2)
+            _print_data_source_banners()
         
         asyncio.create_task(start_mds_later())
 
@@ -310,6 +344,87 @@ async def lifespan(app: FastAPI):
         # auto_trade_runner.start()
         logger.warning("⚠️ [Security] 自动交易引擎已强制停机")
         system_status.add_milestone("WARNING", "自动交易引擎已禁用")
+
+        # 5. 定义脚本路径和 Python 查找的公共函数
+        def _get_scripts_dir():
+            return os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
+        def _find_python():
+            for candidate in [
+                os.path.normpath(os.path.join(backend_dir, "..", "..", ".venv", "Scripts", "python.exe")),
+                os.path.normpath(os.path.join(backend_dir, "..", "..", "..", ".venv", "Scripts", "python.exe")),
+                "python",
+            ]:
+                if os.path.exists(candidate):
+                    return candidate
+            return None
+        def _run_daily_updater(args_list):
+            sd = _get_scripts_dir()
+            sp = os.path.join(sd, "daily_updater.py")
+            pe = _find_python()
+            if pe and os.path.exists(sp):
+                subprocess.Popen([pe, sp] + args_list, cwd=sd)
+                return True
+            return False
+
+        # 6. [V9.0] 9:20 清晨自动刷新 Woody/汇率/VPS
+        global _morning_refreshed_today, _morning_refresh_time
+        async def morning_refresh_scheduler():
+            global _morning_refreshed_today, _morning_refresh_time
+            while True:
+                await asyncio.sleep(300)
+                now = datetime.now()
+                if now.weekday() in (5, 6):
+                    _morning_refreshed_today = False
+                    continue
+                today = now.strftime("%Y-%m-%d")
+                if _morning_refreshed_today and today != _morning_refresh_time:
+                    _morning_refreshed_today = False  # 新的一天
+                if not _morning_refreshed_today and now.hour >= 9 and (now.hour > 9 or now.minute >= 20):
+                    _morning_refreshed_today = True
+                    _morning_refresh_time = today
+                    logger.info("⏰ [清晨刷新] 自动触发 --refresh-morning (Woody/汇率/VPS)")
+                    system_status.add_milestone("INFO", "⏰ 9:20 自动清晨数据刷新")
+                    if _run_daily_updater(["--refresh-morning"]):
+                        logger.info("✅ [清晨刷新] 已启动 --refresh-morning")
+                    else:
+                        logger.warning("⚠️ [清晨刷新] 启动失败")
+
+        asyncio.create_task(morning_refresh_scheduler())
+        logger.info("⏰ [清晨刷新] 定时器已注册 (9:20 自动刷新 Woody/汇率/VPS)")
+
+        # 7. [V9.0] 净值定时更新：下午 18:00 / 19:30 / 21:00 自动补跑 step4
+        global _nav_last_updated, _nav_scheduled_today_date
+        _nav_slot_done = set()
+        
+        async def nav_update_scheduler():
+            global _nav_last_updated, _nav_scheduled_today_date
+            run_at = ["18:00", "19:30", "21:00"]
+            while True:
+                await asyncio.sleep(300)
+                now = datetime.now()
+                today = now.strftime("%Y-%m-%d")
+                if now.weekday() in (5, 6):
+                    _nav_slot_done.clear()
+                    continue
+                if today != _nav_scheduled_today_date:
+                    _nav_scheduled_today_date = today
+                    _nav_slot_done.clear()
+                    _nav_last_updated = {"time": None, "date": None}
+                hm = now.strftime("%H:%M")
+                for slot in run_at:
+                    if slot not in _nav_slot_done and hm >= slot:
+                        _nav_slot_done.add(slot)
+                        logger.info(f"⏰ [自动净值更新] 触发定时 {slot} 净值更新...")
+                        system_status.add_milestone("INFO", f"⏰ 定时净值更新 ({slot})")
+                        if _run_daily_updater(["--nav-only"]):
+                            _nav_last_updated["time"] = now.strftime("%H:%M")
+                            _nav_last_updated["date"] = today
+                            logger.info(f"✅ [自动净值更新] 定时 {slot} 已启动 --nav-only")
+                        else:
+                            logger.warning(f"⚠️ [自动净值更新] 启动失败")
+        
+        asyncio.create_task(nav_update_scheduler())
+        logger.info("⏰ [自动净值更新] 定时器已注册 (18:00 / 19:30 / 21:00)")
 
     except Exception as e:
         logger.error(f"❌ Failed during backend startup: {e}")
@@ -684,11 +799,85 @@ async def close_ledger_trade(trade_id: int):
     success = ledger_service.close_trade(trade_id)
     return {"status": "ok" if success else "error"}
 
+# --- Arbitrage Pairs (V9.2 新账本) ---
+@app.get("/api/ledger/pairs")
+async def get_ledger_pairs(status: str = None):
+    data = ledger_service.get_all_pairs(status=status)
+    return {"status": "ok", "data": data}
+
+@app.post("/api/ledger/pairs/add")
+async def add_ledger_pair(request: Request):
+    data = await request.json()
+    try:
+        pair_id = ledger_service.add_pair(data)
+        return {"status": "ok", "pair_id": pair_id}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/ledger/pairs/update/{pair_id}")
+async def update_ledger_pair(pair_id: int, request: Request):
+    data = await request.json()
+    success = ledger_service.update_pair(pair_id, data)
+    return {"status": "ok" if success else "error"}
+
+@app.post("/api/ledger/pairs/delete/{pair_id}")
+async def delete_ledger_pair(pair_id: int):
+    success = ledger_service.delete_pair(pair_id)
+    return {"status": "ok" if success else "error"}
+
+# --- 自动记录交易（QMT执行回调） ---
+@app.post("/api/ledger/auto-record")
+async def auto_record_trade(request: Request):
+    data = await request.json()
+    pair_id = ledger_service.auto_record_trade(data)
+    return {"status": "ok" if pair_id > 0 else "error", "pair_id": pair_id}
+
+# --- 获取昨日收盘价（默认填入买入单价） ---
+@app.get("/api/market/prev-close/{fund_code}")
+async def get_prev_close(fund_code: str):
+    price = ledger_service.get_prev_close(fund_code.split('.')[0])
+    return {"status": "ok", "price": price}
+
+# --- 获取券商赎回费率（自动关联填入） ---
+@app.get("/api/ledger/fee-rate")
+async def get_fee_rate(fund_code: str, broker: str = ''):
+    rate = ledger_service.get_fee_rate(fund_code, broker)
+    return {"status": "ok", "rate": rate}
+
+# --- 清理测试假数据 ---
+@app.post("/api/ledger/clear-fake-data")
+async def clear_fake_data():
+    conn = db._get_conn()
+    try:
+        conn.execute("DELETE FROM user_trades WHERE id IN (1,2,3,4)")
+        conn.commit()
+        return {"status": "ok", "message": "已删除4条测试假数据"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
 # --- Fee & Commission Management APIs ---
 @app.get("/api/config/fees/{code}")
 async def get_fund_fees(code: str):
     data = ledger_service.get_fund_fees(code)
     return {"status": "ok", "data": data}
+
+@app.get("/api/ledger/broker_fees")
+async def get_broker_fees():
+    data = ledger_service.get_broker_redemption_fees()
+    return {"status": "ok", "data": data}
+
+@app.post("/api/ledger/broker_fees/add")
+async def add_broker_fee(request: Request):
+    data = await request.json()
+    success = ledger_service.upsert_broker_redemption_fee(data)
+    return {"status": "ok" if success else "error"}
+
+@app.post("/api/ledger/broker_fees/delete/{fee_id}")
+async def delete_broker_fee(fee_id: int):
+    success = ledger_service.delete_broker_redemption_fee(fee_id)
+    return {"status": "ok" if success else "error"}
 
 @app.post("/api/config/fees/upsert")
 async def upsert_fund_fee(request: Request):
@@ -805,12 +994,20 @@ async def trigger_task(task: str):
     lofarb_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "LOFarb"))
     task_map = {
         "011": os.path.join(scripts_dir, "daily_updater.py"),
-        "012": os.path.join(lofarb_dir, "LOF012_calculate_static_valuation.py")
+        "012": os.path.join(lofarb_dir, "LOF012_calculate_static_valuation.py"),
+        "nav": [os.path.join(scripts_dir, "daily_updater.py"), "--nav-only"],
+        "morning": [os.path.join(scripts_dir, "daily_updater.py"), "--refresh-morning"]
     }
     if task not in task_map:
         return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid task"})
 
-    script_path = task_map[task]
+    task_entry = task_map[task]
+    if isinstance(task_entry, list):
+        script_path = task_entry[0]
+        extra_args = task_entry[1:]
+    else:
+        script_path = task_entry
+        extra_args = []
     
     # [V4.1] 尝试多种 Python 路径
     python_exe_candidates = [
@@ -851,14 +1048,64 @@ async def trigger_task(task: str):
             logger.error(f"❌ {error_msg}")
             return JSONResponse(status_code=500, content={"status": "error", "message": error_msg})
         
-        subprocess.Popen([python_exe, script_path], cwd=script_dir)
+        cmd = [python_exe, script_path] + extra_args
+        subprocess.Popen(cmd, cwd=script_dir)
         system_status.add_milestone("INFO", f"后台任务 {task} 已手动启动")
+        logger.info(f"✅ 手动触发任务 {task}: {' '.join(cmd)}")
+        if task == "nav":
+            global _nav_last_updated
+            _nav_last_updated["time"] = datetime.now().strftime("%H:%M")
+            _nav_last_updated["date"] = datetime.now().strftime("%Y-%m-%d")
         return {"status": "ok", "message": f"Task {task} started in background"}
     except Exception as e:
         error_msg = f"后台任务启动失败: {e}"
         system_status.add_milestone("ERROR", error_msg)
         logger.error(f"❌ {error_msg}")
         return JSONResponse(status_code=500, content={"status": "error", "message": error_msg})
+
+@app.get("/api/system/nav-status")
+async def get_nav_status():
+    """返回净值最后更新时间，供前端展示提醒"""
+    global _nav_last_updated
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_updated = _nav_last_updated.get("date") == today
+    return {
+        "status": "ok",
+        "data": {
+            "last_updated_time": _nav_last_updated.get("time"),
+            "last_updated_date": _nav_last_updated.get("date"),
+            "today_updated": today_updated
+        }
+    }
+
+@app.get("/api/system/data-status")
+async def get_data_status():
+    """返回今日各项数据同步状态（供前端展示）"""
+    global _morning_refreshed_today
+    today = datetime.now().strftime("%Y-%m-%d")
+    sources = {
+        "woody_lof_batch": "Woody因子",
+        "official_exchange_rate": "官方汇率",
+        "futures_data": "期货结算价",
+        "jsl_shares_data": "场内份额",
+    }
+    status = {}
+    for key, label in sources.items():
+        synced = db.is_access_synced_today(today, source=key)
+        status[key] = {"label": label, "synced": synced}
+    status["nav"] = {"label": "基金净值", "synced": False}
+    status["morning"] = {"label": "清晨数据", "synced": _morning_refreshed_today}
+    # 统计
+    morning_ok = all(status[k]["synced"] for k in sources)
+    return {
+        "status": "ok",
+        "data": {
+            "sources": status,
+            "morning_ready": _morning_refreshed_today,
+            "all_morning_done": morning_ok,
+            "today": today
+        }
+    }
 
 # --- Auto Trade Engine APIs ---
 @app.get("/api/auto_trade/rules")

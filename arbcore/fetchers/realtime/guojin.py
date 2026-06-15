@@ -21,11 +21,21 @@ class GuojinQmtFetcher(BaseRealtimeFetcher):
         try:
             from xtquant import xtdata
             self.xtdata = xtdata
-            # 简单尝试获取一个数据来检测连接
-            # xtdata 并不提供显式的 connect()，但如果没有启动终端，后续调用会失效
-            self.is_connected = True
-            logger.info("✅ 国金QMT (xtquant) 适配器加载成功")
-            return True
+            # 尝试获取一个行情来验证连接是否真的可用
+            try:
+                test_tick = self.xtdata.get_full_tick(['000001.SZ'])
+                if test_tick and '000001.SZ' in test_tick and test_tick['000001.SZ']:
+                    self.is_connected = True
+                    logger.info("✅ 国金QMT (xtquant) 适配器加载成功，连接验证通过")
+                    return True
+                else:
+                    logger.warning("⚠️ 国金QMT xtdata 已加载但无法获取行情（QMT终端可能未启动）")
+                    self.is_connected = False
+                    return False
+            except Exception as probe_e:
+                logger.warning(f"⚠️ 国金QMT xtdata 连接验证失败（QMT终端可能未启动）: {probe_e}")
+                self.is_connected = False
+                return False
         except ImportError:
             logger.error("❌ 未安装 xtquant 库，请运行 'pip install xtquant'")
             return False
@@ -100,13 +110,17 @@ class GuojinQmtFetcher(BaseRealtimeFetcher):
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         if not self.is_connected: return None
-        qmt_symbol = self.normalize_symbol(symbol)
-        full_tick = self.xtdata.get_full_tick([qmt_symbol])
-        if qmt_symbol in full_tick:
-            tick = full_tick[qmt_symbol]
-            if isinstance(tick, dict):
-                return self._format_tick(qmt_symbol, tick)
-        return None
+        try:
+            qmt_symbol = self.normalize_symbol(symbol)
+            full_tick = self.xtdata.get_full_tick([qmt_symbol])
+            if qmt_symbol in full_tick:
+                tick = full_tick[qmt_symbol]
+                if isinstance(tick, dict):
+                    return self._format_tick(qmt_symbol, tick)
+            return None
+        except Exception as e:
+            logger.warning(f"国金QMT 获取行情失败 ({symbol}): {e}")
+            return None
 
     def normalize_symbol(self, symbol: str) -> str:
         """QMT 格式: 510300.SH, 000001.SZ"""

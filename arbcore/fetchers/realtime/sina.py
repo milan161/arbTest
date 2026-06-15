@@ -42,7 +42,7 @@ class SinaRealtimeFetcher(BaseRealtimeFetcher):
         # 转换并排重
         new_symbols = [s for s in symbols if s not in self.symbols]
         self.symbols.extend(new_symbols)
-        logger.info(f"✅ 新浪订阅池已更新，当前总数: {len(self.symbols)}")
+        logger.debug(f"✅ 新浪订阅池已更新，当前总数: {len(self.symbols)}")
 
     def unsubscribe(self, symbols: List[str]):
         self.symbols = [s for s in self.symbols if s not in symbols]

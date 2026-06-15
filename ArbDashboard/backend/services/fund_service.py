@@ -3,11 +3,50 @@ import sys
 import json
 import time
 import threading
+import functools
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# [V8.1] 轻量级 Dashboard 缓存（5秒 TTL）
+# 解决频繁 TAB 切换时重复拉取全量数据导致页面转圈的问题
+# ============================================================
+class DashboardCache:
+    """FIFO 缓存，key = f"{watchlist_str}:{category}", TTL = 5s"""
+    def __init__(self, ttl: float = 5.0):
+        self._cache: Dict[str, tuple] = {}  # key -> (timestamp, data)
+        self._ttl = ttl
+
+    def get(self, key: str) -> Optional[List[Dict]]:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        ts, data = entry
+        if time.monotonic() - ts > self._ttl:
+            del self._cache[key]
+            return None
+        return data
+
+    def set(self, key: str, data: List[Dict]):
+        self._cache[key] = (time.monotonic(), data)
+
+    def invalidate(self):
+        """强制全部失效（手动刷新时调用）"""
+        self._cache.clear()
+
+_dashboard_cache = DashboardCache()
+
+# TAB → SQL category 值映射
+_TAB_CATEGORY_MAP = {
+    '黄金原油': ['黄金原油', '黄金', '原油'],
+    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
+    'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
+    '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
+    '白银': ['白银', '白银LOF'],
+}
 
 # ============================================================
 # [V7.1] 内置东财SSE白银期货长连接阅读器
@@ -150,7 +189,7 @@ def get_index_change_percent(symbol: str) -> float:
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 4 and float(parts[3]) != 0.0:
-                    logger.info(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
+                    logger.debug(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
                     return float(parts[3])
                     
             # [V7.2] 新浪降级策略：使用腾讯接口兜底 (完美解决新浪没有中证指数的问题)
@@ -160,7 +199,7 @@ def get_index_change_percent(symbol: str) -> float:
             if r_tc.status_code == 200 and 'v_' in r_tc.text:
                 tc_parts = r_tc.text.split('"')[1].split('~')
                 if len(tc_parts) >= 33:
-                    logger.info(f"[INDEX-TENCENT] 兜底获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
+                    logger.debug(f"[INDEX-TENCENT] 兜底获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
                     return float(tc_parts[32])
     except Exception as e:
         logger.debug(f"Index fetch failed for {symbol}: {e}")
@@ -240,7 +279,7 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
                         if len(parts) >= 4 and float(parts[3]) != 0.0:
                             if code in symbol_map:
                                 res[symbol_map[code]] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                logger.info(f"[INDEX-SINA] 获取A股指数 {symbol_map[code]} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                logger.debug(f"[INDEX-SINA] 获取A股指数 {symbol_map[code]} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
                     elif var_name.startswith('var hq_str_rt_hk'):
                         code = var_name.split('rt_hk')[1]
                         if len(parts) >= 9:
@@ -273,7 +312,7 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
                         code = tc_parts[2] # e.g. 000922, HSI
                         if code in tencent_symbol_map:
                             res[tencent_symbol_map[code]] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
-                            logger.info(f"[INDEX-TENCENT] 兜底获取指数 {tencent_symbol_map[code]} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
+                            logger.debug(f"[INDEX-TENCENT] 兜底获取指数 {tencent_symbol_map[code]} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
         except Exception as e:
             logger.warning(f"预取腾讯指数兜底异常: {e}")
             
@@ -298,124 +337,131 @@ class FundService:
 
     def get_unified_dashboard_data(self, watchlist: List[str] = None, category: str = None) -> List[Dict[str, Any]]:
         """
-        [V3.8] 终极工业版 - 彻底解决 0 和 None 值的显示 Bug
-        [V4.6] 全面防御性编程 - 防止所有 NoneType 错误
-        [V6.2] 支持自选过滤加快性能
+        [V8.1] 性能大修：SQL 级过滤 + 5秒缓存 + 批量历史查询
         """
+        # ── 缓存 key ──
+        cache_key = f"{','.join(sorted(watchlist)) if watchlist else ''}:{category or ''}"
+        cached = _dashboard_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         conn = self.db._get_conn()
         try:
-            funds_df = pd.read_sql_query("SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list", conn)
-            
-            if watchlist and not funds_df.empty:
-                watchlist_strs = [str(w) for w in watchlist]
-                funds_df = funds_df[funds_df['fund_code'].astype(str).isin(watchlist_strs)]
-            elif category and not funds_df.empty:
-                tabMap = {
-                    '黄金原油': ['黄金原油', '黄金', '原油'],
-                    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
-                    'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
-                    '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
-                    '白银': ['白银', '白银LOF']
-                }
-                target_cats = tabMap.get(category, [category])
-                funds_df = funds_df[funds_df['category'].isin(target_cats)]
+            # ── 1. SQL 级过滤基金列表（不下拉全量数据） ──
+            where_clause = ""
+            params: List[Any] = []
+            if watchlist:
+                codes_str = ','.join(f"'{c}'" for c in watchlist)
+                where_clause = f"WHERE fund_code IN ({codes_str})"
+            elif category:
+                cats = _TAB_CATEGORY_MAP.get(category, [category])
+                cat_placeholders = ','.join(f"'{c}'" for c in cats)
+                where_clause = f"WHERE category IN ({cat_placeholders})"
 
-            
-            # 从 fund_info 表读取用户爬虫获取的状态和费率
-            status_df = pd.read_sql_query("SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee FROM fund_info", conn)
-            status_dict = status_df.set_index('fund_code').to_dict('index')
-            
+            funds_df = pd.read_sql_query(
+                f"SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list {where_clause}",
+                conn, params=params
+            )
+
             if funds_df is None or funds_df.empty:
-                logger.warning("未获取到基金列表，返回空数据")
+                _dashboard_cache.set(cache_key, [])
                 return []
-            
-            # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅，用于加速国内LOF与QDII亚洲的实时估值计算
+
+            # ── 2. 批量获取 fund_info 状态费率 ──
+            status_df = pd.read_sql_query(
+                "SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee FROM fund_info",
+                conn
+            )
+            status_dict = status_df.set_index('fund_code').to_dict('index')
+
+            # ── 3. 一次性批量拉取所有基金的历史记录 ──
+            codes = funds_df['fund_code'].tolist()
+            codes_str = ','.join(f"'{c}'" for c in codes)
+            hist_df = pd.read_sql_query(
+                f"SELECT fund_code, date, price, nav, static_val, premium as static_premium, "
+                f"volume, shares, shares_added, turnover_rate "
+                f"FROM unified_fund_history "
+                f"WHERE fund_code IN ({codes_str}) "
+                f"ORDER BY fund_code, date DESC",
+                conn
+            )
+            # 按 fund_code 分组，每组取前 10 条
+            hist_grouped = hist_df.groupby('fund_code') if not hist_df.empty else {}
+
+            # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅
             all_related_indices = funds_df['related_index'].dropna().tolist()
             index_changes_map = prefetch_index_changes(all_related_indices)
 
             result = []
             for _, fund in funds_df.iterrows():
-                if fund is None:
-                    continue
                 code = fund['fund_code']
-                
-                # 1. 获取历史记录 (找锚点)
-                query_metrics = f"""
-                    SELECT date, price, nav, static_val, premium as static_premium,
-                           volume, shares, shares_added, turnover_rate
-                    FROM unified_fund_history
-                    WHERE fund_code='{code}'
-                    ORDER BY date DESC LIMIT 10
-                """
-                metrics_df = pd.read_sql_query(query_metrics, conn)
-                metrics = {'price': 0, 'nav': 0, 'static_val': 0, 'static_premium': 0, 'rt_val': None, 'rt_premium': None}
-                
+
+                # ── 3a. 从批量历史数据中提取该基金的 metrics ──
+                if not hist_df.empty and code in hist_grouped.groups:
+                    metrics_df = hist_grouped.get_group(code).head(10)
+                else:
+                    metrics_df = pd.DataFrame()
+
+                metrics = {'price': 0, 'nav': 0, 'static_val': 0, 'static_premium': 0,
+                           'rt_val': None, 'rt_premium': None}
+
                 if not metrics_df.empty:
-                    # 关键：锁定最新有效净值日期
                     valid_navs = metrics_df[metrics_df['nav'] > 0]
                     if not valid_navs.empty:
                         metrics['nav'] = valid_navs.iloc[0]['nav']
                         metrics['nav_date'] = valid_navs.iloc[0]['date']
-                    
-                    # 锁定最新静态估值
+
                     valid_vals = metrics_df[metrics_df['static_val'] > 0]
                     if not valid_vals.empty and float(valid_vals.iloc[0]['static_val']) > 0:
                         val = float(valid_vals.iloc[0]['static_val'])
-                        # 🚀 脏数据拦截：如果 static_val 偏离 nav 超过 50%（如 0.0476 vs 1.78），必定是异常脏数据，强制使用 nav
                         if metrics.get('nav', 0) > 0 and abs(val - metrics['nav']) / metrics['nav'] > 0.5:
                             metrics['static_val'] = metrics['nav']
                         else:
                             metrics['static_val'] = val
                     else:
                         metrics['static_val'] = metrics.get('nav', 0)
-                    
-                    # 历史价格兜底
+
                     valid_prices = metrics_df.dropna(subset=['price'])
                     if not valid_prices.empty:
                         metrics['price'] = valid_prices.iloc[0]['price']
-                        
-                    # 恢复基本面的缺失字段 (成交额、份额、换手率等)
+
                     for col in ['volume', 'shares', 'shares_added', 'turnover_rate']:
                         valid_series = metrics_df.dropna(subset=[col])
                         metrics[col] = float(valid_series.iloc[0][col]) if not valid_series.empty else 0.0
-                        
-                    # 🚀 动态计算缺失的“新增(万)”份额
+
                     if metrics.get('shares_added') == 0.0:
                         valid_shares = metrics_df.dropna(subset=['shares'])
                         if len(valid_shares) >= 2:
                             shares_t = float(valid_shares.iloc[0]['shares'])
                             shares_t1 = float(valid_shares.iloc[1]['shares'])
                             metrics['shares_added'] = float(shares_t - shares_t1)
-                            
-                    # 🚀 动态计算缺失的“换手率”
+
                     if metrics.get('turnover_rate') == 0.0:
                         vol = metrics.get('volume', 0)
                         sh = metrics.get('shares', 0)
                         pr = metrics.get('price', 0)
-                        # 假设 volume 是成交额(RMB)，shares 是万份
                         if vol > 0 and sh > 0 and pr > 0:
-                            # 换手率 = 成交额 / (份额(万) * 10000 * 价格)
                             metrics['turnover_rate'] = vol / (sh * 10000.0 * pr)
 
-                    # 计算前收盘价用于涨跌幅计算
-                    # 注意：unified_fund_history 存的是历史日结数据，所以它的第 0 行就是昨天的收盘价
                     if not valid_prices.empty:
                         metrics['prev_close'] = valid_prices.iloc[0]['price']
                     else:
                         metrics['prev_close'] = 0
 
-                # 2. [V4.0] 灵魂逻辑：现价必须从实时接口获取（毫秒级），用于套利计算
+                # ── 4. 实时价格 ──
                 if self.market_data_service:
                     try:
                         rt = self.market_data_service.get_realtime_quote(code)
                         if rt and rt.get('price'):
-                            metrics['price'] = rt['price']  # 毫秒级实时价格
+                            metrics['price'] = rt['price']
                             if rt.get('amount'):
                                 metrics['volume'] = rt['amount']
                     except Exception as e:
                         logger.error(f"Error getting realtime quote for {code}: {e}")
-                
-                # 3. [V6.1 核心机制升级] 永远优先实时计算最新估值，仅在实时计算失败时才从采样表进行历史兜底
+
+                # ── 5–6. 实时估值计算（与原逻辑一致，略作精简） ──
+                # (原有估值计算逻辑全部保留，为节省篇幅此处用完整代码）
+                # 以下为原本的估值算法块 —— 直接内联恢复
                 metrics['rt_val'] = None
                 metrics['rt_premium'] = None
                 
@@ -656,11 +702,13 @@ class FundService:
 
                 result.append(fund_dict)
             logger.info(f"Dashboard数据生成完成，共 {len(result)} 只基金")
+            _dashboard_cache.set(cache_key, result)
             return result
         except Exception as e:
             import traceback
             logger.error(f"get_unified_dashboard_data 失败: {e}")
             logger.error(traceback.format_exc())
+            _dashboard_cache.set(cache_key, [])
             return []
         finally:
             conn.close()
@@ -811,6 +859,249 @@ class FundService:
             return pd.read_sql_query(query, conn, params=(fund_code, fund_code)).to_dict(orient='records')
         finally: conn.close()
     
+    def get_valuation_meta(self, code: str) -> dict:
+        """
+        估值元数据（深度分析页用）
+        从 main.py 路由内联逻辑迁移至 Service 层
+        """
+        import traceback
+        conn = self.db._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT fund_name, related_index, pos_ratio FROM unified_fund_list WHERE fund_code=?",
+                (code,)
+            )
+            f_row = cursor.fetchone()
+            if not f_row:
+                return {"status": "error", "message": f"Fund {code} not found in database"}
+
+            trade_future = ""
+            if "原油" in str(f_row[0]) or "USO" in str(f_row[1]):
+                trade_future = "CL"
+            elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]):
+                trade_future = "GC"
+            elif "白银" in str(f_row[0]):
+                trade_future = "AG0"
+
+            fund_cfg = {
+                "code": code,
+                "trade_etf": f_row[1] or '',
+                "position": float(f_row[2] or 0.95) * 100,
+                "trade_future": trade_future
+            }
+
+            basket_df = pd.read_sql(
+                "SELECT underlying_symbol as symbol, weight FROM fund_basket_weights "
+                "WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)",
+                conn, params=(code, code)
+            )
+            if not basket_df.empty:
+                fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
+
+            # 获取底层的 calculator 基准数据
+            calculator = self._get_calculator()
+            base_data = calculator.get_base_data(code) if calculator else None
+
+            # 动态推演 Hedge 值（如果数据库里为空）
+            if base_data and (not base_data.get('hedge') or float(base_data.get('hedge', 0)) <= 0):
+                try:
+                    trade_etf = fund_cfg.get('trade_etf', '')
+                    if trade_etf:
+                        base_etf_price = base_data.get(trade_etf) or base_data.get(f"^{trade_etf}")
+                        base_nav = base_data.get('nav')
+                        base_pos = base_data.get('position')
+                        if base_pos is None or float(base_pos) <= 0:
+                            base_pos = float(fund_cfg.get('position', 95.0)) / 100.0
+                        base_fx = base_data.get('exchange_rate')
+                        if base_etf_price and base_nav and base_pos and base_fx:
+                            calc_hedge = (float(base_etf_price) * float(base_fx)) / (float(base_nav) * float(base_pos))
+                            base_data['hedge'] = calc_hedge
+                except Exception as e:
+                    logger.error(f"Failed to calculate missing hedge: {e}")
+
+            # 获取最新汇率
+            fx_df = pd.read_sql(
+                "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn
+            )
+            latest_fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else 7.0
+
+            # 获取最新实时行情 (用于标的 ETF 价格和期货价格)
+            portfolio = fund_cfg.get('valuation_portfolio', [])
+            etf_symbols = []
+            for item in portfolio:
+                sym = item.get('symbol', '').replace('^', '')
+                for suffix in ['-EU', '-JP', '-HK']:
+                    if sym.endswith(suffix):
+                        sym = sym[:-len(suffix)]
+                        break
+                etf_symbols.append(sym)
+
+            realtime_quotes = {}
+            for sym in etf_symbols:
+                try:
+                    q = self.market_data_service.get_realtime_quote(sym) if self.market_data_service else None
+                    if q:
+                        realtime_quotes[sym] = {
+                            'price': q.get('price'),
+                            'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
+                            'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                            'source': q.get('source', '')
+                        }
+                    else:
+                        realtime_quotes[sym] = None
+                except Exception as e:
+                    logger.error(f"Error getting quote for {sym}: {e}")
+                    realtime_quotes[sym] = None
+
+            future_symbol = fund_cfg.get('trade_future', '')
+            future_quote = None
+            if future_symbol:
+                try:
+                    q = self.market_data_service.get_realtime_quote(future_symbol) if self.market_data_service else None
+                    if q:
+                        future_quote = {
+                            'price': q.get('price'),
+                            'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
+                            'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                            'source': q.get('source', '')
+                        }
+                    else:
+                        future_quote = None
+                except Exception as e:
+                    logger.error(f"Error getting future quote for {future_symbol}: {e}")
+                    future_quote = None
+
+            # 获取 T-1 基准估值日数据
+            t1_data = {}
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT h.date, COALESCE(h.nav, f.nav) as nav, h.static_val,
+                           r.usd_cny_mid, h.calibration, h.price
+                    FROM unified_fund_history h
+                    LEFT JOIN exchange_rate r ON h.date = r.date
+                    LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
+                    WHERE h.fund_code = ?
+                    ORDER BY h.date DESC LIMIT 1
+                """, (code,))
+                row = cursor.fetchone()
+                if row:
+                    t1_data = {
+                        "date": row[0],
+                        "nav": float(row[1]) if row[1] is not None else 0.0,
+                        "static_val": float(row[2]) if row[2] is not None else 0.0,
+                        "exchange_rate": float(row[3]) if row[3] is not None else 0.0,
+                        "calibration": float(row[4]) if row[4] is not None else 0.0,
+                        "price": float(row[5]) if row[5] is not None else 0.0
+                    }
+
+                    # 如果没有独立校准值，查找全局期货校准值兜底
+                    if t1_data["calibration"] == 0.0 and future_symbol:
+                        base_fsym = future_symbol
+                        if 'MGC' in future_symbol or 'GC' in future_symbol:
+                            base_fsym = 'GC'
+                        elif 'MCL' in future_symbol or 'CL' in future_symbol:
+                            base_fsym = 'CL'
+                        elif 'MNQ' in future_symbol or 'NQ' in future_symbol:
+                            base_fsym = 'NQ'
+                        elif 'MES' in future_symbol or 'ES' in future_symbol:
+                            base_fsym = 'ES'
+
+                        cursor.execute("""
+                            SELECT calibration FROM futures_daily
+                            WHERE symbol = ? AND calibration IS NOT NULL
+                            ORDER BY date DESC LIMIT 1
+                        """, (base_fsym,))
+                        crow = cursor.fetchone()
+                        if crow:
+                            t1_data["calibration"] = float(crow[0])
+                            if base_data:
+                                base_data['calibration'] = float(crow[0])
+
+                    # 获取该 T-1 日期对应的 ETF 收盘价
+                    etf_prices = []
+                    for item in portfolio:
+                        symbol = item.get('symbol', '')
+                        if not symbol:
+                            continue
+                        alt_symbol = symbol if symbol.startswith('^') else f"^{symbol}"
+                        cursor.execute("""
+                            SELECT COALESCE(NULLIF(netvalue, 0), price) as price
+                            FROM usa_etf_daily_prices
+                            WHERE symbol IN (?, ?) AND date = ?
+                        """, (symbol, alt_symbol, row[0]))
+                        p_row = cursor.fetchone()
+                        p_val = float(p_row[0]) if p_row and p_row[0] is not None else 0.0
+
+                        display_symbol = symbol
+                        for suffix in ['-EU', '-JP', '-HK']:
+                            if display_symbol.endswith(suffix) and not display_symbol.startswith('^'):
+                                display_symbol = f"^{display_symbol}"
+                                break
+
+                        base_price = 0
+                        if base_data:
+                            base_price = float(base_data.get(display_symbol, base_data.get(symbol, 0)))
+
+                        pct_change = 0
+                        if base_price > 0:
+                            pct_change = (p_val / base_price - 1) * 100
+
+                        etf_prices.append({
+                            "symbol": display_symbol,
+                            "price": p_val,
+                            "pct_change": pct_change
+                        })
+                    t1_data["etfs_info"] = etf_prices
+
+                    # 如果 T-1 的静态估值为 0，则利用 T-2 的基准数据和 T-1 的 ETF 收盘价进行动态推演
+                    if t1_data["static_val"] <= 0 and base_data and calculator:
+                        try:
+                            t1_etfs = {info["symbol"].lstrip('^'): info["price"] for info in etf_prices}
+                            for info in etf_prices:
+                                t1_etfs[info["symbol"]] = info["price"]
+
+                            t1_fx = t1_data["exchange_rate"] if t1_data["exchange_rate"] > 0 else base_data.get("exchange_rate", 7.0)
+
+                            calc_res = calculator.calculate(fund_cfg, t1_fx, t1_etfs)
+                            if calc_res and calc_res.get('rt_val'):
+                                t1_data["static_val"] = float(calc_res['rt_val'])
+                        except Exception as e:
+                            logger.error(f"Failed to dynamically calculate T-1 static_val: {e}")
+            except Exception as e:
+                logger.warning(f"获取 T-1 估值日数据失败: {e}")
+
+            # 格式化 base_data 以免 JSON 序列化失败
+            formatted_base_data = {}
+            if base_data:
+                import numpy as np
+                for k, v in base_data.items():
+                    if pd.isna(v):
+                        formatted_base_data[k] = None
+                    elif isinstance(v, (np.integer, int)):
+                        formatted_base_data[k] = int(v)
+                    elif isinstance(v, (np.floating, float)):
+                        formatted_base_data[k] = float(v)
+                    else:
+                        formatted_base_data[k] = str(v)
+
+            return {
+                "status": "ok",
+                "fund_config": fund_cfg,
+                "base_data": formatted_base_data,
+                "t1_data": t1_data,
+                "latest_exchange_rate": latest_fx,
+                "realtime_quotes": realtime_quotes,
+                "future_quote": future_quote
+            }
+        except Exception as e:
+            logger.error(f"Error getting valuation meta for {code}: {e}")
+            logger.error(traceback.format_exc())
+            return {"status": "error", "message": str(e)}
+        finally:
+            conn.close()
+
     def get_my_watchlist(self) -> List[str]:
         """
         [V6.0] 获取"我的自选"基金列表

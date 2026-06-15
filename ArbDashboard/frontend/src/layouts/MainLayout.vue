@@ -64,8 +64,13 @@
     </n-layout-sider>
     <n-layout>
       <n-layout-header bordered style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding: 0 20px; background: #ffffff;">
-      </n-layout-header>
-      <n-layout-content content-style="padding: 10px; background-color: #f6f8fb; height: calc(100vh - 30px); overflow: auto;">
+          <div v-if="showDataAlert" class="nav-alert-bar">
+            <n-icon size="14" color="#d97706"><AlertTriangle /></n-icon>
+            <span>{{ navAlertText }}</span>
+            <router-link to="/data" style="color: #d97706; font-weight: 700; margin-left: 6px; text-decoration: underline;">前往更新 →</router-link>
+          </div>
+        </n-layout-header>
+        <n-layout-content content-style="padding: 10px; background-color: #f6f8fb; height: calc(100vh - 30px); overflow: auto;">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />
@@ -97,7 +102,8 @@ import {
   Database,
   Bot,
   Activity,
-  BookOpen
+  BookOpen,
+  AlertTriangle
 } from 'lucide-vue-next'
 
 const collapsed = ref(false)
@@ -105,6 +111,8 @@ const activeKey = ref('dashboard')
 
 const currentDate = ref('')
 const currentTime = ref('')
+const showDataAlert = ref(false)
+const navAlertText = ref('')
 const rates = ref({
   usd_cny_mid: '',
   hkd_cny_mid: '',
@@ -141,12 +149,40 @@ const fetchRates = async () => {
   }
 }
 
+const fetchNavAlert = async () => {
+  try {
+    const res = await fetch('/api/system/nav-status')
+    const data = await res.json()
+    if (data.status === 'ok') {
+      const todayUpdated = data.data.today_updated
+      const lastTime = data.data.last_updated_time
+      // 15:00 之后还没更新过净值 → 显示提醒
+      const now = new Date()
+      const hour = now.getHours()
+      const minute = now.getMinutes()
+      const isWeekend = now.getDay() === 0 || now.getDay() === 6
+      if (!isWeekend && hour >= 15 && !todayUpdated) {
+        showDataAlert.value = true
+        navAlertText.value = '今日净值尚未补采，部分基金可能显示过期数据'
+      } else if (!isWeekend && hour >= 15 && todayUpdated) {
+        showDataAlert.value = true
+        navAlertText.value = `今日净值已更新 (${lastTime})`
+      } else {
+        showDataAlert.value = false
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
 onMounted(() => {
   updateTime()
   fetchRates()
+  fetchNavAlert()
   timer = setInterval(() => {
     updateTime()
   }, 1000) // 时钟每秒更新
+  // 每 5 分钟刷新净值状态
+  setInterval(fetchNavAlert, 300000)
 })
 
 onUnmounted(() => {
@@ -164,7 +200,7 @@ const menuOptions = [
     icon: renderIcon(LayoutDashboard)
   },
   {
-    label: () => h(RouterLink, { to: '/analysis' }, { default: () => '实盘分析' }),
+    label: () => h(RouterLink, { to: '/analysis' }, { default: () => '实时沙盘' }),
     key: 'analysis',
     icon: renderIcon(LineChart)
   },
@@ -174,7 +210,7 @@ const menuOptions = [
     icon: renderIcon(Activity)
   },
   {
-    label: () => h(RouterLink, { to: '/ledger' }, { default: () => '实盘对账' }),
+    label: () => h(RouterLink, { to: '/ledger' }, { default: () => '盘后对账' }),
     key: 'ledger',
     icon: renderIcon(BookOpen)
   },
@@ -209,6 +245,12 @@ const menuOptions = [
 :deep(.n-menu-item-content--selected) { background-color: #eff6ff !important; }
 :deep(.n-menu-item-content--selected .n-menu-item-content-header a) { color: #2563eb !important; }
 :deep(.n-menu-item-content) { border-radius: 8px; margin: 2px 8px; color: #526173; font-weight: 650; }
+.nav-alert-bar {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #92400e;
+  background: #fffbeb; border: 1px solid #fde68a;
+  padding: 2px 12px; border-radius: 12px;
+}
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

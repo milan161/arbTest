@@ -1,0 +1,75 @@
+/**
+ * 市场数据 Store
+ * - 汇率、数据源状态、实时报价
+ */
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import * as api from '../api'
+
+export interface MarketOverview {
+  rates: {
+    usd_cny_mid: number
+    hkd_cny_mid: number
+    [key: string]: any
+  }
+  usd_change: number
+  hkd_change: number
+  active_sources: string[]
+  stats: {
+    fund_count: number
+    [key: string]: any
+  }
+}
+
+export const useMarketStore = defineStore('market', () => {
+  // ---- state ----
+  const overview = ref<MarketOverview>({
+    rates: { usd_cny_mid: 0, hkd_cny_mid: 0 },
+    usd_change: 0,
+    hkd_change: 0,
+    active_sources: [],
+    stats: { fund_count: 0 }
+  })
+  const loading = ref(false)
+
+  // ---- getters ----
+  const hasTdx = computed(() =>
+    (overview.value?.active_sources || []).includes('tdx')
+  )
+  const hasIb = computed(() => {
+    const sources = overview.value?.active_sources || []
+    return sources.some((s) => s.includes('IB') && !s.includes('未运行'))
+  })
+  const hasIbNotRunning = computed(() => {
+    const sources = overview.value?.active_sources || []
+    return sources.some((s) => s.includes('IB (未运行)'))
+  })
+  const hasGalaxy = computed(() =>
+    (overview.value?.active_sources || []).includes('galaxy')
+  )
+  const hasGuojin = computed(() =>
+    (overview.value?.active_sources || []).includes('guojin')
+  )
+  const hasFutu = computed(() => {
+    const sources = overview.value?.active_sources || []
+    return sources.some((s) => s.includes('富途'))
+  })
+
+  // ---- actions ----
+  async function fetchOverview() {
+    try {
+      const res = await api.getMarketOverview()
+      if (res.data?.status === 'ok') {
+        overview.value = { ...overview.value, ...res.data.data }
+      }
+    } catch (err) {
+      console.error('获取市场概览失败', err)
+    }
+  }
+
+  return {
+    overview, loading,
+    hasTdx, hasIb, hasIbNotRunning, hasGalaxy, hasGuojin, hasFutu,
+    fetchOverview
+  }
+})

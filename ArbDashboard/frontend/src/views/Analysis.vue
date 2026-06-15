@@ -315,7 +315,7 @@
                   <span style="font-weight:bold; color:#d32f2f; font-size:13px;">{{ fundName }} ({{ fundCode }}):</span>
                   <div style="flex: 1; min-width: 5px;"></div>
                   <span style="color:#666; font-size: 12px; white-space: nowrap;">数量:</span>
-                  <n-input-number v-model:value="orderVol" :step="100" size="small" style="width: 110px;" :show-button="false" />
+                  <n-input-number v-model:value="orderVol" :step="100" size="small" style="width: 110px;" :show-button="false" @update:value="orderVolUserEdited = true" />
                   <span style="color:#666; font-size: 12px; white-space: nowrap;">限价:</span>
                   <n-input-number v-model:value="simLofPrice" :step="0.001" size="small" style="width: 100px;" :show-button="false" />
                </div>
@@ -343,11 +343,7 @@
 
             <!-- 下单按键区 -->
             <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 12px; border-top: 1px dashed #fed7aa; padding-top: 12px;">
-               <!-- 交易账号选择器 (多账号轮动策略) -->
-               <div style="display: flex; align-items: center; gap: 10px; background: #e0f2fe; padding: 8px 12px; border-radius: 6px; border: 1px solid #bae6fd;">
-                  <span style="font-weight:bold; color:#0369a1; font-size:13px; white-space:nowrap;">🏦 交易账号:</span>
-                  <n-select v-model:value="selectedAccountId" :options="accountOptions" size="small" style="flex: 1;" placeholder="智能默认推荐" />
-               </div>
+
                
                <!-- 第一行：买入/开仓按键 -->
                <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
@@ -431,7 +427,7 @@ import { ref, onMounted, computed, reactive, watch, h, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NCard, NSpace, NButton,
-  NText, NDataTable, NTag, NDatePicker, NIcon, NInputNumber, useMessage, NCheckbox, NDivider, NSelect
+  NText, NDataTable, NTag, NDatePicker, NIcon, NInputNumber, useMessage, NCheckbox, NDivider, NSelect, useDialog
 } from 'naive-ui'
 import { RefreshCw, Zap, ArrowLeft, Star, StarOff } from 'lucide-vue-next'
 import { use } from 'echarts/core'
@@ -439,13 +435,14 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import axios from 'axios'
+import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote, placeOrder, addTrade } from '../api'
 
 use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent])
 
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 
 // 基础状态
 const fundCode = ref((route.query.code as string) || '')
@@ -556,39 +553,11 @@ const targetLotsPureFuture = ref(1)
 const simLofPrice = ref(0)
 const simEtfPrice = ref(0)
 const orderVol = ref(2000)
+const orderVolUserEdited = ref(false)  // 用户手动编辑后不再被对冲计算自动覆盖
+const autoLog = ref(true)  // 默认开启同步记账
 const hedgeVol = ref(10)
 const hedgePrice = ref(0)
-// 多账号轮动：智能推荐
-const selectedAccountId = ref('')
-const accountOptions = ref([
-  { label: '🤖 智能默认 (随星期自动切换)', value: '' }
-])
 
-const fetchAccounts = async () => {
-  try {
-    const res = await axios.get('/api/system/accounts')
-    if (res.data.status === 'ok' && res.data.data) {
-      const data = res.data.data
-      accountOptions.value = [
-        { label: '🤖 智能默认 (随星期自动切换)', value: '' },
-        { label: `周一户 (尾号${data['1']?.slice(-1) || '1'})`, value: data['1'] || 'account_1' },
-        { label: `周二户 (尾号${data['2']?.slice(-1) || '2'})`, value: data['2'] || 'account_2' },
-        { label: `周三户 (尾号${data['3']?.slice(-1) || '3'})`, value: data['3'] || 'account_3' },
-        { label: `周四户 (尾号${data['4']?.slice(-1) || '4'})`, value: data['4'] || 'account_4' },
-        { label: `周五户 (尾号${data['5']?.slice(-1) || '5'})`, value: data['5'] || 'account_5' },
-        { label: `备用账号`, value: data['6'] || 'account_6' }
-      ]
-      
-      // 根据星期几自动推荐账号 (1=周一, 5=周五)
-      const dayOfWeek = new Date().getDay()
-      if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-          selectedAccountId.value = data[dayOfWeek.toString()] || `account_${dayOfWeek}`
-      }
-    }
-  } catch (e) {
-    console.error("获取交易账号失败", e)
-  }
-}
 
 let realtimeTimer: any = null
 
@@ -1028,18 +997,19 @@ const lofQtyPureFuture = computed(() => {
 })
 
 watch(() => lofQtyEtf.value, (newVal) => {
-  if (newVal && newVal.lofQty > 0) orderVol.value = newVal.lofQty
+  if (!orderVolUserEdited.value && newVal && newVal.lofQty > 0) orderVol.value = newVal.lofQty
   if (newVal && newVal.etfQty > 0) hedgeVol.value = newVal.etfQty
 })
 
 watch(() => lofQtyFuture.value, (newVal) => {
-  if (newVal && newVal.lofQty > 0) orderVol.value = newVal.lofQty
+  if (!orderVolUserEdited.value && newVal && newVal.lofQty > 0) orderVol.value = newVal.lofQty
 })
 
 watch(() => route.query.code, (newCode) => {
   fundCode.value = (newCode as string) || ''; fundName.value = (route.query.name as string) || ''
   isLofPriceInitialized.value = false
   simLofPrice.value = 0
+  orderVolUserEdited.value = false  // 切换基金后重置，允许自动填充默认数量
   if (fundCode.value) fetchAll(); else fetchDashboard()
 })
 
@@ -1053,7 +1023,7 @@ const handleDateChange = () => { fetchIntraday(); fetchValuationMeta(); }
 
 const fetchDashboard = async () => {
   try {
-    const res = await axios.get('/api/dashboard')
+    const res = await getDashboard()
     let data = res.data.data
     
     // 1. 我的自选筛选（交集关系）
@@ -1087,7 +1057,7 @@ const fetchIntraday = async () => {
   if (!fundCode.value) return
   loading.value = true
   try {
-    const res = await axios.get(`/api/fund/${fundCode.value}/intraday`, { params: { date: formatDate(selectedDate.value) } })
+    const res = await getFundIntraday(fundCode.value, formatDate(selectedDate.value))
     intradayData.value = res.data.data || []
     if (intradayData.value.length > 0 && !isLofPriceInitialized.value) {
        simLofPrice.value = currentPrice.value
@@ -1099,7 +1069,7 @@ const fetchIntraday = async () => {
 
 const fetchBasket = async () => {
   if (!fundCode.value) return
-  const res = await axios.get(`/api/fund/${fundCode.value}/basket`)
+  const res = await getFundBasket(fundCode.value)
   basketData.value = res.data.data || []
   if (basketData.value.length > 0) {
       simEtfPrice.value = basketData.value[0].price || 0
@@ -1109,7 +1079,7 @@ const fetchBasket = async () => {
 
 const fetchHistoryMeta = async () => {
     try {
-        const res = await axios.get(`/api/fund/${fundCode.value}/history`)
+        const res = await getFundHistory(fundCode.value)
         if (res.data.status === 'ok' && res.data.data.length > 0) {
             const latest = res.data.data[0]
             navDate.value = latest.nav_date || '-'; t2Nav.value = latest.nav || 0
@@ -1121,7 +1091,7 @@ const fetchHistoryMeta = async () => {
 const fetchRealtimeDepth = async () => {
     if (!fundCode.value) return
     try {
-        const res = await axios.get(`/api/market/realtime/${fundCode.value}`)
+        const res = await getRealtimeQuote(fundCode.value)
         if (res.data.status === 'ok') {
             const q = res.data.data
             depth.ask = q.ask || [0,0,0,0,0]; depth.ask_vol = q.ask_vol || [0,0,0,0,0]
@@ -1140,7 +1110,7 @@ const fetchRealtimeDepth = async () => {
 const fetchValuationMeta = async () => {
   if (!fundCode.value) return
   try {
-    const res = await axios.get(`/api/fund/${fundCode.value}/valuation_meta`)
+    const res = await getFundValuationMeta(fundCode.value)
     if (res.data.status === 'ok') {
       meta.value = res.data
       latestExchangeRateInput.value = res.data.latest_exchange_rate || 7.0
@@ -1211,25 +1181,52 @@ const fetchAll = () => { fetchIntraday(); fetchBasket(); fetchHistoryMeta(); fet
 
 const sendOrder = async (action: string, brokerType: 'lof' | 'ib' | 'ib_future') => {
   let p = 0, v = 0, sym = '', broker = ''
+  let brokerName = ''
   if (brokerType === 'lof') {
     p = simLofPrice.value; v = orderVol.value; sym = fundCode.value; broker = lofBroker.value
+    brokerName = broker === 'yinhe_qmt' ? '银河QMT' : (broker === 'tdx' ? '通达信' : '国金QMT')
   } else if (brokerType === 'ib') {
     p = hedgePrice.value; v = hedgeVol.value; sym = meta.value?.fund_config?.trade_etf?.split(',')?.[0]?.trim() || ''; broker = 'ib'
+    brokerName = 'IB (盈透证券)'
   } else if (brokerType === 'ib_future') {
     p = testFutPrice.value; v = targetLotsFuture.value; sym = meta.value?.fund_config?.trade_future || ''; broker = 'ib'
+    brokerName = 'IB 期货'
   }
-  try {
-    const res = await axios.post('/api/trading/order', { action, code: sym, volume: v, price: p, broker, account_id: selectedAccountId.value })
-    if (res.data.status === 'ok') {
-      message.success(`下单成功: ${res.data.message}`)
-      if (autoLog.value) {
-        await axios.post('/api/ledger/trades/add', {
-          fund_code: fundCode.value, fund_name: fundName.value, action, volume: orderVol.value, price: simLofPrice.value,
-          hedge_symbol: sym, hedge_price: p, hedge_vol: v
-        })
+  
+  const actionName = action === 'BUY' ? '买入' : '卖出'
+  
+  dialog.warning({
+    title: '确认下单',
+    content: `您将向 [${brokerName}] 发起实盘委托，请确认参数：\n\n・ 标的代码: ${sym}\n・ 委托方向: ${actionName}\n・ 委托价格: ${p}\n・ 委托数量: ${v}`,
+    positiveText: '确认发送',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      message.loading('正在发送委托指令，请稍候...')
+      try {
+        console.log(`[Order] Sending request: action=${action}, code=${sym}, volume=${v}, price=${p}, broker=${broker}`)
+        const res = await placeOrder({ action, code: sym, volume: v, price: p, broker })
+        console.log(`[Order] Response received:`, res.data)
+        if (res.data.status === 'ok') {
+          message.success(`下单结果: ${res.data.message}`)
+          if (autoLog.value) {
+            await addTrade({
+              fund_code: fundCode.value, fund_name: fundName.value, action, volume: orderVol.value, price: simLofPrice.value,
+              hedge_symbol: sym, hedge_price: p, hedge_vol: v
+            })
+          }
+        } else {
+          message.error(`下单失败: ${res.data.message}`)
+          dialog.error({
+            title: '下单失败',
+            content: `券商/通道接口返回错误: ${res.data.message}`
+          })
+        }
+      } catch (e: any) {
+        console.error('[Order] Error:', e)
+        message.error(`接口调用异常: ${e.message || e}`)
       }
-    } else message.error(`下单失败: ${res.data.message}`)
-  } catch (e) { message.error('接口异常') }
+    }
+  })
 }
 
 const radarColumns = [
@@ -1261,7 +1258,6 @@ const pollRealtime = async () => {
 
 onMounted(() => {
     loadFilterSettings()
-    fetchAccounts()
     if (fundCode.value) fetchAll()
     else fetchDashboard()
     realtimeTimer = setInterval(pollRealtime, 3000)

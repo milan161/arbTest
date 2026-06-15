@@ -202,6 +202,59 @@ class DatabaseManager:
                 )
             ''')
 
+            # 券商赎回费表
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS broker_redemption_fees (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT,
+                    fund_code TEXT,
+                    broker_name TEXT,
+                    fee_rate TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(fund_code, broker_name)
+                )
+            ''')
+
+            # [V9.2] 套利对账本（匹配Excel格式：A股买卖+美股空平+盈亏汇总）
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS arbitrage_pairs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fund_code TEXT,
+                    fund_name TEXT,
+                    -- A股买入
+                    buy_date TEXT,
+                    buy_price REAL,
+                    buy_volume INTEGER,
+                    buy_amount REAL,
+                    buy_account TEXT,
+                    -- A股卖出/赎回
+                    sell_date TEXT,
+                    sell_price REAL,
+                    sell_amount REAL,
+                    redemption_fee REAL DEFAULT 0,
+                    -- 美股做空
+                    hedge_symbol TEXT,
+                    short_date TEXT,
+                    short_price REAL,
+                    short_volume INTEGER,
+                    short_amount REAL,
+                    -- 美股买平
+                    cover_date TEXT,
+                    cover_price REAL,
+                    cover_amount REAL,
+                    us_commission REAL DEFAULT 0,
+                    -- 汇总
+                    pnl_rmb REAL,
+                    pnl_usd REAL,
+                    status TEXT DEFAULT 'ACTIVE',
+                    buy_notes TEXT,
+                    sell_notes TEXT,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
             conn.commit()
             conn.close()
 
