@@ -17,18 +17,102 @@ import os
 
 
 
-
 import sys
-
-
-
-
+import io
+import contextlib
 from typing import List, Dict, Optional, Any
 
-
-
-
 from .base import BaseRealtimeFetcher
+
+
+@contextlib.contextmanager
+def _suppress_console_output():
+    """抑制 tqcenter C++ 插件的控制台刷屏。
+
+    Windows 上 C++ 插件可能直接调用 WriteConsole 绕过 CRT 文件描述符，
+    所以除了 Python 层和 CRT fd 层外，还通过 kernel32.SetStdHandle
+    重定向 Windows 标准句柄到 NUL。
+    """
+    old_out, old_err = sys.stdout, sys.stderr
+    null_out = io.StringIO()
+    # 1) Python 层
+    sys.stdout, sys.stderr = null_out, null_out
+    # 2) CRT 文件描述符层（捕获 C printf/fprintf）
+    nul_fd = None
+    try:
+        nul_fd = os.open(os.devnull, os.O_WRONLY)
+        old_out_fd = os.dup(1)
+        old_err_fd = os.dup(2)
+        os.dup2(nul_fd, 1)
+        os.dup2(nul_fd, 2)
+    except OSError:
+        nul_fd = old_out_fd = old_err_fd = None
+    # 3) Windows 标准句柄层（捕获 WriteConsole 等 Win32 API 输出）
+    _win_handles = None
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        STD_OUTPUT_HANDLE = -11
+        STD_ERROR_HANDLE = -12
+        old_hout = k32.GetStdHandle(STD_OUTPUT_HANDLE)
+        old_herr = k32.GetStdHandle(STD_ERROR_HANDLE)
+        nul_handle = k32.CreateFileW(
+            'NUL', 0x40000000, 2, None, 3, 0, None
+        )
+        if nul_handle and nul_handle != -1:
+            k32.SetStdHandle(STD_OUTPUT_HANDLE, nul_handle)
+            k32.SetStdHandle(STD_ERROR_HANDLE, nul_handle)
+            _win_handles = (k32, nul_handle, old_hout, old_herr)
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+        if nul_fd is not None:
+            os.dup2(old_out_fd, 1)
+            os.dup2(old_err_fd, 2)
+            os.close(nul_fd)
+            os.close(old_out_fd)
+            os.close(old_err_fd)
+        if _win_handles:
+            k32, nul_handle, old_hout, old_herr = _win_handles
+            try:
+                k32.SetStdHandle(-11, old_hout)
+                k32.SetStdHandle(-12, old_herr)
+                k32.CloseHandle(nul_handle)
+            except Exception:
+                pass
+
+
+def _permanently_silence_tq_console():
+    """永久抑制 tqcenter C++ 后台线程的 printf/WriteConsole 输出。
+
+    tqcenter 初始化后，其 C++ 后台线程会持续推送行情数据并直接 printf，
+    _suppress_console_output() 只在调用期间生效，无法覆盖后台线程。
+    本函数仅重定向 CRT/Win32 标准句柄（C 级输出），保留 Python sys.stdout 不变。
+    """
+    try:
+        # CRT 文件描述符层
+        nul_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(nul_fd, 1)
+        os.dup2(nul_fd, 2)
+        os.close(nul_fd)
+    except OSError:
+        pass
+    try:
+        # Windows 标准句柄层
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        nul_handle = k32.CreateFileW('NUL', 0x40000000, 2, None, 3, 0, None)
+        if nul_handle and nul_handle != -1:
+            k32.SetStdHandle(-11, nul_handle)
+            k32.SetStdHandle(-12, nul_handle)
+    except Exception:
+        pass
+
+
+
 
 
 
@@ -155,7 +239,11 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
             # 使用通达信插件目录的绝对路径，而非当前模块的 __file__
             tdx_plugin_path = os.path.join(tdx_api_path, 'tqcenter.py')
-            tq.initialize(tdx_plugin_path)
+            with _suppress_console_output():
+                tq.initialize(tdx_plugin_path)
+
+            # [永久抑制] tqcenter 后台 C++ 线程的 printf 刷屏
+            _permanently_silence_tq_console()
 
             # [防御] 拦截 _data_callback_transfer 中的 RuntimeError，防止刷屏
             _orig_cb = getattr(tq, '_data_callback_transfer', None)
@@ -276,19 +364,13 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
         # 过滤：仅订阅符合股票代码规则的品种，防止 USDCNY 等汇率引发插件报错
-
-
-
+        # 同时过滤纯字母代码（如 CL, CU 等期货代码）
         valid_symbols = []
-
         for s in symbols:
-
-            # 必须是全数字，且长度为 5 或 6
-
             clean_s = s.split('.')[0]
-
+            if clean_s.replace('-', '').isalpha() and len(clean_s) >= 2:
+                continue  # 纯字母期货代码跳过 TDX
             if clean_s.isdigit() and len(clean_s) in [5, 6]:
-
                 valid_symbols.append(s)
 
         
@@ -301,34 +383,11 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
         try:
-
-
-
-
-            self.tq.subscribe_hq(stock_list=tdx_codes, callback=self._internal_callback)
-
-
-
-
+            with _suppress_console_output():
+                self.tq.subscribe_hq(stock_list=tdx_codes, callback=self._internal_callback)
             logger.info(f"通达信已订阅: {tdx_codes}")
-
-
-
-
         except Exception as e:
-
-
-
-
             logger.error(f"通达信订阅失败: {e}")
-
-
-
-
-
-
-
-
 
     def unsubscribe(self, symbols: List[str]):
 
@@ -404,11 +463,8 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
 
-
-                snap = self.tq.get_market_snapshot(stock_code=stock_code)
-
-
-
+                with _suppress_console_output():
+                    snap = self.tq.get_market_snapshot(stock_code=stock_code)
 
                 if snap:
 
@@ -634,11 +690,17 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
         """每次都从通达信拉取最新快照（本地内存直连，延迟极低），确保盘口实时"""
         clean_symbol = symbol.split('.')[0]
 
+        # 过滤非A/港股标的（期货代码如 CL 等会触发 tqcenter 的 "代码格式错误" 刷屏）
+        base = symbol.upper().split('.')[0]
+        if base.replace('-', '').isalpha() and len(base) >= 2:
+            return None  # 纯字母代码（如 CL, USO, GLD）不走TDX
+
         # 始终尝试主动拉取最新快照，不依赖可能过期的缓存
         if self.is_connected:
             tdx_code = self.normalize_symbol(symbol)
             try:
-                snap = self.tq.get_market_snapshot(stock_code=tdx_code)
+                with _suppress_console_output():
+                    snap = self.tq.get_market_snapshot(stock_code=tdx_code)
                 if snap:
                     quote = self._format_snap(tdx_code, snap)
                     if quote:

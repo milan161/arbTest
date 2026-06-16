@@ -103,7 +103,8 @@ import {
   Bot,
   Activity,
   BookOpen,
-  AlertTriangle
+  AlertTriangle,
+  Repeat,
 } from 'lucide-vue-next'
 
 const collapsed = ref(false)
@@ -213,6 +214,11 @@ const menuOptions = [
     label: () => h(RouterLink, { to: '/ledger' }, { default: () => '盘后对账' }),
     key: 'ledger',
     icon: renderIcon(BookOpen)
+  },
+  {
+    label: () => h(RouterLink, { to: '/etf-rotation' }, { default: () => 'ETF轮动' }),
+    key: 'etf-rotation',
+    icon: renderIcon(Repeat)
   },
   {
     label: () => h(RouterLink, { to: '/data' }, { default: () => '数据管理' }),

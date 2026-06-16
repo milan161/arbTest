@@ -70,6 +70,7 @@
               <n-tab-pane name="QDII亚洲" tab="QDII亚洲" />
               <n-tab-pane name="国内LOF" tab="国内LOF" />
               <n-tab-pane name="白银" tab="白银" />
+              <n-tab-pane name="现金管理" tab="现金管理" />
             </n-tabs>
             <n-input v-model:value="searchKeyword" placeholder="搜索代码/名称..." class="search-input" size="small" clearable />
           </div>
@@ -198,13 +199,21 @@ const pagination = { pageSize: 100 }
 const toggleWatchlist = (code: string) => fundStore.toggleWatchlist(code)
 
 const rowProps = (row: any) => {
+  // 只有黄金原油 / QDII欧美 / 混合跨境 跳转到沙盘，其他显示"待开发"
+  const developableTabs = ['黄金原油', 'QDII欧美']
+  const isDevelopable = developableTabs.includes(currentTab.value)
+  
   return {
     style: 'cursor: pointer;',
     onClick: () => {
-      router.push({
-        path: '/analysis',
-        query: { code: row.fund_code, name: row.fund_name }
-      })
+      if (isDevelopable) {
+        router.push({
+          path: '/analysis',
+          query: { code: row.fund_code, name: row.fund_name }
+        })
+      } else {
+        message.info(`${row.fund_name}（${row.fund_code}）实盘交易模式待开发`)
+      }
     }
   }
 }
@@ -474,6 +483,12 @@ const columns = computed<DataTableColumns<any>>(() => {
   if (hideIndexTabs.includes(currentTab.value)) {
     return cols.filter(c => c.key !== 'related_index' && c.key !== 'index_close' && c.key !== 'index_pct')
   }
+
+  // 现金管理TAB：隐藏份额/新增/换手率/指数价/指数涨跌幅/申购/赎回
+  if (currentTab.value === '现金管理') {
+    return cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'purchase_status', 'redemption_status'].includes(c.key))
+  }
+
   return cols
 })
 

@@ -4,11 +4,18 @@ import json
 import time
 import threading
 import functools
+from datetime import datetime
 import pandas as pd
 from typing import List, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+# [债券ETF] 引入债券ETF估值服务
+from services.bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
+
+# 债券ETF代码集合
+BOND_ETF_CODES = set(BOND_ETF_META.keys())
 
 # ============================================================
 # [V8.1] 轻量级 Dashboard 缓存（5秒 TTL）
@@ -46,6 +53,7 @@ _TAB_CATEGORY_MAP = {
     'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
     '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
     '白银': ['白银', '白银LOF'],
+    '现金管理': ['债券/货币'],
 }
 
 # ============================================================
@@ -392,6 +400,29 @@ class FundService:
             all_related_indices = funds_df['related_index'].dropna().tolist()
             index_changes_map = prefetch_index_changes(all_related_indices)
 
+            # 预查哪些基金有完整权重篮子（跳过简化指数估值，直接用计算器）
+            funds_with_basket = set()
+            try:
+                basket_codes_df = pd.read_sql("SELECT DISTINCT fund_code FROM fund_basket_weights", conn)
+                funds_with_basket = set(basket_codes_df['fund_code'].tolist())
+            except:
+                pass
+
+            # [V9.1] 并发预取所有基金的实时行情（解决序列调用 get_realtime_quote ~5s 卡顿）
+            quotes_dict = {}
+            if self.market_data_service:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    fut_map = {executor.submit(self.market_data_service.get_realtime_quote, c): c for c in codes}
+                    for fut in as_completed(fut_map):
+                        c = fut_map[fut]
+                        try:
+                            rt = fut.result()
+                            if rt and rt.get('price'):
+                                quotes_dict[c] = rt
+                        except Exception:
+                            pass
+
             result = []
             for _, fund in funds_df.iterrows():
                 code = fund['fund_code']
@@ -448,8 +479,13 @@ class FundService:
                     else:
                         metrics['prev_close'] = 0
 
-                # ── 4. 实时价格 ──
-                if self.market_data_service:
+                # ── 4. 实时价格（从预取的 quotes_dict 取，避免逐只序列调用） ──
+                if self.market_data_service and code in quotes_dict:
+                    rt = quotes_dict[code]
+                    metrics['price'] = rt['price']
+                    if rt.get('amount'):
+                        metrics['volume'] = rt['amount']
+                elif self.market_data_service:
                     try:
                         rt = self.market_data_service.get_realtime_quote(code)
                         if rt and rt.get('price'):
@@ -459,15 +495,36 @@ class FundService:
                     except Exception as e:
                         logger.error(f"Error getting realtime quote for {code}: {e}")
 
-                # ── 5–6. 实时估值计算（与原逻辑一致，略作精简） ──
-                # (原有估值计算逻辑全部保留，为节省篇幅此处用完整代码）
-                # 以下为原本的估值算法块 —— 直接内联恢复
-                metrics['rt_val'] = None
-                metrics['rt_premium'] = None
-                
-                # 尝试实时计算估值
+                # ── [债券ETF] 511880/511360/511520 估值 ──
+                if code in BOND_ETF_CODES:
+                    try:
+                        bv = get_bond_etf_valuation(self.db, self.market_data_service)
+                        val = bv.get_valuation(code)
+                        est_nav = val.get('estimated_nav')
+                        if est_nav and est_nav > 0:
+                            metrics['rt_val'] = round(est_nav, 4)
+                            metrics['bond_etf_method'] = val.get('method', '')
+                            metrics['avg_daily_growth'] = val.get('avg_daily_growth')
+                            # 用预估净值作为静态估值（因为没有数据库历史记录）
+                            metrics['static_val'] = round(est_nav, 4)
+                            # 用最新实际净值作为昨收价（用于涨跌幅计算）
+                            latest_nav = val.get('latest_nav')
+                            if latest_nav and latest_nav > 0:
+                                metrics['nav'] = round(latest_nav, 4)
+                                metrics['prev_close'] = round(latest_nav, 4)
+                            if metrics.get('price', 0) > 0:
+                                metrics['rt_premium'] = round((metrics['price'] / est_nav - 1) * 100, 3)
+                            if metrics.get('price', 0) > 0:
+                                metrics['bond_spread'] = round(metrics['price'] - est_nav, 4)
+                    except Exception as e:
+                        logger.error(f"[BondETF] 估值失败 {code}: {e}")
+                else:
+                    # ── 5–6. 原有实时估值计算 ──
+                    metrics['rt_val'] = None
+                    metrics['rt_premium'] = None
+
+                # 尝试实时计算估值 (仅非债券ETF已有，此处保留原逻辑)
                 try:
-                    # 3.1 【白银基金 161226 特殊行情特判】 - 完全同步自程序 1（东财 SSE 接口）的稳定算法
                     if code == '161226':
                         import requests
                         ag_future_price, settlement_price, vwap = 0.0, 0.0, 0.0
@@ -530,8 +587,8 @@ class FundService:
                                 metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
 
 
-                    # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 直连新浪指数接口，不占用美股 API，免去自选条件直接计算
-                    if not metrics.get('rt_val'):
+                    # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子的基金使用简化指数估值
+                    if not metrics.get('rt_val') and code not in funds_with_basket:
                         rel_idx = fund.get('related_index')
                         nav_home = float(metrics.get('nav', 0))
                         if rel_idx and rel_idx != '-' and nav_home > 0:
@@ -715,10 +772,15 @@ class FundService:
 
     def get_fund_history(self, fund_code: str) -> List[Dict[str, Any]]:
         """
-        [V3.9] 钢铁加固版：即便今日数据全无，也必须追溯到历史锚点。
+        历史对账数据（验算用）。
+        - 不使用 bfill 填充净值（防止今天/昨天出现虚假的旧净值）
+        - 不过滤当天行（exchange_rate LEFT JOIN 可能带回当天汇率，用于显示）
+        - 不将 None 填充为 0（让前端正确显示 '-'）
         """
         conn = self.db._get_conn()
         try:
+            today = datetime.now().strftime('%Y-%m-%d')
+
             # 1. 基础历史数据 (包含静态估值、汇率、并从 fund_daily_factors 回填缺失的净值)
             query_hist = """
             SELECT h.date, h.price, 
@@ -734,7 +796,7 @@ class FundService:
             """
             df = pd.read_sql(query_hist, conn, params=(fund_code,))
             if df.empty: return []
-            
+
             # 判断是否是港币基金。若是，在返回的 usd_cny_mid 字段里使用港币汇率 hkd_cny_mid
             is_hkd_fund = False
             try:
@@ -751,10 +813,8 @@ class FundService:
                 df['usd_cny_mid'] = df['hkd_cny_mid']
 
             # 计算估值误差百分比: val_error_pct = (static_val / nav - 1) * 100
-            # 如果数据库里有 valuation_error 字段直接用，否则根据 static_val 和 nav 动态计算
             if 'valuation_error' in df.columns:
                 df['val_error_pct'] = df['valuation_error']
-            # 对于 valuation_error 为空的行，用 static_val 和 nav 计算
             mask = df['val_error_pct'].isna() if 'val_error_pct' in df.columns else pd.Series([True] * len(df))
             valid_mask = mask & (df['static_val'] > 0) & (df['nav'] > 0)
             if valid_mask.any():
@@ -762,8 +822,7 @@ class FundService:
                     df['val_error_pct'] = 0.0
                 df.loc[valid_mask, 'val_error_pct'] = (df.loc[valid_mask, 'static_val'] / df.loc[valid_mask, 'nav'] - 1) * 100
 
-            # [核心修复] 锚点追溯：确保 nav_date 和 nav 永远不是空的
-            # 如果第一行没有 nav，我们需要往后找
+            # 找最新有效净值（用于展示，不填充到行数据里）
             valid_nav_rows = df[df['nav'] > 0]
             if not valid_nav_rows.empty:
                 latest_nav = valid_nav_rows.iloc[0]['nav']
@@ -771,39 +830,52 @@ class FundService:
             else:
                 latest_nav, latest_nav_date = 0, '-'
 
-            # 计算各项变动百分比（因为按 date DESC 排序，所以当前行(i)变动比例为对比它的下一行(i+1)）
-            # 用 shift(-1) 获取前一交易日的值
-            if 'usd_cny_mid' in df.columns:
-                df['usd_cny_mid_chg'] = (df['usd_cny_mid'] / df['usd_cny_mid'].shift(-1) - 1) * 100
-            df['price_chg'] = (df['price'] / df['price'].shift(-1) - 1) * 100
-            df['nav_chg'] = (df['nav'] / df['nav'].shift(-1) - 1) * 100
-            df['static_val_chg'] = (df['static_val'] / df['static_val'].shift(-1) - 1) * 100
+            # 计算各项变动百分比
+            # 注意: shift(-1) 获取前一交易日（因为倒序）。对 None/0 要特别处理防止除零
+            def safe_pct_change(series):
+                shifted = series.shift(-1)
+                result = pd.Series([None] * len(series), index=series.index)
+                valid = (shifted.notna()) & (shifted != 0) & (series.notna())
+                result[valid] = (series[valid] / shifted[valid] - 1) * 100
+                return result
 
-            # 清理所有 NaN 和 Infinity 以符合 JSON 规范
+            if 'usd_cny_mid' in df.columns:
+                # 汇率用 bfill 填充历史空缺（合理：汇率每天都有）
+                df['usd_cny_mid'] = df['usd_cny_mid'].bfill()
+                df['usd_cny_mid_chg'] = safe_pct_change(df['usd_cny_mid'])
+            df['price_chg'] = safe_pct_change(df['price'])
+            df['nav_chg'] = safe_pct_change(df['nav'])
+            df['static_val_chg'] = safe_pct_change(df['static_val'])
+
+            # 清理 NaN/Inf（不填充 0，保留 None 让前端显示 '-'）
             import numpy as np
             df = df.replace([np.inf, -np.inf], np.nan)
-            # 汇率和净值如果有空缺，往历史记录找（因为倒序，用 bfill）
-            if 'usd_cny_mid' in df.columns:
-                df['usd_cny_mid'] = df['usd_cny_mid'].bfill()
-            df['nav'] = df['nav'].bfill()
-            df = df.fillna(0)
 
-            # 2. 为前端摘要页准备一个特殊的第一行 (注入最新锚点信息)
-            # 我们将这些信息挂载在返回列表的每一项中，确保前端 Analysis.vue 无论点开哪一行都能拿到
+            # 过滤：当天若有全空行（仅 exchange_rate 带回汇率，无实际基金数据），排除掉
+            # 条件：price/nav/static_val 全为 None → 删除
+            df = df.dropna(subset=['price', 'nav', 'static_val', 'shares', 'volume'], how='all')
+
+            # 2. 构建返回数据
             import math
             data_list = []
             for _, row in df.iterrows():
-                item = row.to_dict()
-                item['nav_date'] = latest_nav_date
-                item['latest_nav'] = latest_nav # 备用字段
-                # 历史表对账逻辑：收盘价 / 净值
-                if item['nav'] and item['nav'] > 0:
-                    item['static_premium'] = (item['price'] / item['nav'] - 1) * 100
-                
-                # 绝对防御：将字典中所有 float 类型的 NaN/Inf 强转为 0，防止 fastapi json 渲染报错
-                for k, v in item.items():
+                item = {}
+                for k in df.columns:
+                    v = row[k]
                     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                        item[k] = 0.0
+                        continue  # 跳过 NaN/Inf，前端自然显示 '-'
+                    if v is not None:
+                        item[k] = v
+
+                item['nav_date'] = latest_nav_date
+                item['latest_nav'] = latest_nav
+
+                # 静态溢价 = 收盘价 / 净值
+                nav_val = item.get('nav')
+                price_val = item.get('price')
+                if nav_val and nav_val > 0 and price_val and price_val > 0:
+                    item['static_premium'] = (price_val / nav_val - 1) * 100
+
                 data_list.append(item)
 
             return data_list

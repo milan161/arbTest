@@ -43,7 +43,8 @@ export const TAB_CATEGORIES: Record<string, string[]> = {
   'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
   'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
   '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
-  '白银': ['白银', '白银LOF']
+  '白银': ['白银', '白银LOF'],
+  '现金管理': ['债券/货币']
 }
 
 export const HIGH_FREQ_TABS = ['自选', '黄金原油', 'QDII欧美']
@@ -52,7 +53,9 @@ export const useFundStore = defineStore('fund', () => {
   // ---- state ----
   const tableData = ref<FundItem[]>([])
   const loading = ref(false)
-  const currentTab = ref('自选')
+  // 从 localStorage 恢复上次 TAB，默认"自选"
+  const savedTab = typeof localStorage !== 'undefined' ? localStorage.getItem('dashboard_tab') : null
+  const currentTab = ref(savedTab || '自选')
   const searchKeyword = ref('')
   const fundHistory = ref<any[]>([])
   const fundHistoryLoading = ref(false)
@@ -174,6 +177,7 @@ export const useFundStore = defineStore('fund', () => {
 
   function setTab(tab: string) {
     currentTab.value = tab
+    localStorage.setItem('dashboard_tab', tab)
     // [V8.1] 不再清空 tableData — 保留旧数据让 filteredTableData 直接过滤，
     // 用户看到的是已缓存的分类数据而非空白转圈。
     // 后台静默刷新会在 watch(currentTab) 中触发 fetchData(true)

@@ -53,20 +53,47 @@ class DynamicValuationCalculator:
             base_row = df.iloc[0].to_dict()
             base_date = base_row['date']
             
-            # 补充底层 ETF 基准价格
+            # 补充底层 ETF 基准价格（精确日期优先，取不到则往前找最近一日）
             etf_df = pd.read_sql(
-                "SELECT symbol, COALESCE(NULLIF(netvalue, 0), price) as price FROM usa_etf_daily_prices WHERE date = ?", 
+                "SELECT symbol, COALESCE(NULLIF(netvalue, 0), price) as price, date "
+                "FROM usa_etf_daily_prices WHERE date = ?", 
                 conn, params=(base_date,)
             )
-            for _, r in etf_df.iterrows():
-                # 保留完整符号（如 ^USO-EU），不要去掉 ^ 前缀
-                sym = r['symbol']
-                base_row[sym] = r['price']
-                # 同时存一份不带 ^ 的以防匹配失败
-                if sym.startswith('^'):
-                    base_row[sym[1:]] = r['price']
-                else:
-                    base_row['^' + sym] = r['price']
+            if not etf_df.empty:
+                for _, r in etf_df.iterrows():
+                    sym = r['symbol']
+                    base_row[sym] = r['price']
+                    if sym.startswith('^'):
+                        base_row[sym[1:]] = r['price']
+                    else:
+                        base_row['^' + sym] = r['price']
+            # 兜底：对仍然缺失的 known ETF 取最近一条记录
+            try:
+                known_etfs = [s.strip() for s in (
+                    'XLE,USO,GLD,XOP,SPY,QQQ,INDA,XBI,XLK,SLV,AGG,BOTZ,ARKK,ARKG,'
+                    'SMH,SOXX,TLT,IWM,EEM,EWJ,HYG,LQD,GDX,GDXJ,^XLE-EU,^XLE-JP,'
+                    '^XLE-HK,^USO-EU,^USO-JP,^USO-HK,^GLD-EU,^GLD-JP,^GLD-HK,'
+                    '^INDA-EU,^INDA-JP,^INDA-HK'
+                ).split(',') if s and s not in base_row]
+                if known_etfs:
+                    placeholders = ','.join('?' for _ in known_etfs)
+                    fallback_df = pd.read_sql(
+                        f"SELECT symbol, COALESCE(NULLIF(netvalue, 0), price) as price, MAX(date) as md "
+                        f"FROM usa_etf_daily_prices "
+                        f"WHERE symbol IN ({placeholders}) AND price > 0 AND date <= ? "
+                        f"GROUP BY symbol",
+                        conn, params=(*known_etfs, base_date)
+                    )
+                    for _, r in fallback_df.iterrows():
+                        sym = r['symbol']
+                        if sym not in base_row or not base_row.get(sym):
+                            base_row[sym] = r['price']
+                            if sym.startswith('^'):
+                                base_row[sym[1:]] = r['price']
+                            else:
+                                base_row['^' + sym] = r['price']
+            except Exception:
+                pass
 
             self._base_data_cache[fund_code] = base_row
             self._cache_timestamp[fund_code] = time.time()

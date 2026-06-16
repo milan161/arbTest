@@ -315,7 +315,7 @@
                   <span style="font-weight:bold; color:#d32f2f; font-size:13px;">{{ fundName }} ({{ fundCode }}):</span>
                   <div style="flex: 1; min-width: 5px;"></div>
                   <span style="color:#666; font-size: 12px; white-space: nowrap;">数量:</span>
-                  <n-input-number v-model:value="orderVol" :step="100" size="small" style="width: 110px;" :show-button="false" @update:value="orderVolUserEdited = true" />
+                  <n-input-number v-model:value="orderVol" :step="100" size="small" style="width: 110px;" :show-button="false" />
                   <span style="color:#666; font-size: 12px; white-space: nowrap;">限价:</span>
                   <n-input-number v-model:value="simLofPrice" :step="0.001" size="small" style="width: 100px;" :show-button="false" />
                </div>
@@ -541,7 +541,7 @@ const isHedgePriceInitialized = ref(false)
 // 实时估值计算器新增反应状态
 const meta = ref<any>(null)
 const lofBroker = ref('yinhe_qmt')
-const latestExchangeRateInput = ref(7.0)
+const latestExchangeRateInput = ref(0) // 初始0，加载完成后才显示
 const testEtfPrices = reactive<Record<string, number>>({})
 const testFutPrice = ref(0)
 const testFutCalib = ref(1.0)
@@ -552,8 +552,7 @@ const targetLotsPureFuture = ref(1)
 // 沙盘执行状态
 const simLofPrice = ref(0)
 const simEtfPrice = ref(0)
-const orderVol = ref(2000)
-const orderVolUserEdited = ref(false)  // 用户手动编辑后不再被对冲计算自动覆盖
+const orderVol = ref(10000)
 const autoLog = ref(true)  // 默认开启同步记账
 const hedgeVol = ref(10)
 const hedgePrice = ref(0)
@@ -996,20 +995,14 @@ const lofQtyPureFuture = computed(() => {
   return { lofQty: finalLofQty, hedgeValue: displayHedgeValue, exposure }
 })
 
-watch(() => lofQtyEtf.value, (newVal) => {
-  if (!orderVolUserEdited.value && newVal && newVal.lofQty > 0) orderVol.value = newVal.lofQty
-  if (newVal && newVal.etfQty > 0) hedgeVol.value = newVal.etfQty
-})
-
-watch(() => lofQtyFuture.value, (newVal) => {
-  if (!orderVolUserEdited.value && newVal && newVal.lofQty > 0) orderVol.value = newVal.lofQty
-})
+// orderVol 不再自动从对冲公式计算，用户可自由填写
+// 仍然同步更新 hedgeVol（ETF对冲数量），不影响 LOF 下单数量
 
 watch(() => route.query.code, (newCode) => {
   fundCode.value = (newCode as string) || ''; fundName.value = (route.query.name as string) || ''
   isLofPriceInitialized.value = false
   simLofPrice.value = 0
-  orderVolUserEdited.value = false  // 切换基金后重置，允许自动填充默认数量
+  // orderVol 保持用户设置，不做自动覆盖
   if (fundCode.value) fetchAll(); else fetchDashboard()
 })
 

@@ -320,7 +320,7 @@ class IBReader(EWrapper, EClient):
         else:
             return
         # 🤫 彻底屏蔽 10089(延时警告) 和 10346(持仓通道被TWS强制抢占警告)
-        if errorCode in [2104, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
+        if errorCode in [200, 2104, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
             return
             
         if errorCode in [2103, 2105]:

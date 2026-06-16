@@ -163,6 +163,7 @@ try:
     from services.trading_service import TradingService
     from services.config_manager_service import ConfigManagerService
     from services.ledger_service import LedgerService
+    from services.etf_rotation_service import ETFRotationService
     
     try:
         from core.auto_trade.engine_runner import auto_trade_runner
@@ -236,11 +237,11 @@ else:
         else:
             logger.info("交易服务已就绪 (独立模式)")
     except SystemExit:
-        sys.exit(1)
+        logger.warning("交易服务初始化被中止 (SystemExit)，系统继续运行，交易功能不可用。")
+        trading_service = None
     except Exception as e:
-        logger.error(f"交易服务启动失败 (严重异常): {e}")
-        import sys
-        sys.exit(1) 
+        logger.error(f"交易服务启动失败: {e}")
+        trading_service = None 
 _active_watchlist = []
 _nav_last_updated = {"time": None, "date": None}
 _nav_scheduled_today_date = ""
@@ -252,6 +253,7 @@ sampler_service = IntradaySamplerService(db, market_data_service, config_service
 sampler_service.active_watchlist = _active_watchlist
 config_manager_service = ConfigManagerService(project_root)
 ledger_service = LedgerService(db)
+etf_rotation_service = ETFRotationService(db, market_data_service=market_data_service)
 
 # 3. Try to load Private Plugins
 try:
@@ -577,22 +579,25 @@ async def get_fund_valuation_meta(code: str):
                     break
             etf_symbols.append(sym)
             
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         realtime_quotes = {}
-        for sym in etf_symbols:
+        def _fetch_quote(sym):
             try:
                 q = market_data_service.get_realtime_quote(sym) if market_data_service else None
                 if q:
-                    realtime_quotes[sym] = {
+                    return sym, {
                         'price': q.get('price'),
                         'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
                         'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
                         'source': q.get('source', '')
                     }
-                else:
-                    realtime_quotes[sym] = None
+                return sym, None
             except Exception as e:
                 logger.error(f"Error getting quote for {sym}: {e}")
-                realtime_quotes[sym] = None
+                return sym, None
+        with ThreadPoolExecutor(max_workers=min(len(etf_symbols) or 1, 5)) as pool:
+            for sym, result in pool.map(_fetch_quote, etf_symbols):
+                realtime_quotes[sym] = result
             
         future_symbol = fund_cfg.get('trade_future', '')
         future_quote = None
@@ -612,99 +617,127 @@ async def get_fund_valuation_meta(code: str):
                 logger.error(f"Error getting future quote for {future_symbol}: {e}")
                 future_quote = None
             
-        # 5. 获取 T-1 基准估值日数据
+        # 5. 获取 T-1 估值日数据（最新美股收盘日）
         t1_data = {}
         try:
             cursor = conn.cursor()
-            # T-1 估值日是统一历史记录里的最新日期记录
-            cursor.execute("""
-                SELECT h.date, COALESCE(h.nav, f.nav) as nav, h.static_val, r.usd_cny_mid, h.calibration, h.price 
-                FROM unified_fund_history h
-                LEFT JOIN exchange_rate r ON h.date = r.date
-                LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
-                WHERE h.fund_code = ?
-                ORDER BY h.date DESC LIMIT 1
-            """, (code,))
-            row = cursor.fetchone()
-            if row:
-                t1_data = {
-                    "date": row[0],
-                    "nav": float(row[1]) if row[1] is not None else 0.0,
-                    "static_val": float(row[2]) if row[2] is not None else 0.0,
-                    "exchange_rate": float(row[3]) if row[3] is not None else 0.0,
-                    "calibration": float(row[4]) if row[4] is not None else 0.0,
-                    "price": float(row[5]) if row[5] is not None else 0.0
-                }
+            # T-1 估值日 = 美股最近收盘日（usa_etf_daily_prices 最新日期）
+            cursor.execute("SELECT MAX(date) FROM usa_etf_daily_prices")
+            t1_date_row = cursor.fetchone()
+            if t1_date_row:
+                t1_date = t1_date_row[0]
+            else:
+                t1_date = base_data.get('date', '') if base_data else ''
+
+            if t1_date:
+                # NAV 仍取最新有净值的记录（可能早于 T-1）
+                cursor.execute("""
+                    SELECT COALESCE(h.nav, f.nav) as nav, h.static_val, r.usd_cny_mid, h.calibration, h.price 
+                    FROM unified_fund_history h
+                    LEFT JOIN exchange_rate r ON h.date = r.date
+                    LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
+                    WHERE h.fund_code = ? AND COALESCE(h.nav, f.nav, 0) > 0
+                    ORDER BY h.date DESC LIMIT 1
+                """, (code,))
+                row = cursor.fetchone()
+                if row:
+                    t1_data = {
+                        "date": t1_date,
+                        "nav": float(row[0]) if row[0] is not None else 0.0,
+                        "static_val": float(row[1]) if row[1] is not None else 0.0,
+                        "exchange_rate": float(row[2]) if row[2] is not None else 0.0,
+                        "calibration": float(row[3]) if row[3] is not None else 0.0,
+                        "price": float(row[4]) if row[4] is not None else 0.0
+                    }
+                elif base_data:
+                    # 连净值都取不到时，以 T-2 垫底
+                    t1_data = dict(base_data)
+                    t1_data['date'] = t1_date
                 
-                # 如果没有独立校准值，查找全局期货校准值兜底
-                if t1_data["calibration"] == 0.0 and future_symbol:
-                    base_fsym = future_symbol
-                    if 'MGC' in future_symbol or 'GC' in future_symbol: base_fsym = 'GC'
-                    elif 'MCL' in future_symbol or 'CL' in future_symbol: base_fsym = 'CL'
-                    elif 'MNQ' in future_symbol or 'NQ' in future_symbol: base_fsym = 'NQ'
-                    elif 'MES' in future_symbol or 'ES' in future_symbol: base_fsym = 'ES'
+                if not t1_data:
+                    # 无任何数据可用，跳过 T-1 处理
+                    pass
+                else:
+                    # 如果没有独立校准值，查找全局期货校准值兜底
+                    if t1_data["calibration"] == 0.0 and future_symbol:
+                        base_fsym = future_symbol
+                        if 'MGC' in future_symbol or 'GC' in future_symbol: base_fsym = 'GC'
+                        elif 'MCL' in future_symbol or 'CL' in future_symbol: base_fsym = 'CL'
+                        elif 'MNQ' in future_symbol or 'NQ' in future_symbol: base_fsym = 'NQ'
+                        elif 'MES' in future_symbol or 'ES' in future_symbol: base_fsym = 'ES'
+                        
+                        cursor.execute("""
+                            SELECT calibration FROM futures_daily 
+                            WHERE symbol = ? AND calibration IS NOT NULL 
+                            ORDER BY date DESC LIMIT 1
+                        """, (base_fsym,))
+                        crow = cursor.fetchone()
+                        if crow:
+                            t1_data["calibration"] = float(crow[0])
+                            if base_data:
+                                base_data['calibration'] = float(crow[0])
                     
-                    cursor.execute("""
-                        SELECT calibration FROM futures_daily 
-                        WHERE symbol = ? AND calibration IS NOT NULL 
-                        ORDER BY date DESC LIMIT 1
-                    """, (base_fsym,))
-                    crow = cursor.fetchone()
-                    if crow:
-                        t1_data["calibration"] = float(crow[0])
+                    # 获取该 T-1 日期对应的 ETF 收盘价（精确日期优先，缺失则往前找最近一日）
+                    etf_prices = []
+                    for item in portfolio:
+                        symbol = item.get('symbol', '')
+                        if not symbol: continue
+                        alt_symbol = symbol if symbol.startswith('^') else f"^{symbol}"
+                        cursor.execute("""
+                            SELECT COALESCE(NULLIF(netvalue, 0), price) as price 
+                            FROM usa_etf_daily_prices 
+                            WHERE symbol IN (?, ?) AND date = ?
+                        """, (symbol, alt_symbol, t1_date))
+                        p_row = cursor.fetchone()
+                        p_val = float(p_row[0]) if p_row and p_row[0] is not None else 0.0
+                        
+                        # 精确日期没取到，往前找最近一日
+                        if p_val <= 0:
+                            cursor.execute("""
+                                SELECT COALESCE(NULLIF(netvalue, 0), price) as price 
+                                FROM usa_etf_daily_prices 
+                                WHERE symbol IN (?, ?) AND date <= ? AND price > 0
+                                ORDER BY date DESC LIMIT 1
+                            """, (symbol, alt_symbol, t1_date))
+                            fallback_row = cursor.fetchone()
+                            if fallback_row:
+                                p_val = float(fallback_row[0])
+                        
+                        display_symbol = symbol
+                        for suffix in ['-EU', '-JP', '-HK']:
+                            if display_symbol.endswith(suffix) and not display_symbol.startswith('^'):
+                                display_symbol = f"^{display_symbol}"
+                                break
+                        
+                        base_price = 0
                         if base_data:
-                            base_data['calibration'] = float(crow[0])
-                
-                
-                # 获取该 T-1 日期对应的 ETF 收盘价
-                etf_prices = []
-                for item in portfolio:
-                    symbol = item.get('symbol', '')
-                    if not symbol: continue
-                    alt_symbol = symbol if symbol.startswith('^') else f"^{symbol}"
-                    cursor.execute("""
-                        SELECT COALESCE(NULLIF(netvalue, 0), price) as price 
-                        FROM usa_etf_daily_prices 
-                        WHERE symbol IN (?, ?) AND date = ?
-                    """, (symbol, alt_symbol, row[0]))
-                    p_row = cursor.fetchone()
-                    p_val = float(p_row[0]) if p_row and p_row[0] is not None else 0.0
-                    
-                    display_symbol = symbol
-                    for suffix in ['-EU', '-JP', '-HK']:
-                        if display_symbol.endswith(suffix) and not display_symbol.startswith('^'):
-                            display_symbol = f"^{display_symbol}"
-                            break
-                    
-                    base_price = 0
-                    if base_data:
-                        base_price = float(base_data.get(display_symbol, base_data.get(symbol, 0)))
-                    
-                    pct_change = 0
-                    if base_price > 0:
-                        pct_change = (p_val / base_price - 1) * 100
+                            base_price = float(base_data.get(display_symbol, base_data.get(symbol, 0)))
                         
-                    etf_prices.append({
-                        "symbol": display_symbol,
-                        "price": p_val,
-                        "pct_change": pct_change
-                    })
-                t1_data["etfs_info"] = etf_prices
-                
-                # 如果 T-1 的静态估值为 0，则利用 T-2 的基准数据和 T-1 的 ETF 收盘价进行动态推演
-                if t1_data["static_val"] <= 0 and base_data and calculator:
-                    try:
-                        t1_etfs = {info["symbol"].lstrip('^'): info["price"] for info in etf_prices}
-                        for info in etf_prices:
-                            t1_etfs[info["symbol"]] = info["price"]
-                        
-                        t1_fx = t1_data["exchange_rate"] if t1_data["exchange_rate"] > 0 else base_data.get("exchange_rate", 7.0)
-                        
-                        calc_res = calculator.calculate(fund_cfg, t1_fx, t1_etfs)
-                        if calc_res and calc_res.get('rt_val'):
-                            t1_data["static_val"] = float(calc_res['rt_val'])
-                    except Exception as e:
-                        logger.error(f"Failed to dynamically calculate T-1 static_val: {e}")
+                        pct_change = 0
+                        if base_price > 0:
+                            pct_change = (p_val / base_price - 1) * 100
+                            
+                        etf_prices.append({
+                            "symbol": display_symbol,
+                            "price": p_val,
+                            "pct_change": pct_change
+                        })
+                    t1_data["etfs_info"] = etf_prices
+                    
+                    # 如果 T-1 的静态估值为 0，则利用 T-2 的基准数据和 T-1 的 ETF 收盘价进行动态推演
+                    if t1_data["static_val"] <= 0 and base_data and calculator:
+                        try:
+                            t1_etfs = {info["symbol"].lstrip('^'): info["price"] for info in etf_prices}
+                            for info in etf_prices:
+                                t1_etfs[info["symbol"]] = info["price"]
+                            
+                            t1_fx = t1_data["exchange_rate"] if t1_data["exchange_rate"] > 0 else base_data.get("exchange_rate", 7.0)
+                            
+                            calc_res = calculator.calculate(fund_cfg, t1_fx, t1_etfs)
+                            if calc_res and calc_res.get('rt_val'):
+                                t1_data["static_val"] = float(calc_res['rt_val'])
+                        except Exception as e:
+                            logger.error(f"Failed to dynamically calculate T-1 static_val: {e}")
         except Exception as e:
             logger.warning(f"获取 T-1 估值日数据失败: {e}")
 
@@ -1107,6 +1140,74 @@ async def get_data_status():
         }
     }
 
+@app.get("/api/system/health-check")
+async def health_check():
+    """系统自检：验证数据完整性、同步新鲜度"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    issues = []
+    conn = db._get_conn()
+    try:
+        # 1. 检查静态估值完整性（最近3个交易日）
+        recent_dates = conn.execute("""
+            SELECT DISTINCT date FROM unified_fund_history 
+            ORDER BY date DESC LIMIT 5
+        """).fetchall()
+        check_dates = [r[0] for r in recent_dates[:3]]
+        
+        missing_sv = conn.execute("""
+            SELECT date, fund_code FROM unified_fund_history 
+            WHERE date IN ({}) AND (static_val IS NULL OR static_val <= 0)
+              AND date != ?  -- 今天可能还没出净值，排除
+              AND nav IS NOT NULL  -- 只检查有实际净值的基金，排除僵尸记录
+            ORDER BY date DESC
+        """.format(','.join('?' * len(check_dates))), check_dates + [today]).fetchall()
+        
+        if missing_sv:
+            for date, code in missing_sv[:10]:
+                issues.append(f"[{code}] {date} static_val 缺失")
+        
+        # 2. 检查同步新鲜度
+        stale_sources = []
+        for src in ['woody_lof_batch', 'official_exchange_rate', 'futures_data']:
+            synced = db.is_access_synced_today(today, source=src)
+            if not synced:
+                stale_sources.append(src)
+        if stale_sources:
+            issues.append(f"同步未完成: {', '.join(stale_sources)}")
+        
+        # 3. 检查最近 sync 日期是否太旧
+        farthest = conn.execute("""
+            SELECT sync_date FROM access_sync_status 
+            WHERE access_source='woody_lof_batch' 
+            ORDER BY sync_date DESC LIMIT 1
+        """).fetchone()
+        if farthest:
+            if farthest[0] < today:
+                issues.append(f"Woody因子最后同步日: {farthest[0]}（非今日）")
+        
+        # 4. 检查数据库健康
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+        if integrity and integrity[0] != 'ok':
+            issues.append(f"数据库完整性异常: {integrity[0]}")
+        
+        fund_count = conn.execute("SELECT COUNT(DISTINCT fund_code) FROM unified_fund_history").fetchone()[0]
+        record_count = conn.execute("SELECT COUNT(*) FROM unified_fund_history").fetchone()[0]
+        
+    finally:
+        conn.close()
+    
+    status = "healthy" if not issues else "warning"
+    return {
+        "status": status,
+        "issues": issues,
+        "today": today,
+        "stats": {
+            "fund_count": fund_count or 0,
+            "total_records": record_count or 0,
+            "checked_dates": check_dates
+        }
+    }
+
 # --- Auto Trade Engine APIs ---
 @app.get("/api/auto_trade/rules")
 async def get_auto_trade_rules():
@@ -1206,6 +1307,32 @@ async def get_hist_nav(code: str, start_date: str = None):
 async def get_hist_price(code: str, start_date: str = None):
     data = market_data_service.get_historical_prices(code, start_date=start_date)
     return {"status": "ok", "data": data}
+
+# --- ETF Rotation APIs (程序4 融合) ---
+@app.get("/api/etf-rotation/list")
+async def get_etf_rotation_list():
+    """获取 ETF 轮动分组配置"""
+    data = etf_rotation_service.get_rotation_list()
+    return {"status": "ok", "data": data}
+
+@app.get("/api/etf-rotation/prices")
+async def get_etf_rotation_prices():
+    """获取 ETF 轮动实时价格和估值"""
+    data = etf_rotation_service.get_rotation_prices()
+    return {"status": "ok", "data": data}
+
+@app.get("/api/etf-rotation/fx")
+async def get_etf_rotation_fx():
+    """获取 USD/CNY 实时在岸价"""
+    rate = etf_rotation_service.get_realtime_fx_spot()
+    return {"status": "ok", "data": {"fx_spot": rate}}
+
+@app.get("/api/etf-rotation/history/{group_id}")
+async def get_etf_rotation_history(group_id: int):
+    """获取某分组的轮动历史数据"""
+    data = etf_rotation_service.get_group_history(group_id)
+    return {"status": "ok", "data": data}
+
 
 # ==============================================================
 # [V6.5] 静态前端挂载 (公网部署与动静合一)
