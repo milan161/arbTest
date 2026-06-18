@@ -24,7 +24,7 @@ class SinaRealtimeFetcher(BaseRealtimeFetcher):
         self.quotes = {}
         self.running = False
         self._thread = None
-        self.interval = 5.0  # 默认 5 秒轮询一次
+        self.interval = 30.0  # [V10.1] 30秒轮询一次，避免新浪反爬封禁
 
     def connect(self) -> bool:
         # 新浪 API 不需要维持长连接

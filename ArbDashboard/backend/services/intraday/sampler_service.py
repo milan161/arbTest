@@ -23,8 +23,9 @@ class IntradaySamplerService:
     async def start(self):
         if self.running: return
         
-        # 临时强制开启分时采样服务以测试曲线画图功能
-        enable_sampler = True
+        # [V10.1] 分时采样服务暂时禁用：该服务持续消耗新浪配额导致反爬封禁，
+        # 且目前实盘无实际价值（分时图功能待后续重新设计）
+        enable_sampler = False
             
         if not enable_sampler:
             logger.info("ℹ️ 分时采样服务已根据配置禁用 (enable_intraday_sampler 默认为 False)")
@@ -32,7 +33,7 @@ class IntradaySamplerService:
             
         self.running = True
         self._task = asyncio.create_task(self._sampling_loop())
-        logger.info("🚀 分时采样服务已启动")
+        logger.info("分时采样服务已启动")
 
     async def stop(self):
         self.running = False

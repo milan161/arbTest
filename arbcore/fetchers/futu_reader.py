@@ -7,6 +7,7 @@ futu_reader.py - 富途行情读取器模块
 """
 
 import time
+import threading
 import pandas as pd
 import logging
 
@@ -28,21 +29,130 @@ class FutuReader:
     支持夜盘、盘前、盘后行情获取
     """
     
-    def __init__(self, host='127.0.0.1', port=11111):
+    def __init__(self, host='127.0.0.1', port=11111, max_retries=3, connect_timeout=5):
         """
         Args:
             host: 富途 OpenD 地址
             port: 富途 OpenD 端口
+            max_retries: 最大连接尝试次数（默认3次）
+            connect_timeout: 每次连接的超时秒数（默认5秒）
         """
         self.ctx = None
         self.host = host
         self.port = port
+        self.max_retries = max_retries
+        self.connect_timeout = connect_timeout
         self.prices = {}  # {symbol: {'bid': ..., 'ask': ..., 'last': ...}}
         self.subscribed_codes = set()
         self.last_connect_time = 0
         self.last_log_time = 0
-        self.disabled = False  # 如果连接失败，标记为禁用，防止无限重试
+        self.disabled = True  # [V10.0] 启动时不自动连接，用户点击页面"富途"按钮才重连
         
+        # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
+    
+    @staticmethod
+    def _connect_with_timeout(host, port, timeout=5):
+        """
+        用线程包装 OpenQuoteContext 连接，超时则放弃。
+        解决 futu-api 底层 C 层无超时参数的问题。
+        """
+        result = [None]
+        error = [None]
+        
+        def _do_connect():
+            try:
+                import futu
+                futu.SysConfig.set_all_thread_daemon(True)
+                futu.SysConfig.set_client_info('ArbDashboard', 1)
+                ctx = futu.OpenQuoteContext(host=host, port=port)
+                result[0] = ctx
+            except Exception as e:
+                error[0] = e
+        
+        t = threading.Thread(target=_do_connect, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        
+        if t.is_alive():
+            # 连接还在进行中，说明超时了
+            raise Exception(f"富途 OpenD 连接超时 ({timeout}秒)，请检查富途 OpenD 是否运行在 {host}:{port}")
+        
+        if error[0]:
+            raise error[0]
+        
+        if result[0] is None:
+            raise Exception("富途连接返回 None")
+        
+        return result[0]
+        
+    def _try_connect_silent(self):
+        """
+        静默尝试连接富途 OpenD（不输出 INFO 日志，只在失败时 WARNING）
+        最多尝试 max_retries 次，每次失败后 sleep 1 秒再试
+        成功后 ctx 不为 None，disabled = False
+        全部失败后 disabled = True，ctx = None
+        """
+        if self.disabled:
+            return
+        
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                import futu
+                futu.SysConfig.set_all_thread_daemon(True)
+                futu.SysConfig.set_client_info('ArbDashboard', 1)
+            except:
+                pass
+            
+            try:
+                self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
+                self.subscribed_codes = set()
+                logger.info(f"{'='*50}\n[富途] 连接成功 (第 {attempt} 次尝试)\n{'='*50}")
+                self.disabled = False
+                return
+            except Exception as e:
+                if attempt < self.max_retries:
+                    logger.debug(f"[富途] 连接尝试 {attempt}/{self.max_retries} 失败: {e}")
+                    time.sleep(1)
+                else:
+                    logger.warning(f"[富途] 连接失败（已尝试 {self.max_retries} 次），已禁用富途读取器。如需启用，请点击页面顶部的'富途'标签重试。")
+                    self.disabled = True
+                    self.ctx = None
+    
+    def reconnect(self):
+        """
+        手动重连（供用户点击"富途"按钮时调用）
+        重置 disabled 标志，重新尝试连接
+        返回 (success: bool, message: str)
+        """
+        logger.info("[富途] 用户手动触发重连...")
+        self.disabled = False
+        self.ctx = None
+        self.last_connect_time = 0  # 清除冷却时间
+        
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                import futu
+                futu.SysConfig.set_all_thread_daemon(True)
+                futu.SysConfig.set_client_info('ArbDashboard', 1)
+            except:
+                pass
+            
+            try:
+                self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
+                self.subscribed_codes = set()
+                self.disabled = False
+                logger.info(f"[富途] 手动重连成功 (第 {attempt} 次)")
+                return True, f"富途连接成功 (第 {attempt} 次尝试)"
+            except Exception as e:
+                logger.warning(f"[富途] 重连失败 (第 {attempt}/{self.max_retries} 次): {e}")
+                self.ctx = None
+                if attempt < self.max_retries:
+                    time.sleep(1)
+        
+        self.disabled = True
+        logger.warning("[富途] 手动重连失败（已尝试 {} 次），请检查富途 OpenD 是否运行".format(self.max_retries))
+        return False, f"富途重连失败（已尝试 {self.max_retries} 次），请确认富途 OpenD 已启动"
+    
     def close(self):
         """关闭连接"""
         if self.ctx:
@@ -58,26 +168,43 @@ class FutuReader:
             return False, "未安装 futu-api 库", self.prices
             
         if self.disabled:
-            return False, "富途API已被禁用 (连接曾被拒绝)", self.prices
+            return False, "富途API已被禁用（启动时连接失败，请点击页面'富途'标签重试）", self.prices
             
         try:
-            # 限制重连频率，避免富途OpenD未启动时狂刷错误
+            # ctx 为 None 说明还没连接或已断开，尝试连接
             if self.ctx is None:
-                if time.time() - self.last_connect_time < 60:
+                # 限制连接频率，避免频繁重连
+                if time.time() - self.last_connect_time < 30:
                     return False, "富途API未运行 (等待重连...)", self.prices
                 self.last_connect_time = time.time()
                 
-                # 静音富途底层日志
-                try:
-                    import futu
-                    futu.SysConfig.set_all_thread_daemon(True)
-                    futu.SysConfig.set_client_info('ArbDashboard')
-                except:
-                    pass
+                # 最多尝试 max_retries 次连接
+                connected = False
+                for attempt in range(1, self.max_retries + 1):
+                    try:
+                        self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
+                        for _wait in range(50):
+                            if self.ctx._ctx._quote_conn:
+                                break
+                            time.sleep(0.1)
+                        if not self.ctx._ctx._quote_conn:
+                            self.ctx.close()
+                            self.ctx = None
+                            raise Exception("连接超时")
+                        self.subscribed_codes = set()
+                        connected = True
+                        logger.info(f"[富途] 连接成功 (第 {attempt} 次)")
+                        self.disabled = False
+                        break
+                    except Exception as connect_err:
+                        logger.warning(f"[富途] 连接失败 (第 {attempt}/{self.max_retries} 次): {connect_err}")
+                        self.ctx = None
+                        if attempt < self.max_retries:
+                            time.sleep(1)
                 
-                logger.info(f"[富途] 尝试连接 OpenD ({self.host}:{self.port})...")
-                self.ctx = OpenQuoteContext(host=self.host, port=self.port)
-                self.subscribed_codes = set()
+                if not connected:
+                    self.disabled = True
+                    return False, f"富途OpenD连接失败（已尝试 {self.max_retries} 次）", self.prices
             
             # 区分美股和港股，并正确添加前缀
             import re

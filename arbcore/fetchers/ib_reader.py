@@ -16,6 +16,8 @@ import logging
 logging.getLogger('ibapi.client').setLevel(logging.WARNING)
 logging.getLogger('ibapi.wrapper').setLevel(logging.WARNING)
 
+logger = logging.getLogger(__name__)
+
 # Windows GBK encoding safe print helper
 def print(*args, **kwargs):
     try:
@@ -77,6 +79,12 @@ class IBReader(EWrapper, EClient):
         self.running = False
         self.polling_thread = None
 
+        # [V10.0] 连接控制：启动时不自动连接，用户点击页面"IB"按钮才重连
+        self.disabled = True
+        self.max_retries = 3
+        self.last_connect_time = 0
+        # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
+
     def is_us_night_session(self):
         """判断当前是否为IBKR美股夜盘交易时段 (北京时间)"""
         now = datetime.now()
@@ -101,6 +109,9 @@ class IBReader(EWrapper, EClient):
         return self.req_id_counter
 
     def connect_to_ib(self):
+        if self.disabled:
+            logger.debug("[IB] 已禁用，跳过连接")
+            return False
         target_port = self.target_ports[self.current_port_index]
         print(f"[IBReader] 尝试连接 IB Gateway/TWS (端口: {target_port}, ClientId: {self.client_id})...")
         try:
@@ -306,6 +317,42 @@ class IBReader(EWrapper, EClient):
             # 长连接模式下，循环短暂停留即可，底层的 tickPrice 会毫秒级疯狂更新字典。只有走到兜底才需要长休眠防封禁。
             time.sleep(30 if fallback_needed else 5)
 
+    def _try_connect_silent(self):
+        """静默尝试连接 IB，最多 max_retries 次"""
+        if self.disabled:
+            return
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                if self.connect_to_ib():
+                    logger.info(f"{'='*50}\n[IB] 连接成功 (第 {attempt} 次尝试)\n{'='*50}")
+                    self.disabled = False
+                    return
+            except Exception as e:
+                logger.debug(f"[IB] 连接尝试 {attempt}/{self.max_retries} 失败: {e}")
+                time.sleep(1)
+        logger.warning("[IB] 连接失败（已尝试 {} 次），已禁用 IB 读取器。如需启用，请点击页面顶部的'IB'标签重试。".format(self.max_retries))
+        self.disabled = True
+        self.connected = False
+    
+    def reconnect(self):
+        """手动重连（供用户点击"IB"按钮时调用）"""
+        logger.info("[IB] 用户手动触发重连...")
+        self.disabled = False
+        self.connected = False
+        self.last_connect_time = 0
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                if self.connect_to_ib():
+                    logger.info(f"[IB] 手动重连成功 (第 {attempt} 次)")
+                    self.disabled = False
+                    return True, f"IB 连接成功 (第 {attempt} 次尝试)"
+            except Exception as e:
+                logger.warning(f"[IB] 重连失败 (第 {attempt}/{self.max_retries} 次): {e}")
+                time.sleep(1)
+        self.disabled = True
+        logger.warning("[IB] 手动重连失败（已尝试 {} 次），请检查 TWS/Gateway 是否运行".format(self.max_retries))
+        return False, f"IB 重连失败（已尝试 {self.max_retries} 次），请确认 TWS/Gateway 已启动"
+    
     def nextValidId(self, orderId: int):
         super().nextValidId(orderId)
         self.next_order_id = orderId

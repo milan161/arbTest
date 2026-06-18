@@ -18,6 +18,26 @@ export function reconnectEngine() {
   return client.post('/api/system/reconnect_engine')
 }
 
+/** 重连通达信 */
+export function reconnectTdx() {
+  return client.post('/api/system/reconnect_tdx')
+}
+
+/** 重连银河QMT */
+export function reconnectGalaxy() {
+  return client.post('/api/system/reconnect_galaxy')
+}
+
+/** 重连国金QMT */
+export function reconnectGuojin() {
+  return client.post('/api/system/reconnect_guojin')
+}
+
+/** 重连富途 */
+export function reconnectFutu() {
+  return client.post('/api/system/reconnect_futu')
+}
+
 /** 触发后台任务（011/012 等） */
 export function triggerTask(task: string) {
   return client.post(`/api/system/trigger/${task}`)

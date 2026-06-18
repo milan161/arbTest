@@ -184,7 +184,10 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
         self._lock = threading.Lock()
 
-
+        # [V10.0] 连接控制：启动时不自动连接，用户点击页面"通达信"按钮才重连
+        self.disabled = True
+        self.max_retries = 3
+        self.last_connect_time = 0
 
 
 
@@ -323,7 +326,41 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
 
-    def disconnect(self):
+    def _try_connect_silent(self):
+        """静默尝试连接通达信，最多 max_retries 次"""
+        if self.disabled:
+            return
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                if self.connect():
+                    logger.info(f"{'='*50}\n[TDX] 连接成功 (第 {attempt} 次尝试)\n{'='*50}")
+                    self.disabled = False
+                    return
+            except Exception as e:
+                logger.debug(f"[TDX] 连接尝试 {attempt}/{self.max_retries} 失败: {e}")
+                time.sleep(1)
+        logger.warning("[TDX] 连接失败（已尝试 {} 次），已禁用通达信读取器。如需启用，请点击页面顶部的'通达信'标签重试。".format(self.max_retries))
+        self.disabled = True
+        self.is_connected = False
+    
+    def reconnect(self):
+        """手动重连（供用户点击"通达信"按钮时调用）"""
+        logger.info("[TDX] 用户手动触发重连...")
+        self.disabled = False
+        self.is_connected = False
+        self.last_connect_time = 0
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                if self.connect():
+                    logger.info(f"[TDX] 手动重连成功 (第 {attempt} 次)")
+                    self.disabled = False
+                    return True, f"通达信连接成功 (第 {attempt} 次尝试)"
+            except Exception as e:
+                logger.warning(f"[TDX] 重连失败 (第 {attempt}/{self.max_retries} 次): {e}")
+                time.sleep(1)
+        self.disabled = True
+        logger.warning("[TDX] 手动重连失败（已尝试 {} 次），请确认通达信客户端及 tqcenter 插件已启动".format(self.max_retries))
+        return False, f"通达信重连失败（已尝试 {self.max_retries} 次），请确认通达信客户端已启动"
 
 
 
@@ -772,4 +809,14 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
         
         # 默认返回原始格式
         return symbol
+
+    def disconnect(self):
+        """断开连接"""
+        if self.tq:
+            try:
+                self.tq.close()
+            except:
+                pass
+        self.is_connected = False
+        logger.info("🔌 通达信 已断开")
 

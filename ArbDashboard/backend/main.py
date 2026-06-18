@@ -59,72 +59,9 @@ logger = logging.getLogger("ArbNext")
 lof_is_running = False
 
 # [V4.4] 强力补丁：全局唯一 TQ 抢占与锁定
-# 必须在所有业务模块导入之前执行，防止 TradeManager 或 RealtimeManager 产生冲突
-if lof_is_running:
-    logger.warning("[主从架构] 检测到主交易程序(LOFarb)正在运行！当前为只读监控模式(Slave)，主动跳过通达信(tdx)全局初始化。")
-else:
-    try:
-        tq_plugin_path = r"D:\new_tdx_test\PYPlugins\user"
-        if tq_plugin_path not in sys.path:
-            sys.path.insert(0, tq_plugin_path)
-        
-        import tqcenter
-        from tqcenter import tq
-        
-        # 1. 注入 sys.modules 防止重复加载不同路径的同名模块
-        sys.modules['tqcenter'] = tqcenter
-        sys.modules['readers.tqcenter'] = tqcenter # 针对 LOFarb 的潜在导入路径
-        
-        # 2. 强制执行一次正确路径的初始化
-        if not getattr(tq, '_is_globally_initialized', False):
-            tq.initialize(tq_plugin_path)
-            tq._is_globally_initialized = True
-            logger.info(f"[Global] TQ 数据接口已全局抢占初始化: {tq_plugin_path}")
-            
-            # 3. 拦截并强制重定向后续所有初始化
-            def safe_initialize(path=None):
-                logger.info(f"[Global] 拦截并重定向重复的 TQ 初始化请求 (原请求路径: {path} -> 现强制路径: {tq_plugin_path})")
-                return True
-            tq.initialize = safe_initialize
-            
-            # 4. 终极防御：拦截 _get_run_id 以防止回调函数抛出 RuntimeError
-            #    注意：_get_run_id 是 classmethod，必须同时 patch 类字典才能拦截 cls._get_run_id() 调用
-            _orig_get_run_id = tq._get_run_id
-            def safe_get_run_id():
-                try:
-                    rid = _orig_get_run_id()
-                    if rid is None: return 1 # 强制返回一个 dummy ID
-                    return rid
-                except:
-                    return 1
-            tq._get_run_id = safe_get_run_id
-            # 同时通过类字典 patch，防止 cls._get_run_id() 绕过实例 patch
-            try:
-                type(tq)._get_run_id = staticmethod(safe_get_run_id)
-            except:
-                pass
-            
-            # 5. 拦截 _data_callback_transfer 回调，彻底阻断 RuntimeError 刷屏
-            _orig_callback = getattr(tq, '_data_callback_transfer', None)
-            if _orig_callback:
-                def safe_data_callback_transfer(*args, **kwargs):
-                    try:
-                        return _orig_callback(*args, **kwargs)
-                    except RuntimeError:
-                        if not getattr(safe_data_callback_transfer, 'logged', False):
-                            logger.warning("[TDX] 回调中 _get_run_id RuntimeError 已被拦截（后续相同错误将静默）")
-                            safe_data_callback_transfer.logged = True
-                        return None
-                    except Exception:
-                        return None
-                safe_data_callback_transfer.logged = False
-                try:
-                    tq._data_callback_transfer = safe_data_callback_transfer
-                    type(tq)._data_callback_transfer = safe_data_callback_transfer
-                except:
-                    pass
-    except Exception as e:
-        logger.error(f"[Global] TQ 全局初始化锁定失败: {e}")
+# [V10.0] 启动时不自动连接通达信，跳过 TQ 全局初始化（用户点击"通达信"按钮时才需要）
+# 用户手动重连通达信时，TdxRealtimeFetcher.connect() 会自行完成 TQ 初始化
+logger.info("[V10.0] 跳过 TQ 全局初始化（通达信待用户手动连接）")
 
 # Add project root and core/arbcore to path
 # [FIX] 使用 D:\Study\arbTest\arbcore 作为核心模块目录
@@ -186,34 +123,32 @@ except Exception as e:
 db = DatabaseManager(db_path=root_db_path)
 
 def _print_data_source_banners():
-    """启动后统一打印各数据源连接状态（清晰的双层提醒标志）"""
+    """启动后统一打印各数据源连接状态（清晰的双层提醒标志）并写入里程碑日志"""
     rt = market_data_service.realtime_manager
     active = rt.active_fetchers if rt else {}
 
     sources = [
         ("tdx",    "通达信",  "tdx" in active,
-         "如果您仅使用 QMT 交易，这完全正常"),
+         "请点击顶部'通达信'按钮启动"),
         ("guojin", "国金QMT", "guojin" in active,
-         "如不使用国金 QMT 交易，这完全正常"),
+         "请点击顶部'国金QMT'按钮启动"),
         ("galaxy", "银河QMT", "galaxy" in active,
-         "如不使用银河 QMT 交易，这完全正常"),
+         "请点击顶部'银河QMT'按钮启动"),
         ("ib",     "IB 盈透证券",
          market_data_service.ib_reader is not None and getattr(market_data_service.ib_reader, 'connected', False),
-         "如不使用 IB 交易，这完全正常"),
+         "请点击顶部'IB'按钮启动"),
         ("futu",   "富途 OpenD",
-         market_data_service.futu_reader is not None,
-         "如不使用富途行情，这完全正常"),
+         market_data_service.futu_reader is not None and not getattr(market_data_service.futu_reader, 'disabled', True),
+         "请点击顶部'富途'按钮启动"),
     ]
 
     for key, label, available, hint in sources:
         if available:
-            print(f"\n✅ {label} 连接正常")
+            logger.info(f"{label} 连接正常")
+            system_status.add_milestone("SUCCESS", f"{label} 连接正常")
         else:
-            print("\n" + "=" * 80)
-            print(f"提示: {key}_available = False ({hint})。")
-            print("您可稍后在页面顶部点击对应标签重新连接。")
-            print("系统将继续启动...")
-            print("=" * 80 + "\n")
+            logger.info(f"{label} 待连接")
+            system_status.add_milestone("INFO", f"{label} {hint}")
 
 # 2. Initialize Services with DB instance
 config_service = ConfigService(db)
@@ -230,10 +165,7 @@ else:
         # [V4.7] 修改：放开通达信强制绑定限制，允许系统在只有 QMT 的情况下启动
         if sys.platform == "win32" and (not trading_service.trade_manager or not getattr(trading_service.trade_manager, 'tdx_available', False)):
             logger.warning("交易通道部分受限 (未检测到通达信登录)")
-            print("\n" + "="*80)
-            print("提示: tdx_available = False (如果您仅使用 QMT 交易，这完全正常)。")
-            print("系统将继续启动...")
-            print("="*80 + "\n")
+            print("\n提示: tdx_available = False (如果您仅使用 QMT 交易，这完全正常)。系统将继续启动...\n")
         else:
             logger.info("交易服务已就绪 (独立模式)")
     except SystemExit:
@@ -280,6 +212,7 @@ async def lifespan(app: FastAPI):
 
             logger.info("📊 启动时自动运行 011 数据更新任务...")
             system_status.add_milestone("INFO", "启动时自动运行 011 数据更新")
+            print("daily_updater 即将启动...")
             # 调用 011 (指向统一的 daily_updater.py) 更新脚本
             scripts_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
             script_path = os.path.join(scripts_dir, "daily_updater.py")
@@ -302,10 +235,10 @@ async def lifespan(app: FastAPI):
             if python_exe and os.path.exists(script_path):
                 try:
                     subprocess.Popen([python_exe, script_path], cwd=scripts_dir)
-                    logger.info("✅ 011 任务已在后台启动 (daily_updater)")
+                    logger.info("011 任务已在后台启动 (daily_updater)")
                     system_status.add_milestone("SUCCESS", "011 数据更新任务已启动")
                 except Exception as e:
-                    logger.error(f"❌ 011 任务启动失败: {e}")
+                    logger.error(f"011 任务启动失败: {e}")
                     system_status.add_milestone("ERROR", f"011 任务启动失败: {e}")
             else:
                 logger.info(f"ℹ️ 未检测到 011 脚本，跳过自动更新")
@@ -326,15 +259,18 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(10)
             try:
                 market_data_service.realtime_manager.start()
-                logger.info("✅ 实时行情引擎已在后台启动")
+                logger.info("实时行情引擎已在后台启动")
                 system_status.add_milestone("SUCCESS", "实时行情引擎已启动")
             except Exception as e:
-                logger.error(f"❌ 实时行情引擎启动失败: {e}")
+                logger.error(f"实时行情引擎启动失败: {e}")
                 system_status.add_milestone("ERROR", f"实时行情引擎启动失败: {e}")
 
             # 延迟获取各数据源连接状态，确保所有异步初始化已完成
             await asyncio.sleep(2)
             _print_data_source_banners()
+            
+            # [V10.0] 启动完成提示：引导用户手动连接需要的券商客户端
+            system_status.add_milestone("INFO", "💡 如需实时行情，请点击顶部对应按钮连接券商客户端（通达信/IB/银河QMT/国金QMT/富途）")
         
         asyncio.create_task(start_mds_later())
 
@@ -754,6 +690,28 @@ async def get_fund_valuation_meta(code: str):
                     formatted_base_data[k] = float(v)
                 else:
                     formatted_base_data[k] = str(v)
+        
+        # [现金管理] 为511880/511360/511520添加估值参数
+        BOND_ETF_CODES = ['511880', '511360', '511520']
+        bond_extra = {}
+        if code in BOND_ETF_CODES:
+            try:
+                from services.bond_etf_valuation import get_bond_etf_valuation
+                bv = get_bond_etf_valuation(conn, market_data_service)
+                val = bv.get_valuation(code)
+                bond_extra = {
+                    "avg_daily_growth": val.get('avg_daily_growth'),
+                    "treasury_index_pct": val.get('treasury_index_pct'),
+                    "estimated_nav": val.get('estimated_nav'),
+                    "latest_nav": val.get('latest_nav'),
+                    "latest_nav_date": val.get('latest_nav_date'),
+                    "futures_pct": val.get('futures_pct'),
+                    "tf_pct": val.get('tf_pct'),
+                    "futures_adjustment": val.get('futures_adjustment'),
+                    "total_adjustment": val.get('total_adjustment'),
+                }
+            except Exception as e:
+                logger.error(f"[BondETF] valuation_meta获取失败 {code}: {e}")
                     
         return {
             "status": "ok",
@@ -762,7 +720,8 @@ async def get_fund_valuation_meta(code: str):
             "t1_data": t1_data,
             "latest_exchange_rate": latest_fx,
             "realtime_quotes": realtime_quotes,
-            "future_quote": future_quote
+            "future_quote": future_quote,
+            **bond_extra
         }
     except Exception as e:
         logger.error(f"Error getting valuation meta for {code}: {e}")
@@ -995,24 +954,142 @@ async def save_accounts(request: Request):
 
 @app.post("/api/system/reconnect_ib")
 async def reconnect_ib():
-    if market_data_service.ib_reader:
-        connected = market_data_service.ib_reader.connect_to_ib()
-        if connected:
-            system_status.add_milestone("INFO", "IB 客户端已成功重连")
-            return {"status": "ok", "message": "IB reconnected successfully"}
+    """重连 IB - 使用 reconnect() 方法，试连 3 次"""
+    try:
+        if market_data_service.ib_reader:
+            success, msg = market_data_service.ib_reader.reconnect()
+            if success:
+                system_status.add_milestone("SUCCESS", msg)
+                return {"status": "ok", "message": msg}
+            else:
+                system_status.add_milestone("WARNING", msg)
+                return {"status": "error", "message": msg}
         else:
-            system_status.add_milestone("WARNING", "IB 客户端连接失败，请检查 TWS 是否运行")
-            return {"status": "error", "message": "Failed to connect to IB"}
-    else:
-        from arbcore.fetchers.ib_reader import IBReader
-        market_data_service.ib_reader = IBReader(db_manager=db)
-        if market_data_service.ib_reader.connect_to_ib():
-            system_status.add_milestone("INFO", "IB 客户端已成功启动并连接")
-            return {"status": "ok", "message": "IB initialized and connected"}
+            from arbcore.fetchers.ib_reader import IBReader
+            reader = IBReader(db_manager=db)
+            market_data_service.ib_reader = reader
+            success, msg = reader.reconnect()
+            if success:
+                system_status.add_milestone("SUCCESS", msg)
+                return {"status": "ok", "message": msg}
+            else:
+                system_status.add_milestone("WARNING", msg)
+                return {"status": "error", "message": msg}
+    except Exception as e:
+        system_status.add_milestone("ERROR", f"IB 重连异常: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/system/reconnect_futu")
+async def reconnect_futu():
+    """重连富途 - 使用 reconnect() 方法，试连 3 次"""
+    try:
+        if market_data_service.futu_reader:
+            success, msg = market_data_service.futu_reader.reconnect()
+            if success:
+                system_status.add_milestone("SUCCESS", msg)
+                return {"status": "ok", "message": msg}
+            else:
+                system_status.add_milestone("WARNING", msg)
+                return {"status": "error", "message": msg}
         else:
-            market_data_service.ib_reader = None
-            system_status.add_milestone("WARNING", "IB 客户端启动失败，请检查 TWS 是否运行")
-            return {"status": "error", "message": "Failed to initialize IB"}
+            from arbcore.fetchers.futu_reader import FutuReader
+            reader = FutuReader()
+            market_data_service.futu_reader = reader
+            success, msg = reader.reconnect()
+            if success:
+                system_status.add_milestone("SUCCESS", msg)
+                return {"status": "ok", "message": msg}
+            else:
+                system_status.add_milestone("WARNING", msg)
+                return {"status": "error", "message": msg}
+    except Exception as e:
+        system_status.add_milestone("ERROR", f"富途重连异常: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/system/reconnect_tdx")
+async def reconnect_tdx():
+    """重连通达信 - 使用 reconnect() 方法，试连 3 次"""
+    try:
+        if market_data_service.realtime_manager:
+            rm = market_data_service.realtime_manager
+            tdx = rm.active_fetchers.get('tdx')
+            if tdx:
+                # 已在 active_fetchers 中，直接 reconnect
+                success, msg = tdx.reconnect()
+                if success:
+                    system_status.add_milestone("SUCCESS", msg)
+                    return {"status": "ok", "message": msg}
+                else:
+                    system_status.add_milestone("WARNING", msg)
+                    return {"status": "error", "message": msg}
+            else:
+                # V10.0 启动时跳过了客户端源，需要新创建实例并注册
+                from arbcore.fetchers.realtime.tdx import TdxRealtimeFetcher
+                tdx = TdxRealtimeFetcher()
+                success, msg = tdx.reconnect()
+                if success:
+                    rm.active_fetchers['tdx'] = tdx
+                    if rm.symbols:
+                        tdx.subscribe(rm.symbols)
+                    system_status.add_milestone("SUCCESS", f"通达信 {msg}")
+                    return {"status": "ok", "message": msg}
+                else:
+                    system_status.add_milestone("WARNING", f"通达信 {msg}")
+                    return {"status": "error", "message": msg}
+        else:
+            system_status.add_milestone("WARNING", "实时行情管理器未启动")
+            return {"status": "error", "message": "实时行情管理器未启动"}
+    except Exception as e:
+        system_status.add_milestone("ERROR", f"通达信重连异常: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/system/reconnect_galaxy")
+async def reconnect_galaxy():
+    """重连银河QMT - 使用 reconnect() 方法，试连 3 次"""
+    try:
+        if market_data_service.realtime_manager:
+            galaxy = market_data_service.realtime_manager.active_fetchers.get('galaxy')
+            if galaxy:
+                success, msg = galaxy.reconnect()
+                if success:
+                    system_status.add_milestone("SUCCESS", msg)
+                    return {"status": "ok", "message": msg}
+                else:
+                    system_status.add_milestone("WARNING", msg)
+                    return {"status": "error", "message": msg}
+            else:
+                system_status.add_milestone("WARNING", "银河QMT未激活，请先创建新实例")
+                return {"status": "error", "message": "银河QMT未激活"}
+        else:
+            system_status.add_milestone("WARNING", "实时行情管理器未启动")
+            return {"status": "error", "message": "实时行情管理器未启动"}
+    except Exception as e:
+        system_status.add_milestone("ERROR", f"银河QMT重连异常: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/system/reconnect_guojin")
+async def reconnect_guojin():
+    """重连国金QMT - 使用 reconnect() 方法，试连 3 次"""
+    try:
+        if market_data_service.realtime_manager:
+            guojin = market_data_service.realtime_manager.active_fetchers.get('guojin')
+            if guojin:
+                success, msg = guojin.reconnect()
+                if success:
+                    system_status.add_milestone("SUCCESS", msg)
+                    return {"status": "ok", "message": msg}
+                else:
+                    system_status.add_milestone("WARNING", msg)
+                    return {"status": "error", "message": msg}
+            else:
+                system_status.add_milestone("WARNING", "国金QMT未激活，请先创建新实例")
+                return {"status": "error", "message": "国金QMT未激活"}
+        else:
+            system_status.add_milestone("WARNING", "实时行情管理器未启动")
+            return {"status": "error", "message": "实时行情管理器未启动"}
+    except Exception as e:
+        system_status.add_milestone("ERROR", f"国金QMT重连异常: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/api/system/reconnect_engine")
 async def reconnect_engine():
@@ -1347,16 +1424,20 @@ frontend_dist_path = os.path.join(workspace_root, "frontend", "dist")
 if os.path.exists(frontend_dist_path):
     logger.info(f"Detected frontend dist at {frontend_dist_path}, mounting static files.")
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")
-    
-    # 捕获所有非 API 的前端路由 (SPA Fallback)
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        # 如果请求静态资源(favicon, etc)，直接返回
-        potential_file = os.path.join(frontend_dist_path, full_path)
-        if os.path.isfile(potential_file):
-            return FileResponse(potential_file)
-        # 否则统一返回 index.html 让 Vue Router 接管
-        return FileResponse(os.path.join(frontend_dist_path, "index.html"))
+
+    # SPA Fallback: 用 middleware 代替 catch-all 路由，避免拦截 /api/* 请求
+    from starlette.middleware.base import BaseHTTPMiddleware
+    class SPAMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            response = await call_next(request)
+            if response.status_code == 404:
+                path = request.url.path
+                # 静态资源和 API 不做 fallback
+                if path.startswith("/api/") or path.startswith("/assets/"):
+                    return response
+                return FileResponse(os.path.join(frontend_dist_path, "index.html"))
+            return response
+    app.add_middleware(SPAMiddleware)
 
 def kill_port_owner(port: int):
     """

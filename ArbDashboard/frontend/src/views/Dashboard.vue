@@ -10,7 +10,7 @@
                   <template #icon><n-icon><Bot /></n-icon></template>
                   {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
                 </n-tag>
-                <n-tag :type="hasTdx ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectTdx">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     通达信
                 </n-tag>
@@ -21,15 +21,15 @@
                     </n-tag>
                 </div>
                 
-                <n-tag :type="hasGalaxy ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasGalaxy ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectGalaxy">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     银河QMT
                 </n-tag>
-                <n-tag :type="hasGuojin ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectGuojin">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     国金QMT
                 </n-tag>
-                <n-tag :type="hasFutu ? 'success' : 'error'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectEngine">
+                <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectFutu">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     富途
                 </n-tag>
@@ -94,7 +94,7 @@
 
     <!-- 历史对账详情弹窗 -->
     <n-modal v-model:show="showHistoryModal" preset="card" :title="`[历史记录] ${selectedFund?.fund_code} - ${selectedFund?.fund_name}`" style="width: 95%; max-width: 1500px;">
-      <div v-if="selectedFund" style="margin-bottom: 16px; display: flex; gap: 24px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px;">
+      <div v-if="selectedFund && !isCashManagementFund" style="margin-bottom: 16px; display: flex; gap: 24px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px;">
         <div><strong>关联指数：</strong> {{ selectedFund.idx_name || '-' }} ({{ selectedFund.idx_code || '-' }})</div>
         <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
         <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
@@ -150,6 +150,9 @@ const { overview: marketOverview, hasTdx, hasIb, hasIbNotRunning,
 // ===== 本地状态（无需进 Store） =====
 const showHistoryModal = ref(false)
 const selectedFund = ref<any>(null)
+const isCashManagementFund = computed(() => {
+  return ['511880', '511360', '511520'].includes(selectedFund.value?.fund_code)
+})
 let refreshTimer: any = null
 
 // ===== Watch 自选持久化 =====
@@ -175,18 +178,24 @@ const reconnectIB = async () => {
   }
 }
 
-const reconnectEngine = async () => {
+const reconnectEngine = async (sourceLabel: string, reconnectFn: () => Promise<any>) => {
   try {
-    message.loading('正在重启国内行情引擎...', { duration: 1500 })
-    const data = await appStore.reconnectEngine()
+    const data = await reconnectFn()
     if (data.status === 'ok') {
-      message.success('国内行情引擎重启成功！')
-      setTimeout(fetchData, 1000)
+      message.success(`${sourceLabel} 重连成功！`)
+      setTimeout(fetchData, 500)
+    } else {
+      message.warning(`${sourceLabel} 重连未就绪: ${data.message}`)
     }
   } catch (e: any) {
-    message.error('重启引擎失败: ' + e.message)
+    message.error(`${sourceLabel} 重连异常: ${e.message}`)
   }
 }
+
+const reconnectTdx = () => reconnectEngine('通达信', () => marketStore.reconnectTdx())
+const reconnectGalaxy = () => reconnectEngine('银河QMT', () => marketStore.reconnectGalaxy())
+const reconnectGuojin = () => reconnectEngine('国金QMT', () => marketStore.reconnectGuojin())
+const reconnectFutu = () => reconnectEngine('富途', () => marketStore.reconnectFutu())
 
 const openHistory = async (fund: any) => {
   selectedFund.value = fund
@@ -199,8 +208,8 @@ const pagination = { pageSize: 100 }
 const toggleWatchlist = (code: string) => fundStore.toggleWatchlist(code)
 
 const rowProps = (row: any) => {
-  // 只有黄金原油 / QDII欧美 / 混合跨境 跳转到沙盘，其他显示"待开发"
-  const developableTabs = ['黄金原油', 'QDII欧美']
+  // 黄金原油 / QDII欧美 / 现金管理 跳转到分析页
+  const developableTabs = ['黄金原油', 'QDII欧美', '现金管理']
   const isDevelopable = developableTabs.includes(currentTab.value)
   
   return {
@@ -393,50 +402,104 @@ const allColumns: DataTableColumns<any> = [
   }
   ]
 
+// 通用数值渲染函数，historyColumns 和 columns 共享
+const renderValWithChg = (val: number, chg: number, precision: number = 4) => {
+    if (!val || val === 0) return '-'
+    return h('span', { style: 'font-weight: 500;' }, val.toFixed(precision))
+}
+
 const historyColumns = computed<DataTableColumns<any>>(() => {
-    const renderValWithChg = (val: number, chg: number, precision: number = 4) => {
-        if (!val || val === 0) return '-'
-        return h('div', { style: 'display: flex; flex-direction: column; align-items: center;' }, [
-            h('span', { style: 'font-weight: 500;' }, val.toFixed(precision)),
-            chg ? h('span', { style: { fontSize: '10px', color: priceColor(chg), lineHeight: '1' } }, formatPercent(chg, 2)) : null
-        ])
+    const isCash = isCashManagementFund.value
+    const is511360 = computed(() => selectedFund.value?.fund_code === '511360')
+    const is511520 = computed(() => selectedFund.value?.fund_code === '511520')
+
+    // [现金管理] 计算每日增加（nav - 昨日nav）
+    const dailyIncrements = computed(() => {
+        const history = fundHistory.value
+        if (history.length === 0) return {}
+        const result: Record<string, number> = {}
+        // history是按日期降序排列的，[0]是最新
+        for (let i = 0; i < history.length - 1; i++) {
+            const curr = history[i]
+            const next = history[i + 1]
+            if (curr.nav != null && next.nav != null) {
+                result[curr.date] = curr.nav - next.nav
+            }
+        }
+        return result
+    })
+
+    // [现金管理] 日期列：511880标记周五, 511360标记周一
+    const getWeekendLabel = (dateStr: string, fundCode: string) => {
+        try {
+            const d = new Date(dateStr)
+            if (fundCode === '511360' && d.getDay() === 1) return ' 周一'
+            if (fundCode !== '511360' && d.getDay() === 5) return ' 周五'
+        } catch {}
+        return ''
     }
 
     const baseCols: DataTableColumns<any> = [
-        { title: '日期', key: 'date', width: 70, align: 'center', render(row: any) { return shortDate(row.date) } },
-        { title: '汇率', key: 'usd_cny_mid', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.usd_cny_mid, row.usd_cny_mid_chg) } },
+        { title: '日期', key: 'date', width: 85, align: 'center', render(row: any) {
+            const d = shortDate(row.date)
+            const label = isCash ? getWeekendLabel(row.date, selectedFund.value?.fund_code || '') : ''
+            if (label) {
+                return h('span', { style: 'color: #d97706; font-weight: 600;' }, d + label)
+            }
+            return d
+        }},
+        // 现金管理不显示汇率，其他TAB汇率紧挨日期
+        ...(isCash ? [] : [
+            { title: '汇率', key: 'usd_cny_mid', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.usd_cny_mid, row.usd_cny_mid_chg) } },
+        ]),
         { title: '净值', key: 'nav', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.nav, row.nav_chg) } },
+        // [现金管理] 在净值后插入"每日增加"列
+        ...(isCash ? [{
+            title: '每日增加', key: 'daily_inc', width: 78, align: 'center',
+            render(row: any) {
+                const inc = dailyIncrements.value[row.date]
+                if (inc == null || inc === 0) return '-'
+                const color = inc >= 0 ? '#16a34a' : '#dc2626'
+                return h('span', { class: 'num-cell compact', style: { color } }, (inc >= 0 ? '+' : '') + inc.toFixed(4))
+            }
+        }] : []),
         { title: '收盘价', key: 'price', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.price, row.price_chg, 3) } },
-        { title: '静态估值', key: 'static_val', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
-        { 
-            title: '估值误差', key: 'val_error_pct', width: 85, align: 'center',
-            render(row: any) {
-                const val = row.val_error_pct || 0
-                if (val === 0) return '-'
-                return h('span', { style: { color: priceColor(val), fontWeight: 'bold' } }, formatPercent(val, 4))
-            }
-        },
-        { 
-            title: '静态溢价', key: 'static_premium', width: 85, align: 'center',
-            render(row: any) {
-                const val = row.static_premium || 0
-                if (val === 0) return '-'
-                return h('span', { style: { color: priceColor(val) } }, formatPremium(val))
-            }
-        },
-        { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatShares(row.shares)) } },
-        { 
-            title: '新增(万)', key: 'shares_added', width: 80, align: 'center',
-            render(row: any) { 
-                return h('span', { style: { color: priceColor(Number(row.shares_added || 0)), fontSize: '11px' } }, formatSharesChange(row.shares_added))
-            }
-        },
-        { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatTurnoverRate(row.turnover_rate)) } }
+        // 现金管理：折价几根毛/溢价在静态估值左侧；否则放静态估值右侧
+        ...isCash
+            ? [
+                { title: '折价几根毛', key: 'yield_per_wan', width: 90, align: 'center', render(row: any) { const v = ((row.nav || 0) - (row.price || 0)) * 100; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(2)) } },
+                { title: '溢价', key: 'rt_premium', width: 90, align: 'center', render(row: any) { const nav = row.nav || 0; if (nav === 0) return '-'; const v = ((row.price || 0) / nav - 1); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, (v * 100).toFixed(3) + '%') } },
+                // 511360 专属: 国债指数 + 涨幅
+                ...(is511360.value ? [
+                    { title: '指数', key: 'idx_close', width: 78, align: 'center', render(row: any) { return row.idx_close ? h('span', { class: 'num-cell' }, row.idx_close.toFixed(2)) : '-' } },
+                    { title: '指数涨幅', key: 'idx_pct', width: 78, align: 'center', render(row: any) { if (row.idx_pct == null) return '-'; return h('span', { style: { color: priceColor(row.idx_pct), fontWeight: '500' } }, row.idx_pct.toFixed(3) + '%') } },
+                ] : []),
+                // 511520 专属: 国债期货 + 涨幅
+                ...(is511520.value ? [
+                    { title: '期货', key: 'futures_close', width: 78, align: 'center', render(row: any) { return row.futures_close ? h('span', { class: 'num-cell' }, row.futures_close.toFixed(3)) : '-' } },
+                    { title: '期货涨幅', key: 'futures_pct', width: 78, align: 'center', render(row: any) { if (row.futures_pct == null) return '-'; return h('span', { style: { color: priceColor(row.futures_pct), fontWeight: '500' } }, row.futures_pct.toFixed(3) + '%') } },
+                ] : []),
+                { title: '静态估值', key: 'static_val', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
+                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { const v = (row.static_val || 0) - (row.nav || 0); if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
+                { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { const nav = row.nav || 0; if (nav === 0) return '-'; const v = ((row.static_val || 0) - nav) / nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
+              ]
+            : [
+                { title: '静态估值', key: 'static_val', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
+                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { const v = row.val_error_pct || 0; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, formatPercent(v, 4)) } },
+                { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { const nav = row.nav || 0; if (nav === 0) return '-'; const v = ((row.static_val || 0) - nav) / nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
+                { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium || 0; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
+              ],
+        // 现金管理不显示份额/新增/换手率
+        ...(isCash ? [] : [
+            { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatShares(row.shares)) } },
+            { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { return h('span', { style: { color: priceColor(Number(row.shares_added || 0)), fontSize: '11px' } }, formatSharesChange(row.shares_added)) } },
+            { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatTurnoverRate(row.turnover_rate)) } },
+        ]),
     ]
 
     if (fundHistory.value.length > 0) {
         const firstRow = fundHistory.value[0]
-        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'latest_nav']
+        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'latest_nav', 'futures_close', 'futures_pct']
         Object.keys(firstRow).forEach(key => {
             if (!knownKeys.includes(key) && !key.endsWith('_chg') && (typeof firstRow[key] === 'number' || firstRow[key] === null)) {
                 baseCols.push({
@@ -484,9 +547,59 @@ const columns = computed<DataTableColumns<any>>(() => {
     return cols.filter(c => c.key !== 'related_index' && c.key !== 'index_close' && c.key !== 'index_pct')
   }
 
-  // 现金管理TAB：隐藏份额/新增/换手率/指数价/指数涨跌幅/申购/赎回
+  // 现金管理TAB：隐藏份额/新增/换手率/指数价/指数涨跌幅/申购/赎回/测试价/溢价率
+  // 并重命名列 + 添加债券ETF专属列
   if (currentTab.value === '现金管理') {
-    return cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'purchase_status', 'redemption_status'].includes(c.key))
+    // 过滤掉不需要的列
+    cols = cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'purchase_status', 'redemption_status', 'static_val_display', 'static_premium', 'rt_premium'].includes(c.key))
+    
+    // 重命名列
+    cols.forEach(col => {
+      if (col.key === 'nav') col.title = '最新净值'
+      if (col.key === 'rt_val_display') col.title = '估值'
+    })
+    
+    // 估值列之后插入折价几根毛和溢价（基于估值计算，不用净值）
+    const rtValIndex = cols.findIndex(c => c.key === 'rt_val_display')
+    if (rtValIndex >= 0) {
+      cols.splice(rtValIndex + 1, 0,
+        { title: '折价几根毛', key: 'yield_per_wan', width: 80, align: 'center',
+          render(row: any) { const v = ((row.rt_val || 0) - (row.price || 0)) * 100; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(2)) }
+        },
+        { title: '溢价', key: 'rt_premium_calc', width: 80, align: 'center',
+          render(row: any) { const val = row.rt_val || 0; if (val === 0) return '-'; const v = ((row.price || 0) / val - 1); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, (v * 100).toFixed(3) + '%') }
+        }
+      )
+    }
+    
+    // 日均增长放在净值日期之后
+    const navDateIndex = cols.findIndex(c => c.key === 'nav_date')
+    if (navDateIndex >= 0) {
+      cols.splice(navDateIndex + 1, 0,
+        { title: '日均增长', key: 'avg_daily_growth', width: 72, align: 'center',
+          render(row: any) {
+            const g = row.avg_daily_growth
+            if (g == null || g === 0) return '-'
+            return h('span', { class: 'num-cell compact', style: { color: priceColor(g) } }, (g * 10000).toFixed(1) + '万')
+          }
+        },
+        { title: '国债指数', key: 'treasury_index_price', width: 80, align: 'center',
+          render(row: any) {
+            const p = row.treasury_index_price
+            if (p == null) return '-'
+            return h('span', { class: 'num-cell compact', style: { color: '#1f2937' } }, p.toFixed(2))
+          }
+        },
+        { title: '国债期货', key: 'futures_pct', width: 80, align: 'center',
+          render(row: any) {
+            const fp = row.futures_pct
+            if (fp == null) return '-'
+            return h('span', { class: 'num-cell compact', style: { color: priceColor(fp) } }, (fp > 0 ? '+' : '') + fp.toFixed(3) + '%')
+          }
+        }
+      )
+    }
+    return cols
   }
 
   return cols

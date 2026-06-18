@@ -47,6 +47,8 @@ class DataFetcher:
         # 初始化Woody网页爬虫
         self.woody_crawler = WoodyWebCrawler()
         self._szse_blocked = False  # 新增：深交所全局熔断标志
+        self._fx_cache = None       # [V10.1] 汇率内存缓存
+        self._fx_cache_time = 0     # [V10.1] 缓存时间戳
     
     def sync_akshare_fund_status(self, db_manager):
         """
@@ -233,8 +235,15 @@ class DataFetcher:
     def fetch_cny_spot_rate(self):
         """从新浪财经获取人民币在岸价（CNY）实时汇率
         
+        [V10.1] 5分钟内存缓存：汇率日内变化极小，无需频繁请求。
         优先使用API接口，失败时自动回退到网页爬取，最后回退到Woody网页
         """
+        # [V10.1] 5分钟缓存：汇率一天变不了几次，300秒TTL足够
+        now = time.time()
+        if self._fx_cache and (now - self._fx_cache_time) < 300:
+            logger.debug(f"使用缓存汇率: {self._fx_cache.get('人民币在岸价')} (age={int(now - self._fx_cache_time)}s)")
+            return self._fx_cache
+        
         logger.info("从新浪财经获取人民币在岸价实时汇率")
         
         # 1. 尝试使用API接口
@@ -265,7 +274,7 @@ class DataFetcher:
                         date = values[17]              # 日期
                         
                         logger.info(f"API接口 - 人民币在岸价: {spot_rate} (更新时间: {time})")
-                        return {
+                        result = {
                             '日期': date,
                             '时间': time,
                             '人民币在岸价': spot_rate,
@@ -277,6 +286,9 @@ class DataFetcher:
                             '货币对': currency_pair,
                             '来源': 'API接口'
                         }
+                        self._fx_cache = result
+                        self._fx_cache_time = time.time()
+                        return result
             logger.error(f"API接口获取人民币在岸价失败，状态码: {response.status_code}")
         except Exception as e:
             logger.error(f"API接口获取人民币在岸价失败: {e}")
@@ -318,12 +330,15 @@ class DataFetcher:
                     current_date = datetime.now().date().strftime('%Y-%m-%d')
                     
                     logger.info(f"Selenium网页爬取 - 人民币在岸价: {spot_rate} (爬取时间: {current_time})")
-                    return {
+                    result = {
                         '日期': current_date,
                         '时间': current_time,
                         '人民币在岸价': spot_rate,
                         '来源': 'Selenium网页爬取'
                     }
+                    self._fx_cache = result
+                    self._fx_cache_time = time.time()
+                    return result
                 else:
                     logger.error("Selenium网页爬取未能提取在岸价")
             except Exception as e:
@@ -341,12 +356,15 @@ class DataFetcher:
                 usdcny_data = woody_rates['USDCNY']
                 current_date = datetime.now().date().strftime('%Y-%m-%d')
                 logger.info(f"Woody网页 - 人民币在岸价: {usdcny_data['rate']} (时间: {usdcny_data['time']})")
-                return {
+                result = {
                     '日期': current_date,
                     '时间': usdcny_data['time'],
                     '人民币在岸价': usdcny_data['rate'],
                     '来源': 'Woody网页'
                 }
+                self._fx_cache = result
+                self._fx_cache_time = time.time()
+                return result
         except Exception as e:
             logger.error(f"Woody网页获取汇率数据失败: {e}")
         

@@ -57,21 +57,36 @@
             <n-button quaternary circle @click="handleBack"><template #icon><n-icon><ArrowLeft /></n-icon></template></n-button>
             <div class="fund-info">
                <div style="font-size:18px; font-weight:bold; color: #d35400;">
-                  {{ fundName }} ({{ fundCode }}) - 实时估值计算器
+                   {{ fundName }} ({{ fundCode }})
+                   <template v-if="isCashManagement && cashFundInfo">
+                      <n-tag type="success" size="small" round style="margin-left: 8px;">{{ cashFundInfo.type }}</n-tag>
+                      <n-tag type="info" size="small" round style="margin-left: 4px;">{{ cashFundInfo.riskLevel }}</n-tag>
+                   </template>
+                   <template v-else>
+                      - 实时估值计算器
+                   </template>
                </div>
             </div>
-            <n-tag type="warning" size="medium" round style="font-weight: bold;">
-               基础仓位: {{ (positionRatio * 100).toFixed(2) }}%
-            </n-tag>
+             <template v-if="!isCashManagement">
+                <n-tag type="warning" size="medium" round style="font-weight: bold;">
+                   基础仓位: {{ (positionRatio * 100).toFixed(2) }}%
+                </n-tag>
+             </template>
+             <template v-else>
+                <n-tag type="success" size="medium" round style="font-weight: bold;">
+                   日均增长: {{ meta?.avg_daily_growth ? (meta.avg_daily_growth * 10000).toFixed(1) + '万' : '-' }}
+                </n-tag>
+             </template>
          </div>
-         <div class="header-right" style="display: flex; align-items: center; gap: 12px;">
+         <div class="header-right" v-if="!isCashManagement" style="display: flex; align-items: center; gap: 12px;">
             <n-checkbox :disabled="!meta?.fund_config?.trade_future" v-model:checked="showFutCalib" size="large"><span style="font-size:15px; font-weight:bold; color:#0284c7;" :style="{ opacity: meta?.fund_config?.trade_future ? 1 : 0.5 }">期货校准估值</span></n-checkbox>
             <n-checkbox :disabled="!meta?.fund_config?.trade_future" v-model:checked="showPureFut" size="large"><span style="font-size:15px; font-weight:bold; color:#0284c7;" :style="{ opacity: meta?.fund_config?.trade_future ? 1 : 0.5 }">纯期货估值</span></n-checkbox>
          </div>
       </div>
 
       <!-- 统一参数区: T-2 基准日 + T-1 估值日 + 实时数据（三行同一底色，紧凑排列） -->
-      <n-card :bordered="false" class="shadow-soft" style="margin-bottom: 8px; background: #fffbeb; border: 1px solid #fef08a; padding: 0;" :content-style="{padding: '8px 16px'}">
+      <!-- [现金管理] 隐藏：债券ETF无这些数据 -->
+      <n-card v-if="!isCashManagement" :bordered="false" class="shadow-soft" style="margin-bottom: 8px; background: #fffbeb; border: 1px solid #fef08a; padding: 0;" :content-style="{padding: '8px 16px'}">
          <div style="display: flex; flex-direction: column; gap: 2px;">
             <!-- 第1行: T-2 基准日 -->
             <div class="base-info-row" style="display: flex; gap: 12px; font-size: 13px; color: #475569; align-items: center; font-weight: 500;">
@@ -142,8 +157,121 @@
          </div>
       </n-card>
 
+      <!-- [现金管理] 债券ETF专属估值面板 -->
+      <div v-if="isCashManagement && cashFundInfo" style="display: flex; flex-direction: column; gap: 8px; width: 100%; margin-bottom: 8px;">
+         
+         <!-- 债券ETF基本信息卡片 -->
+         <div style="background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); padding: 12px 16px; border-radius: 8px; border: 1px solid #6ee7b7; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+               <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 16px; font-weight: bold; color: #065f46;">{{ cashFundInfo.name }}</span>
+                  <n-tag type="success" size="small" round>{{ cashFundInfo.type }}</n-tag>
+                  <n-tag type="warning" size="small" round>风险: {{ cashFundInfo.riskLevel }}</n-tag>
+               </div>
+               <n-divider vertical style="margin: 0;" />
+               <div style="font-size: 13px; color: #374151;">
+                  <strong>赎回门槛:</strong> {{ cashFundInfo.redemptionMin }}
+               </div>
+               <n-divider vertical style="margin: 0;" />
+               <div style="font-size: 13px; color: #374151;">
+                  <strong>到账:</strong> {{ cashFundInfo.redemptionDays }}
+               </div>
+               <n-divider vertical style="margin: 0;" />
+               <div style="font-size: 13px; color: #374151;">
+                  <strong>节假日:</strong> {{ cashFundInfo.holidayRule }}
+               </div>
+            </div>
+         </div>
+         
+         <!-- 估值计算器面板 -->
+         <div style="background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); padding: 12px 16px; border-radius: 8px; border: 1px solid #93c5fd; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+               
+               <!-- 左侧: 估值参数 -->
+               <div style="flex: 1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span style="font-size: 14px; font-weight: bold; color: #1e40af;">估值参数</span>
+                  
+                  <span style="font-size: 12px; color: #64748b;">最新净值:</span>
+                  <span style="font-family: monospace; font-weight: bold; color: #1e40af; font-size: 14px;">{{ isCashManagement ? (meta?.latest_nav ? Number(meta.latest_nav).toFixed(4) : '-') : (meta?.base_data?.nav ? Number(meta.base_data.nav).toFixed(4) : '-') }}</span>
+                  
+                  <span style="font-size: 12px; color: #64748b;">日均增长:</span>
+                  <span style="font-family: monospace; font-weight: bold; color: #059669; font-size: 14px;">{{ meta?.avg_daily_growth ? (meta.avg_daily_growth * 10000).toFixed(1) + '万' : '-' }}</span>
+                  
+                  <!-- 511360 显示国债指数 -->
+                  <template v-if="fundCode === '511360'">
+                     <span style="font-size: 12px; color: #64748b;">国债指数:</span>
+                     <span :style="{ fontFamily: 'monospace', fontWeight: 'bold', fontSize: '14px', color: meta?.treasury_index_pct && meta.treasury_index_pct > 0 ? '#d32f2f' : '#388e3c' }">
+                        {{ meta?.treasury_index_pct != null ? (meta.treasury_index_pct > 0 ? '+' : '') + meta.treasury_index_pct.toFixed(3) + '%' : '-' }}
+                     </span>
+                  </template>
+                  <!-- 511520 显示国债期货 -->
+                  <template v-if="fundCode === '511520'">
+                     <span style="font-size: 12px; color: #64748b;">国债期货:</span>
+                     <span :style="{ fontFamily: 'monospace', fontWeight: 'bold', fontSize: '14px', color: meta?.futures_pct && meta.futures_pct > 0 ? '#d32f2f' : '#388e3c' }">
+                        {{ meta?.futures_pct != null ? (meta.futures_pct > 0 ? '+' : '') + meta.futures_pct.toFixed(3) + '%' : '-' }}
+                     </span>
+                  </template>
+               </div>
+               
+               <n-divider vertical style="margin: 0;" />
+               
+               <!-- 中间: 预估净值 & 折价率 -->
+               <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="color: #555; font-size: 14px; font-weight: bold;">预估净值:</span>
+                  <span :style="{ fontSize: '18px', fontWeight: 'bold', color: '#1565c0', fontFamily: 'monospace' }">
+                     {{ isCashManagement ? (meta?.estimated_nav && meta.estimated_nav > 0 ? meta.estimated_nav.toFixed(4) : '-') : (meta?.rt_val && meta.rt_val > 0 ? meta.rt_val.toFixed(4) : '-') }}
+                  </span>
+                  <span style="color: #555; font-size: 14px; font-weight: bold;">折价率:</span>
+                  <span :style="{ fontSize: '16px', fontWeight: 'bold', color: simLofPrice > 0 && getEstNav() > 0 ? (simLofPrice / getEstNav() - 1 < 0 ? '#d32f2f' : '#388e3c') : '#999', fontFamily: 'monospace', width: '70px', textAlign: 'left' }">
+                     {{ simLofPrice > 0 && getEstNav() > 0 ? ((simLofPrice / getEstNav() - 1) * 100).toFixed(2) + '%' : '-' }}
+                  </span>
+               </div>
+               
+               <n-divider vertical style="margin: 0;" />
+               
+               <!-- 右侧: 测试价计算器 -->
+               <div v-if="waterLinePrice" style="flex: 1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span style="font-size: 14px; font-weight: bold; color: #b45309;">测试价计算器</span>
+                  <span style="font-size: 12px; color: #64748b;">预估赎回:</span>
+                  <span style="font-family: monospace; font-weight: bold; color: #059669;">{{ waterLinePrice.estimatedRedeemNav.toFixed(4) }}</span>
+                  <span style="font-size: 12px; color: #64748b;">资金成本:</span>
+                  <span style="font-family: monospace; color: #dc2626; font-size: 12px;">-{{ waterLinePrice.repoCost }}</span>
+                  <span style="font-size: 12px; color: #64748b;">=</span>
+                  <span style="font-family: monospace; font-weight: bold; color: #d97706; font-size: 15px;">{{ waterLinePrice.waterLine.toFixed(4) }}</span>
+               </div>
+            </div>
+            
+            <!-- 测试价说明 -->
+            <div v-if="waterLinePrice" style="margin-top: 6px; font-size: 11px; color: #64748b; display: flex; gap: 16px; flex-wrap: wrap;">
+               <span>测试价 = 预估赎回净值 - 逆回购成本（{{ waterLinePrice.redeemDays }}天）</span>
+               <span>折价买入线: 场内价格 &lt; 测试价时可考虑赎回套利</span>
+               <span>经验阈值: 折价 &gt; 万5 大概率盈利</span>
+            </div>
+         </div>
+         
+         <!-- 套利策略提示 -->
+         <div style="background: linear-gradient(135deg, #fefce8 0%, #fef3c7 100%); padding: 10px 16px; border-radius: 8px; border: 1px solid #fde047;">
+            <div style="font-size: 13px; color: #78350f; font-weight: bold; margin-bottom: 6px;">套利策略参考</div>
+            <div style="display: flex; gap: 24px; flex-wrap: wrap; font-size: 12px; color: #92400e;">
+               <div>
+                  <strong>折价赎回套利:</strong> 场内折价买入 → 赎回 → 按净值结算现金
+               </div>
+               <div>
+                  <strong>日内价差:</strong> 早盘折价买入 → 收盘溢价卖出 → 赚差价 + 逆回购
+               </div>
+               <div v-if="fundCode === '511360'">
+                  <strong>勾单溢价套利:</strong> 溢价 &gt; 万10 → 申购 → 5-10分钟到账 → 场内卖出
+               </div>
+               <div>
+                  <strong>节假日套利:</strong> 节假日前持有 → 节前卖出 → 赚取假期利息
+               </div>
+            </div>
+         </div>
+      </div>
+
       <!-- 第三行: 估值与对冲数量推演区 -->
-      <div style="display: flex; flex-direction: column; gap: 8px; width: 100%; margin-bottom: 8px;">
+      <!-- [现金管理] 隐藏整个区域：债券ETF不需要ETF实时估值/期货校准/纯期货估值 -->
+      <div v-if="!isCashManagement" style="display: flex; flex-direction: column; gap: 8px; width: 100%; margin-bottom: 8px;">
          <!-- Panel 1: ETF实时估值 + 对冲数量（合并） -->
          <div style="background: #f0f8ff; padding: 8px 14px; border-radius: 8px; border: 1px solid #bae6fd; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
             <div style="display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%;">
@@ -409,7 +537,8 @@
       </div>
 
       <!-- 第六行: 分时曲线图 (从中间移到下方) -->
-      <n-card title="分时对冲走势 (1分钟采样)" :bordered="false" class="shadow-soft" style="margin-top: 12px;" size="small">
+      <!-- [现金管理] 隐藏：债券ETF无分时采样数据 -->
+      <n-card v-if="!isCashManagement" title="分时对冲走势 (1分钟采样)" :bordered="false" class="shadow-soft" style="margin-top: 12px;" size="small">
          <template #header-extra>
             <n-tag :type="intradayData.length > 0 ? 'success' : 'warning'" size="tiny" round>{{ intradayData.length }} 采样点</n-tag>
          </template>
@@ -472,12 +601,99 @@ const categoryMap: Record<string, string[]> = {
 }
 
 // 是否为复杂业务分类（黄金原油、纯ETF、QDII欧美、混合跨境）
-// 对于亚洲、国内LOF、白银等，隐藏盘口对冲和下单组件
+// 对于亚洲、国内LOF、白银、现金管理等，隐藏盘口对冲和下单组件
 const isComplexCategory = computed(() => {
+  // 现金管理基金（债券ETF）不显示复杂对冲面板
+  if (isCashManagement.value) return false
   const cat = meta.value?.fund_config?.category || ''
   const simpleCategories = ['QDII 亚洲', 'QDII亚洲', '国内LOF', '指数LOF', '白银', '其他']
   return !simpleCategories.includes(cat)
 })
+
+// 是否为现金管理基金（债券ETF）
+const isCashManagement = computed(() => {
+  return ['511880', '511360', '511520'].includes(fundCode.value)
+})
+
+// 获取预估净值（现金管理用 estimated_nav，其他用 rt_val）
+const getEstNav = () => {
+  if (isCashManagement.value) {
+    return meta.value?.estimated_nav || 0
+  }
+  return meta.value?.rt_val || 0
+}
+
+// 现金管理基金信息
+const cashFundInfo = computed(() => {
+  const code = fundCode.value
+  if (!code) return null
+  const infoMap: Record<string, { name: string; type: string; redemptionMin: string; redemptionDays: string; holidayRule: string; riskLevel: string }> = {
+    '511880': {
+      name: '银华日利ETF',
+      type: '货币基金',
+      redemptionMin: '1份',
+      redemptionDays: 'T+1盘中到账（银河）',
+      holidayRule: '节前最后一天结算假期收益',
+      riskLevel: '极低',
+    },
+    '511360': {
+      name: '短融ETF',
+      type: '短期融资券ETF',
+      redemptionMin: '2000份（约22万）',
+      redemptionDays: 'T+2盘中到账（银河）',
+      holidayRule: '节后第一天更新净值',
+      riskLevel: '中低',
+    },
+    '511520': {
+      name: '政金债ETF',
+      type: '中长期政金债ETF',
+      redemptionMin: '10000份（约1.14万）',
+      redemptionDays: 'T+2 14:30后到账',
+      holidayRule: '-',
+      riskLevel: '中',
+    },
+  }
+  return infoMap[code] || null
+})
+
+// 现金管理测试价计算器
+const waterLinePrice = computed(() => {
+  if (!meta.value?.base_data) return null
+  const bd = meta.value.base_data
+  const nav = parseFloat(bd.nav) || 0
+  const pos = positionRatio.value
+  
+  // 预估赎回净值 = 最新净值 + 日均增长 × 剩余交易日
+  const avgGrowth = meta.value?.avg_daily_growth || 0
+  const treasuryPct = meta.value?.treasury_index_pct || 0
+  
+  if (nav <= 0 || avgGrowth === 0) return null
+  
+  // 简单计算：预估赎回净值 ≈ 最新净值 + 日均增长
+  const estimatedRedeemNav = nav + avgGrowth
+  
+  // 测试价 = 预估赎回净值 - 逆回购资金成本
+  // 资金成本假设：GC001 约 2% 年化
+  const repoCost = 0.02  // 2% 年化逆回购成本
+  const dailyRepoCost = repoCost / 252  // 日均
+  
+  // 赎回天数
+  const redeemDays = fundCode.value === '511880' ? 1 : 2
+  const totalRepoCost = dailyRepoCost * redeemDays
+  
+  const waterLine = estimatedRedeemNav * (1 - totalRepoCost)
+  
+  return {
+    estimatedRedeemNav: round4(estimatedRedeemNav),
+    waterLine: round4(waterLine),
+    avgDailyGrowth: avgGrowth,
+    treasuryPct: treasuryPct,
+    repoCost: (totalRepoCost * 10000).toFixed(1) + '万',
+    redeemDays,
+  }
+})
+
+const round4 = (v: number) => Math.round(v * 10000) / 10000
 
 // 监听自选列表变化，自动保存
 watch(watchlist, (newVal) => {
@@ -1163,6 +1379,26 @@ const fetchValuationMeta = async () => {
           simLofPrice.value = bd.close
           isLofPriceInitialized.value = true
         }
+      }
+      
+      // [债券ETF] 为现金管理基金存储额外的估值信息到 meta
+      if (res.data.avg_daily_growth !== undefined) {
+        meta.value.avg_daily_growth = res.data.avg_daily_growth
+      }
+      if (res.data.bond_etf_method !== undefined) {
+        meta.value.bond_etf_method = res.data.bond_etf_method
+      }
+      if (res.data.treasury_index_pct !== undefined) {
+        meta.value.treasury_index_pct = res.data.treasury_index_pct
+      }
+      if (res.data.estimated_nav !== undefined) {
+        meta.value.estimated_nav = res.data.estimated_nav
+      }
+      if (res.data.latest_nav !== undefined) {
+        meta.value.latest_nav = res.data.latest_nav
+      }
+      if (res.data.latest_nav_date !== undefined) {
+        meta.value.latest_nav_date = res.data.latest_nav_date
       }
     }
   } catch (e) {

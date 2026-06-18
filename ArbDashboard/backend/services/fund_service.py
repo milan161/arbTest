@@ -505,6 +505,15 @@ class FundService:
                             metrics['rt_val'] = round(est_nav, 4)
                             metrics['bond_etf_method'] = val.get('method', '')
                             metrics['avg_daily_growth'] = val.get('avg_daily_growth')
+                            metrics['treasury_index_pct'] = val.get('treasury_index_pct')
+                            # 国债指数实时价 (511360用sh000012, 511520不用)
+                            if code == '511360':
+                                ti_data = bv._get_treasury_index_data()
+                                if ti_data:
+                                    metrics['treasury_index_price'] = ti_data.get('price')
+                            # 国债期货涨跌 (511520用T2609, 511360不用)
+                            if code == '511520':
+                                metrics['futures_pct'] = val.get('futures_pct')
                             # 用预估净值作为静态估值（因为没有数据库历史记录）
                             metrics['static_val'] = round(est_nav, 4)
                             # 用最新实际净值作为昨收价（用于涨跌幅计算）
@@ -847,6 +856,15 @@ class FundService:
             df['nav_chg'] = safe_pct_change(df['nav'])
             df['static_val_chg'] = safe_pct_change(df['static_val'])
 
+            # 回填 shares_added：若数据库里为 NULL/0，用相邻两天 shares 差值计算
+            # df 按 date DESC 排列，shift(-1) 取前一交易日（更早的那天）
+            if 'shares' in df.columns:
+                mask_sa = df['shares_added'].isna() | (df['shares_added'] == 0)
+                if mask_sa.any():
+                    prev_shares = df['shares'].shift(-1)
+                    calc = df['shares'] - prev_shares
+                    df.loc[mask_sa, 'shares_added'] = calc[mask_sa]
+
             # 清理 NaN/Inf（不填充 0，保留 None 让前端显示 '-'）
             import numpy as np
             df = df.replace([np.inf, -np.inf], np.nan)
@@ -855,8 +873,160 @@ class FundService:
             # 条件：price/nav/static_val 全为 None → 删除
             df = df.dropna(subset=['price', 'nav', 'static_val', 'shares', 'volume'], how='all')
 
+            # [债券ETF] 为现金管理基金回溯计算静态估值
+            if fund_code in BOND_ETF_CODES and not df.empty:
+                try:
+                    bv = get_bond_etf_valuation(conn, None)
+                    fund_meta = BOND_ETF_META.get(fund_code, {})
+                    
+                    if fund_code == '511360':
+                        # ══ 511360: 国债指数跟踪法回溯 ══
+                        treasury_hist = bv.get_treasury_history(days=60)
+                        # 建立日期→涨跌幅映射 (当天close vs 前一天close)
+                        pct_map = {}
+                        for j in range(len(treasury_hist) - 1):
+                            today_close = treasury_hist[j]['close']
+                            yesterday_close = treasury_hist[j + 1]['close']
+                            if yesterday_close > 0:
+                                pct = (today_close / yesterday_close - 1) * 100
+                                pct_map[treasury_hist[j]['date']] = pct
+                        
+                        # 511360 周一计提周末两天利息，需要日均增长做基数
+                        avg_growth_511360 = bv.calc_avg_daily_growth(fund_code, days=20)
+
+                        from datetime import datetime as _dt
+                        df_sorted = df.sort_values('date', ascending=True).reset_index(drop=True)
+                        for i in range(len(df_sorted)):
+                            if i == 0:
+                                df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = df_sorted.iloc[i]['nav']
+                            else:
+                                prev_nav = df_sorted.iloc[i - 1]['nav']
+                                row_date = str(df_sorted.iloc[i]['date'])[:10]
+                                idx_pct = pct_map.get(row_date)
+                                
+                                # 周一：加上周末两天利息 (511360在周一计提)
+                                weekend_bonus = 0.0
+                                try:
+                                    row_dt = _dt.strptime(row_date, '%Y-%m-%d')
+                                    if row_dt.weekday() == 0 and avg_growth_511360 is not None:
+                                        weekend_bonus = avg_growth_511360 * 2
+                                except:
+                                    pass
+
+                                if idx_pct is not None:
+                                    if idx_pct > 0.1:
+                                        adj = 0.01
+                                    elif idx_pct > 0:
+                                        adj = 0.004
+                                    elif idx_pct > -0.1:
+                                        adj = 0.0
+                                    else:
+                                        adj = -0.01
+                                    estimated_nav = prev_nav + adj + weekend_bonus
+                                else:
+                                    estimated_nav = prev_nav + weekend_bonus
+                                
+                                df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = round(estimated_nav, 4)
+                        
+                        df = df_sorted.sort_values('date', ascending=False).reset_index(drop=True)
+                        logger.info(f"[BondETF] 511360 国债指数跟踪法回溯完成")
+                    else:
+                        # ══ 511880/其他: 日均增长法回溯 ══
+                        avg_growth = bv.calc_avg_daily_growth(fund_code, days=20)
+                        weekend_on = fund_meta.get('weekend_on')
+                        
+                        if avg_growth is not None:
+                            from datetime import datetime as _dt
+                            df_sorted = df.sort_values('date', ascending=True).reset_index(drop=True)
+                            estimated_nav = df_sorted.iloc[0]['nav'] if len(df_sorted) > 0 else latest_nav
+                            
+                            for i in range(len(df_sorted)):
+                                if i == 0:
+                                    df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = df_sorted.iloc[i]['nav']
+                                else:
+                                    try:
+                                        row_dt = _dt.strptime(str(df_sorted.iloc[i]['date'])[:10], '%Y-%m-%d')
+                                    except (ValueError, TypeError):
+                                        row_dt = None
+                                    
+                                    daily_gain = avg_growth
+                                    if row_dt:
+                                        if weekend_on == 'friday' and row_dt.weekday() == 4:
+                                            daily_gain = avg_growth * 3
+                                        elif weekend_on == 'monday' and row_dt.weekday() == 0:
+                                            daily_gain = avg_growth * 3
+                                    
+                                    estimated_nav = df_sorted.iloc[i-1]['nav'] + daily_gain
+                                    df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = round(estimated_nav, 4)
+                            
+                            df = df_sorted.sort_values('date', ascending=False).reset_index(drop=True)
+                            logger.info(f"[BondETF] 静态估值回溯完成 {fund_code}, 日均增长={avg_growth}")
+                except Exception as e:
+                    logger.warning(f"[BondETF] 静态估值回溯失败 {fund_code}: {e}")
+
             # 2. 构建返回数据
             import math
+            
+            # [511360] 获取国债指数历史数据，附加到每行
+            treasury_map = {}
+            if fund_code == '511360':
+                try:
+                    bv2 = get_bond_etf_valuation(conn, None)
+                    treasury_hist = bv2.get_treasury_history(days=60)
+                    for j in range(len(treasury_hist) - 1):
+                        today_close = treasury_hist[j]['close']
+                        yesterday_close = treasury_hist[j + 1]['close']
+                        pct = (today_close / yesterday_close - 1) * 100 if yesterday_close > 0 else 0
+                        treasury_map[treasury_hist[j]['date']] = {
+                            'idx_close': today_close,
+                            'idx_pct': round(pct, 4),
+                        }
+                except Exception as e:
+                    logger.warning(f"[BondETF] 获取000012历史数据失败: {e}")
+            
+            # [511520] 获取国债期货历史数据，附加到每行
+            futures_map = {}
+            if fund_code == '511520':
+                try:
+                    cursor = conn.cursor()
+                    # 拉 T2609 和 TF2609，取均值
+                    t_rows = cursor.execute(
+                        "SELECT date, close_price, close_pct FROM futures_daily WHERE symbol='T2609' AND date>='2026-01-01' ORDER BY date DESC"
+                    ).fetchall()
+                    tf_rows = cursor.execute(
+                        "SELECT date, close_price, close_pct FROM futures_daily WHERE symbol='TF2609' AND date>='2026-01-01' ORDER BY date DESC"
+                    ).fetchall()
+                    t_map = {r[0]: (r[1], r[2]) for r in t_rows}
+                    tf_map = {r[0]: (r[1], r[2]) for r in tf_rows}
+                    all_dates = sorted(set(list(t_map.keys()) + list(tf_map.keys())), reverse=True)
+                    for d in all_dates:
+                        t_close, t_pct = t_map.get(d, (None, None))
+                        tf_close, tf_pct = tf_map.get(d, (None, None))
+                        # 取均值
+                        if t_close and tf_close:
+                            avg_close = round((t_close + tf_close) / 2, 3)
+                        elif t_close:
+                            avg_close = t_close
+                        elif tf_close:
+                            avg_close = tf_close
+                        else:
+                            continue
+                        # 涨幅取均值
+                        if t_pct is not None and tf_pct is not None:
+                            avg_pct = round((t_pct + tf_pct) / 2, 4)
+                        elif t_pct is not None:
+                            avg_pct = t_pct
+                        elif tf_pct is not None:
+                            avg_pct = tf_pct
+                        else:
+                            avg_pct = None
+                        futures_map[d] = {
+                            'futures_close': avg_close,
+                            'futures_pct': avg_pct,
+                        }
+                except Exception as e:
+                    logger.warning(f"[BondETF] 获取国债期货历史数据失败: {e}")
+            
             data_list = []
             for _, row in df.iterrows():
                 item = {}
@@ -875,6 +1045,22 @@ class FundService:
                 price_val = item.get('price')
                 if nav_val and nav_val > 0 and price_val and price_val > 0:
                     item['static_premium'] = (price_val / nav_val - 1) * 100
+
+                # [511360] 附加国债指数数据
+                if fund_code == '511360':
+                    row_date = str(item.get('date', ''))[:10]
+                    idx_data = treasury_map.get(row_date)
+                    if idx_data:
+                        item['idx_close'] = idx_data['idx_close']
+                        item['idx_pct'] = idx_data['idx_pct']
+
+                # [511520] 附加国债期货数据
+                if fund_code == '511520':
+                    row_date = str(item.get('date', ''))[:10]
+                    fut_data = futures_map.get(row_date)
+                    if fut_data:
+                        item['futures_close'] = fut_data['futures_close']
+                        item['futures_pct'] = fut_data['futures_pct']
 
                 data_list.append(item)
 
@@ -1158,6 +1344,28 @@ class FundService:
                     else:
                         formatted_base_data[k] = str(v)
 
+            # [债券ETF] 为现金管理基金添加额外估值信息
+            bond_extra = {}
+            if code in BOND_ETF_CODES:
+                try:
+                    bv = get_bond_etf_valuation(conn, self.market_data_service)
+                    val = bv.get_valuation(code)
+                    bond_extra = {
+                        "avg_daily_growth": val.get('avg_daily_growth'),
+                        "bond_etf_method": val.get('method', ''),
+                        "treasury_index_pct": val.get('treasury_index_pct'),
+                        "estimated_nav": val.get('estimated_nav'),
+                        "latest_nav": val.get('latest_nav'),
+                        "latest_nav_date": val.get('latest_nav_date'),
+                        # 国债期货数据 (511520专用)
+                        "futures_pct": val.get('futures_pct'),
+                        "tf_pct": val.get('tf_pct'),
+                        "futures_adjustment": val.get('futures_adjustment'),
+                        "total_adjustment": val.get('total_adjustment'),
+                    }
+                except Exception as e:
+                    logger.error(f"[BondETF] 估值元数据获取失败 {code}: {e}")
+            
             return {
                 "status": "ok",
                 "fund_config": fund_cfg,
@@ -1165,7 +1373,8 @@ class FundService:
                 "t1_data": t1_data,
                 "latest_exchange_rate": latest_fx,
                 "realtime_quotes": realtime_quotes,
-                "future_quote": future_quote
+                "future_quote": future_quote,
+                **bond_extra
             }
         except Exception as e:
             logger.error(f"Error getting valuation meta for {code}: {e}")

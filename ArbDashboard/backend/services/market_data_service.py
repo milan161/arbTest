@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import List, Dict, Any, Optional
 from arbcore.fetchers.realtime import RealtimeMarketManager
 from arbcore.fetchers.historical import HistoricalDataManager
@@ -21,24 +22,25 @@ class MarketDataService:
         # [FIX] 初始化 IB Reader（用于美股ETF实时行情）
         self.ib_reader = None
         try:
+            # [V10.0] IBReader 启动时不自动连接，用户点击页面"IB"按钮才重连
             self.ib_reader = IBReader(db_manager=db_manager)
-            if self.ib_reader.connect_to_ib():
-                logger.info("✅ IB Reader 已初始化，可用于美股ETF实时行情")
-            else:
-                logger.warning("⚠️ IB Reader 连接失败，美股ETF将无法获取实时价格")
-                self.ib_reader = None
+            logger.info("IB Reader 已初始化，待用户手动连接")
         except Exception as e:
-            logger.warning(f"⚠️ IB Reader 初始化失败: {e}")
+            logger.warning(f"IB Reader 初始化失败: {e}")
             self.ib_reader = None
         
         # [NEW] 初始化富途 Reader（IB 的备用数据源）
         self.futu_reader = None
         try:
+            # [V10.0] FutuReader 启动时不自动连接，用户点击页面"富途"按钮才重连
             self.futu_reader = FutuReader()
-            logger.info("✅ 富途 Reader 已初始化，作为 IB 的备用数据源")
+            logger.info("富途 Reader 已初始化，待用户手动连接")
         except Exception as e:
-            logger.warning(f"⚠️ 富途 Reader 初始化失败: {e}")
+            logger.warning(f"富途 Reader 初始化失败: {e}")
             self.futu_reader = None
+        
+        # [V10.1] 富途兜底日志去重：每 symbol 每 300 秒最多记一次 warning
+        self._futu_warn_cooldown: Dict[str, float] = {}
         
         # 启动实时引擎（A股数据源）
         # [V4.2] 移至 lifespan 异步启动，避免与 TradingService 冲突
@@ -113,7 +115,12 @@ class MarketDataService:
                             'source': '富途(兜底)'
                         }
                     else:
-                        logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
+                        # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
+                        now = time.time()
+                        last_warn = self._futu_warn_cooldown.get(symbol, 0)
+                        if now - last_warn > 300:
+                            logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
+                            self._futu_warn_cooldown[symbol] = now
                 except Exception as e:
                     logger.error(f"⚠️ 富途兜底获取{symbol}异常: {e}")
             return None # [FIX] 无论如何，美股不能继续往下走A股引擎
@@ -137,9 +144,19 @@ class MarketDataService:
                             'source': '富途'
                         }
                     else:
-                        logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
+                        # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
+                        now = time.time()
+                        last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
+                        if now - last_warn > 300:
+                            logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
+                            self._futu_warn_cooldown[f'futu_{symbol}'] = now
                 except Exception as e:
-                    logger.error(f"⚠️ 富途获取{symbol}异常: {e}")
+                    # [V10.1] 异常也加去重
+                    now = time.time()
+                    last_err = self._futu_warn_cooldown.get(f'futu_err_{symbol}', 0)
+                    if now - last_err > 300:
+                        logger.error(f"⚠️ 富途获取{symbol}异常: {e}")
+                        self._futu_warn_cooldown[f'futu_err_{symbol}'] = now
             return None # [FIX] 无论如何，美股不能继续往下走A股引擎
         
         # A股/港股/期货从RealtimeMarketManager获取

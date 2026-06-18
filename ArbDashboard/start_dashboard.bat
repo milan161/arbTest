@@ -4,6 +4,7 @@ title ArbNext Dashboard Launcher
 echo ========================================
 echo  Starting ArbNext Unified Dashboard...
 echo ========================================
+echo [DEBUG] Batch file started at %time%
 
 :: Kill any leftover backend process on port 8000 first
 echo [Pre-check] Cleaning port 8000...
@@ -15,30 +16,37 @@ timeout /t 2 /nobreak > nul
 
 :: Start Backend in a new window (visible so user can see errors)
 echo [1/3] Starting Backend (port 8000)...
+echo [DEBUG] Backend start time: %time%
 start "ArbNext Backend" cmd /k "cd /d D:\Study\arbTest\ArbDashboard\backend && D:\Study\arbTest\.venv\Scripts\python.exe main.py"
 
 :: Health check retry loop (waits up to 30 seconds)
 echo Waiting for backend to start (checking every 2s, max 30s)...
 for /l %%i in (1,1,15) do (
     timeout /t 2 /nobreak > nul
-    curl -s -o nul -w %%{http_code} http://127.0.0.1:8000/api/system/milestones 2>nul | findstr "200" >nul
-    if !errorlevel! equ 0 (
-        echo Backend is ready! (attempt %%i)
-        goto :backend_ready
+    echo [DEBUG] Health check attempt %%i...
+    for /f %%j in ('curl -s -o nul -w %%{http_code} http://127.0.0.1:8000/api/system/milestones 2^>nul') do (
+        echo [DEBUG] HTTP response code: %%j
+        if "%%j"=="200" (
+            echo Backend is ready! (attempt %%i)
+            goto :backend_ready
+        )
     )
+    echo [DEBUG] Backend not ready yet, retrying...
 )
 
 echo.
+echo [DEBUG] Health check failed after 15 attempts (30 seconds)
 echo WARNING: Backend did not respond within 30 seconds.
 echo Check the 'ArbNext Backend' window for error messages.
 pause
 exit /b 1
 
 :backend_ready
-echo [2/3] Backend health check PASSED
+echo [2/3] Backend health check PASSED at %time%
 
 :: Start Frontend in a new window
 echo [3/3] Starting Frontend (port 5173)...
+echo [DEBUG] Frontend start time: %time%
 start "ArbNext Frontend" cmd /k "cd /d D:\Study\arbTest\ArbDashboard\frontend && npm run dev"
 
 echo.

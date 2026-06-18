@@ -1,6 +1,7 @@
 /**
  * 市场数据 Store
  * - 汇率、数据源状态、实时报价
+ * - 各数据源独立重连
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -67,9 +68,46 @@ export const useMarketStore = defineStore('market', () => {
     }
   }
 
+  async function reconnectTdx() {
+    try {
+      const res = await api.reconnectTdx()
+      return res.data
+    } catch (err: any) {
+      return { status: 'error', message: err.message }
+    }
+  }
+
+  async function reconnectGalaxy() {
+    try {
+      const res = await api.reconnectGalaxy()
+      return res.data
+    } catch (err: any) {
+      return { status: 'error', message: err.message }
+    }
+  }
+
+  async function reconnectGuojin() {
+    try {
+      const res = await api.reconnectGuojin()
+      return res.data
+    } catch (err: any) {
+      return { status: 'error', message: err.message }
+    }
+  }
+
+  async function reconnectFutu() {
+    try {
+      const res = await api.reconnectFutu()
+      return res.data
+    } catch (err: any) {
+      return { status: 'error', message: err.message }
+    }
+  }
+
   return {
     overview, loading,
     hasTdx, hasIb, hasIbNotRunning, hasGalaxy, hasGuojin, hasFutu,
-    fetchOverview
+    fetchOverview,
+    reconnectTdx, reconnectGalaxy, reconnectGuojin, reconnectFutu
   }
 })

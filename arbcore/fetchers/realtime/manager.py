@@ -119,9 +119,17 @@ class RealtimeMarketManager:
                     if self.system_status: self.system_status.add_milestone("ERROR", msg)
                     continue
 
-                # [3次重试机制] 首次失败后再试2次，3次全失败才放弃并提示用户
-                connected = False
+                # [V10.0] 客户端类数据源（tdx/guojin/galaxy）启动时不自动连接
+                # 用户点击页面顶部对应按钮才触发 reconnect()
                 client_source_keys = {"tdx", "guojin", "galaxy"}
+                if source_name_key in client_source_keys:
+                    msg = f"⏳ {source_name_cn} 待连接（请点击页面顶部'{source_name_cn}'按钮启动）"
+                    logger.info(msg)
+                    if self.system_status: self.system_status.add_milestone("INFO", msg)
+                    continue
+
+                # 纯 API 源（sina/tencent）正常自动连接
+                connected = False
                 for attempt in range(1, MAX_CONNECT_RETRIES + 1):
                     if fetcher.connect():
                         connected = True
@@ -134,7 +142,7 @@ class RealtimeMarketManager:
                     fetcher.set_on_update(self._on_internal_update)
                     self.active_fetchers[source_name_key] = fetcher
                     msg = f"数据源已成功挂载: {source_name_cn}"
-                    logger.info(f"✅ {msg}")
+                    logger.info(f"{'='*50}\n{msg}\n{'='*50}")
                     if self.system_status: self.system_status.add_milestone("SUCCESS", msg)
                     if self.symbols:
                         fetcher.subscribe(self.symbols)
@@ -156,7 +164,7 @@ class RealtimeMarketManager:
                 self.active_fetchers["sina"] = sina
                 if self.symbols:
                     sina.subscribe(self.symbols)
-                logger.warning("⚠️ 所有极速源失效，已启动【新浪轮询】兜底")
+                logger.warning(f"{'='*50}\n所有极速源失效，已启动【新浪轮询】兜底\n{'='*50}")
 
     def subscribe(self, symbols: List[str]):
         self.symbols = list(set(self.symbols + symbols))
