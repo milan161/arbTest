@@ -359,12 +359,14 @@ class FundService:
             where_clause = ""
             params: List[Any] = []
             if watchlist:
-                codes_str = ','.join(f"'{c}'" for c in watchlist)
-                where_clause = f"WHERE fund_code IN ({codes_str})"
+                placeholders = ",".join("?" for _ in watchlist)
+                where_clause = f"WHERE fund_code IN ({placeholders})"
+                params.extend(watchlist)
             elif category:
                 cats = _TAB_CATEGORY_MAP.get(category, [category])
-                cat_placeholders = ','.join(f"'{c}'" for c in cats)
-                where_clause = f"WHERE category IN ({cat_placeholders})"
+                placeholders = ",".join("?" for _ in cats)
+                where_clause = f"WHERE category IN ({placeholders})"
+                params.extend(cats)
 
             funds_df = pd.read_sql_query(
                 f"SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list {where_clause}",
@@ -384,14 +386,26 @@ class FundService:
 
             # ── 3. 一次性批量拉取所有基金的历史记录 ──
             codes = funds_df['fund_code'].tolist()
-            codes_str = ','.join(f"'{c}'" for c in codes)
+            code_placeholders = ",".join("?" for _ in codes)
             hist_df = pd.read_sql_query(
-                f"SELECT fund_code, date, price, nav, static_val, premium as static_premium, "
-                f"volume, shares, shares_added, turnover_rate "
-                f"FROM unified_fund_history "
-                f"WHERE fund_code IN ({codes_str}) "
-                f"ORDER BY fund_code, date DESC",
-                conn
+                f"""
+                SELECT fund_code, date, price, nav, static_val, static_premium,
+                       volume, shares, shares_added, turnover_rate
+                FROM (
+                    SELECT fund_code, date, price, nav, static_val,
+                           premium as static_premium, volume, shares,
+                           shares_added, turnover_rate,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY fund_code ORDER BY date DESC
+                           ) AS rn
+                    FROM unified_fund_history
+                    WHERE fund_code IN ({code_placeholders})
+                )
+                WHERE rn <= 10
+                ORDER BY fund_code, date DESC
+                """,
+                conn,
+                params=codes,
             )
             # 按 fund_code 分组，每组取前 10 条
             hist_grouped = hist_df.groupby('fund_code') if not hist_df.empty else {}
@@ -511,8 +525,9 @@ class FundService:
                                 ti_data = bv._get_treasury_index_data()
                                 if ti_data:
                                     metrics['treasury_index_price'] = ti_data.get('price')
-                            # 国债期货涨跌 (511520用T2609, 511360不用)
+                            # 511520: 国开债ETF(159649) + 期货
                             if code == '511520':
+                                metrics['cdb_etf_pct'] = val.get('cdb_etf_pct')
                                 metrics['futures_pct'] = val.get('futures_pct')
                             # 用预估净值作为静态估值（因为没有数据库历史记录）
                             metrics['static_val'] = round(est_nav, 4)

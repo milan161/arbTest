@@ -4,8 +4,11 @@
 import client from './client'
 
 /** 看板统一数据 */
-export function getDashboard(params?: { watchlist?: string; category?: string }) {
-  return client.get('/api/dashboard', { params })
+export function getDashboard(
+  params?: { watchlist?: string; category?: string },
+  signal?: AbortSignal
+) {
+  return client.get('/api/dashboard', { params, signal })
 }
 
 /** 基金历史对账数据 */

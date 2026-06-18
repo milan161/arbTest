@@ -3,6 +3,7 @@ import sys
 import subprocess
 import pandas as pd
 import logging
+from logging.handlers import RotatingFileHandler
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,7 +44,12 @@ class ColorFormatter(logging.Formatter):
         return formatted
 
 # Setup File Handler (no colors)
-file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+file_handler = RotatingFileHandler(
+    log_filepath,
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+    encoding='utf-8'
+)
 file_handler.setFormatter(logging.Formatter(log_format))
 
 # Setup Console Handler (with colors)
@@ -97,6 +103,7 @@ try:
     from services.market_data_service import MarketDataService
     from services.system_status_service import system_status
     from services.intraday.sampler_service import IntradaySamplerService
+    from services.dashboard_snapshot_service import DashboardSnapshotService
     from services.trading_service import TradingService
     from services.config_manager_service import ConfigManagerService
     from services.ledger_service import LedgerService
@@ -183,9 +190,44 @@ market_data_service = MarketDataService(db)
 fund_service = FundService(db, market_data_service=market_data_service, config_service=config_service)
 sampler_service = IntradaySamplerService(db, market_data_service, config_service)
 sampler_service.active_watchlist = _active_watchlist
+dashboard_snapshot_service = DashboardSnapshotService(
+    fund_service,
+    market_data_service=market_data_service,
+)
 config_manager_service = ConfigManagerService(project_root)
 ledger_service = LedgerService(db)
 etf_rotation_service = ETFRotationService(db, market_data_service=market_data_service)
+
+def _is_script_running(script_name: str) -> bool:
+    """Best-effort process guard for background scripts."""
+    try:
+        import subprocess
+        if sys.platform == "win32":
+            output = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | "
+                 "Select-Object -ExpandProperty CommandLine"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        else:
+            output = subprocess.check_output(["ps", "axo", "command"], text=True, timeout=5)
+        current_pid = str(os.getpid())
+        for line in output.splitlines():
+            if script_name in line and current_pid not in line:
+                return True
+    except Exception as e:
+        logger.debug(f"Process guard failed for {script_name}: {e}")
+    return False
+
+def _popen_script_once(cmd, cwd, script_name: str) -> bool:
+    if _is_script_running(script_name):
+        logger.info(f"{script_name} is already running, skip duplicate launch")
+        system_status.add_milestone("INFO", f"{script_name} 已在运行，跳过重复启动")
+        return False
+    subprocess.Popen(cmd, cwd=cwd)
+    return True
 
 # 3. Try to load Private Plugins
 try:
@@ -234,9 +276,9 @@ async def lifespan(app: FastAPI):
             
             if python_exe and os.path.exists(script_path):
                 try:
-                    subprocess.Popen([python_exe, script_path], cwd=scripts_dir)
-                    logger.info("011 任务已在后台启动 (daily_updater)")
-                    system_status.add_milestone("SUCCESS", "011 数据更新任务已启动")
+                    if _popen_script_once([python_exe, script_path], scripts_dir, "daily_updater.py"):
+                        logger.info("011 任务已在后台启动 (daily_updater)")
+                        system_status.add_milestone("SUCCESS", "011 数据更新任务已启动")
                 except Exception as e:
                     logger.error(f"011 任务启动失败: {e}")
                     system_status.add_milestone("ERROR", f"011 任务启动失败: {e}")
@@ -255,6 +297,9 @@ async def lifespan(app: FastAPI):
 
         # 3. 启动实时行情引擎（延迟10秒，等 011 任务先跑起来）
         # 011 需要 1-2 分钟，通达信可以稍后启动
+        await dashboard_snapshot_service.start()
+        system_status.add_milestone("SUCCESS", "Dashboard 快照服务已启动")
+
         async def start_mds_later():
             await asyncio.sleep(10)
             try:
@@ -300,8 +345,7 @@ async def lifespan(app: FastAPI):
             sp = os.path.join(sd, "daily_updater.py")
             pe = _find_python()
             if pe and os.path.exists(sp):
-                subprocess.Popen([pe, sp] + args_list, cwd=sd)
-                return True
+                return _popen_script_once([pe, sp] + args_list, sd, "daily_updater.py")
             return False
 
         # 6. [V9.0] 9:20 清晨自动刷新 Woody/汇率/VPS
@@ -371,6 +415,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("🛠️ Shutting down ArbNext Backend...")
+    await dashboard_snapshot_service.stop()
     await sampler_service.stop()
     auto_trade_runner.stop()
     market_data_service.realtime_manager.stop()
@@ -396,24 +441,25 @@ async def get_health():
 @app.get("/api/dashboard")
 async def get_dashboard(watchlist: str = None, category: str = None):
     """Unified dashboard data for both LOF and JSL
-    [V6.0] 接收前端传递的自选基金列表，用于采样服务过滤
+    Reads a background snapshot so UI polling never performs slow valuation
+    work inline.
     """
-    global _active_watchlist
-    # 如果前端传递了watchlist参数，更新全局变量（逗号分隔的基金代码）
-    if watchlist:
-        _active_watchlist = [code.strip() for code in watchlist.split(',') if code.strip()]
-        logger.info(f"📌 更新活跃自选列表: {len(_active_watchlist)} 只基金")
-        if sampler_service:
-            sampler_service.active_watchlist = _active_watchlist
-    
     try:
         import traceback
-        # 传递自选列表，按需仅计算自选基金，极大地加速响应
-        data = fund_service.get_unified_dashboard_data(
-            watchlist=_active_watchlist if watchlist else None,
-            category=category
+        requested_watchlist = [code.strip() for code in watchlist.split(',') if code.strip()] if watchlist else None
+        snapshot = dashboard_snapshot_service.get_snapshot(
+            watchlist=requested_watchlist,
+            category=category,
         )
-        return {"status": "ok", "data": data}
+        return {
+            "status": "ok",
+            "data": snapshot.get("data", []),
+            "updated_at": snapshot.get("updated_at"),
+            "stale": snapshot.get("stale", False),
+            "source_status": snapshot.get("source_status", {}),
+            "compute_ms": snapshot.get("compute_ms", 0),
+            "error": snapshot.get("error"),
+        }
     except Exception as e:
         msg = f"Dashboard API Error: {e}"
         logger.error(msg)
@@ -1159,7 +1205,9 @@ async def trigger_task(task: str):
             return JSONResponse(status_code=500, content={"status": "error", "message": error_msg})
         
         cmd = [python_exe, script_path] + extra_args
-        subprocess.Popen(cmd, cwd=script_dir)
+        launched = _popen_script_once(cmd, script_dir, os.path.basename(script_path))
+        if not launched:
+            return {"status": "ok", "message": f"Task {task} already running"}
         system_status.add_milestone("INFO", f"后台任务 {task} 已手动启动")
         logger.info(f"✅ 手动触发任务 {task}: {' '.join(cmd)}")
         if task == "nav":
@@ -1283,6 +1331,25 @@ async def health_check():
             "total_records": record_count or 0,
             "checked_dates": check_dates
         }
+    }
+
+@app.get("/api/system/runtime-health")
+async def runtime_health():
+    """Runtime health for UI polling and data-source observability."""
+    db_status = "unknown"
+    try:
+        conn = db._get_conn()
+        try:
+            conn.execute("SELECT 1").fetchone()
+            db_status = "ok"
+        finally:
+            conn.close()
+    except Exception as e:
+        db_status = f"error: {e}"
+    return {
+        "status": "ok",
+        "dashboard": dashboard_snapshot_service.get_runtime_health(),
+        "database": {"status": db_status},
     }
 
 # --- Auto Trade Engine APIs ---
@@ -1471,5 +1538,6 @@ def kill_port_owner(port: int):
         logger.error(f"⚠️ [端口防护] 清理端口 {port} 残留进程失败: {e}")
 
 if __name__ == "__main__":
-    kill_port_owner(8000)
+    if os.environ.get("ARB_KILL_PORT_OWNER") == "1":
+        kill_port_owner(8000)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", access_log=False)

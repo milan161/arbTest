@@ -45,6 +45,13 @@
           <n-button quaternary circle size="tiny" @click="fetchData" style="position: absolute; right: 4px; top: 4px; z-index: 10;">
             <template #icon><n-icon><Zap /></n-icon></template>
           </n-button>
+          <!-- 过期数据指示器 -->
+          <div v-if="dashboardMeta.stale || dashboardMeta.error" style="position: absolute; left: 8px; top: 4px; z-index: 10;">
+            <n-tag type="warning" size="tiny" round>
+              {{ dashboardMeta.error ? '数据异常' : '数据已延迟' }}
+              <template v-if="dashboardMeta.compute_ms > 0"> ({{ dashboardMeta.compute_ms }}ms)</template>
+            </n-tag>
+          </div>
           <div class="milestone-scroll-box" style="padding-top: 4px; height: 100%;">
              <div class="milestone-grid">
                 <div v-for="(m, i) in milestones" :key="i" class="milestone-cell">
@@ -142,7 +149,7 @@ const appStore = useAppStore()
 
 // ===== 从 Store 解构响应式状态（保持与模板同名的变量，避免改模板） =====
 const { tableData, loading, currentTab, searchKeyword, watchlist,
-        filteredTableData, fundHistory } = storeToRefs(fundStore)
+        filteredTableData, fundHistory, dashboardMeta } = storeToRefs(fundStore)
 const { engineRunning, milestones } = storeToRefs(appStore)
 const { overview: marketOverview, hasTdx, hasIb, hasIbNotRunning,
         hasGalaxy, hasGuojin, hasFutu } = storeToRefs(marketStore)

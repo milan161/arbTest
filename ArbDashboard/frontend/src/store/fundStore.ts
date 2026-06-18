@@ -53,6 +53,15 @@ export const useFundStore = defineStore('fund', () => {
   // ---- state ----
   const tableData = ref<FundItem[]>([])
   const loading = ref(false)
+  const dashboardMeta = ref({
+    updated_at: null as string | null,
+    stale: false,
+    compute_ms: 0,
+    error: null as string | null
+  })
+  let dashboardInFlight = false
+  let dashboardController: AbortController | null = null
+  let dashboardRequestSeq = 0
   // 从 localStorage 恢复上次 TAB；若自选为空则默认切到"黄金原油"
   const savedTab = typeof localStorage !== 'undefined' ? localStorage.getItem('dashboard_tab') : null
   const _wl = (() => {
@@ -123,7 +132,12 @@ export const useFundStore = defineStore('fund', () => {
     return watchlist.value.includes(code)
   }
 
-  async function fetchDashboard(isSilent = false) {
+  async function fetchDashboard(isSilent = false, cancelPrevious = false) {
+    if (dashboardInFlight && !cancelPrevious) return
+    if (cancelPrevious && dashboardController) dashboardController.abort()
+    dashboardInFlight = true
+    dashboardController = new AbortController()
+    const requestSeq = ++dashboardRequestSeq
     if (!isSilent && tableData.value.length === 0) loading.value = true
     try {
       const params: Record<string, string> = {}
@@ -132,13 +146,22 @@ export const useFundStore = defineStore('fund', () => {
       } else {
         params.category = currentTab.value
       }
-      const res = await api.getDashboard(params)
-      if (res.data?.status === 'ok') {
+      const res = await api.getDashboard(params, dashboardController.signal)
+      if (requestSeq === dashboardRequestSeq && res.data?.status === 'ok') {
         tableData.value = res.data.data || []
+        dashboardMeta.value = {
+          updated_at: res.data.updated_at || null,
+          stale: !!res.data.stale,
+          compute_ms: Number(res.data.compute_ms || 0),
+          error: res.data.error || null
+        }
       }
-    } catch (err) {
-      console.error('获取看板数据失败', err)
+    } catch (err: any) {
+      if (err?.name !== 'CanceledError' && err?.code !== 'ERR_CANCELED') {
+        console.error('获取看板数据失败', err)
+      }
     } finally {
+      dashboardInFlight = false
       loading.value = false
     }
   }
@@ -192,6 +215,7 @@ export const useFundStore = defineStore('fund', () => {
 
   return {
     tableData, loading, currentTab, searchKeyword,
+    dashboardMeta,
     fundHistory, fundHistoryLoading,
     intradayData, basketData,
     watchlist,
