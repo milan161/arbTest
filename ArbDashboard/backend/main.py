@@ -1002,6 +1002,8 @@ async def save_accounts(request: Request):
 async def reconnect_ib():
     """重连 IB - 使用 reconnect() 方法，试连 3 次"""
     try:
+        # [V10.1] 重置熔断器
+        market_data_service._circuit_reset('IB')
         if market_data_service.ib_reader:
             success, msg = market_data_service.ib_reader.reconnect()
             if success:
@@ -1029,6 +1031,8 @@ async def reconnect_ib():
 async def reconnect_futu():
     """重连富途 - 使用 reconnect() 方法，试连 3 次"""
     try:
+        # [V10.1] 重置熔断器
+        market_data_service._circuit_reset('富途')
         if market_data_service.futu_reader:
             success, msg = market_data_service.futu_reader.reconnect()
             if success:

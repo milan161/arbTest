@@ -46,6 +46,26 @@ class DashboardCache:
 
 _dashboard_cache = DashboardCache()
 
+# [V10.1] 日内不变数据 — 启动时加载一次，当天不再查库
+_daily_snapshot = {
+    'usd_cny_mid': None,
+    'loaded': False,
+}
+
+def _ensure_daily_snapshot(conn):
+    """中间价只加载一次（启动时），当天不变"""
+    if _daily_snapshot['loaded']:
+        return
+    try:
+        fx_df = pd.read_sql(
+            "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn
+        )
+        if not fx_df.empty and fx_df.iloc[0]['usd_cny_mid'] > 0:
+            _daily_snapshot['usd_cny_mid'] = fx_df.iloc[0]['usd_cny_mid']
+        _daily_snapshot['loaded'] = True
+    except Exception:
+        pass
+
 # TAB → SQL category 值映射
 _TAB_CATEGORY_MAP = {
     '黄金原油': ['黄金原油', '黄金', '原油'],
@@ -142,6 +162,9 @@ class SSEFuturesReader:
 _sse_reader = SSEFuturesReader()
 _sse_reader.start()
 
+# [V10.2] 指数涨跌幅日内缓存：同指数同日只查一次新浪
+_index_pct_cache = {}  # "HSCEI_2026-06-18" -> float
+
 def get_index_change_percent(symbol: str) -> float:
     """
     [新浪/腾讯指数极速接口] 直接拉取指数日内涨跌幅百分比
@@ -161,6 +184,7 @@ def get_index_change_percent(symbol: str) -> float:
     if clean_sym.endswith('.CSI'):
         clean_sym = clean_sym[:-4]
     
+    result = 0.0
     try:
         # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
         if 'HSTECH' in clean_sym:
@@ -169,21 +193,21 @@ def get_index_change_percent(symbol: str) -> float:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSTECH 涨跌幅: {parts[8]}%")
-                    return float(parts[8])
+                    result = float(parts[8])
         elif 'HSCEI' in clean_sym:
             r = requests.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=1.5)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSCEI 涨跌幅: {parts[8]}%")
-                    return float(parts[8])
+                    result = float(parts[8])
         elif 'HSI' in clean_sym:
             r = requests.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=1.5)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSI 涨跌幅: {parts[8]}%")
-                    return float(parts[8])
+                    result = float(parts[8])
                     
         # 2. A股指数 (6位代码)
         elif clean_sym.isdigit() and len(clean_sym) == 6:
@@ -197,30 +221,66 @@ def get_index_change_percent(symbol: str) -> float:
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 4 and float(parts[3]) != 0.0:
-                    logger.debug(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
-                    return float(parts[3])
+                    logger.info(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
+                    result = float(parts[3])
                     
             # [V7.2] 新浪降级策略：使用腾讯接口兜底 (完美解决新浪没有中证指数的问题)
-            prefix = 'sz' if clean_sym.startswith(('399', '159')) else 'sh'
-            url_tencent = f"http://qt.gtimg.cn/q={prefix}{clean_sym}"
-            r_tc = requests.get(url_tencent, headers=headers_tencent, timeout=1.5)
-            if r_tc.status_code == 200 and 'v_' in r_tc.text:
-                tc_parts = r_tc.text.split('"')[1].split('~')
-                if len(tc_parts) >= 33:
-                    logger.debug(f"[INDEX-TENCENT] 兜底获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
-                    return float(tc_parts[32])
+            if result == 0.0:
+                prefix = 'sz' if clean_sym.startswith(('399', '159')) else 'sh'
+                url_tencent = f"http://qt.gtimg.cn/q={prefix}{clean_sym}"
+                r_tc = requests.get(url_tencent, headers=headers_tencent, timeout=1.5)
+                if r_tc.status_code == 200 and 'v_' in r_tc.text:
+                    tc_parts = r_tc.text.split('"')[1].split('~')
+                    if len(tc_parts) >= 33:
+                        logger.info(f"[INDEX-TENCENT] 兜底获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
+                        result = float(tc_parts[32])
     except Exception as e:
         logger.debug(f"Index fetch failed for {symbol}: {e}")
-    return 0.0
+    # 写入日内缓存
+    if result != 0.0:
+        _index_pct_cache[cache_key] = result
+    return result
 
 def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
     """
     [V6.0 性能优化] 批量预取新浪/腾讯指数数据，将 O(N) 降低为 O(1)
     返回 { "399300": {"price": 4000.0, "pct": 1.63}, ... }
     """
-    import datetime
-    if not symbols or datetime.datetime.now().weekday() >= 5:
+    if not symbols:
         return {}
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return {}
+    # [V10.2] 非交易时段直接返回空（A股09:15-15:00，港股09:30-16:00，收盘后指数不变）
+    hour = now.hour
+    if hour < 9 or (hour == 9 and now.minute < 15) or hour >= 16:
+        return {}
+
+    today_str = now.strftime('%Y-%m-%d')
+    
+    # 过滤掉已缓存的指数
+    need_fetch = []
+    for sym in symbols:
+        if not sym or sym == '-':
+            continue
+        clean_sym = sym.strip().upper()
+        if clean_sym.endswith('.CSI'):
+            clean_sym = clean_sym[:-4]
+        cache_key = f"{clean_sym}_{today_str}"
+        if cache_key not in _index_pct_cache:
+            need_fetch.append(sym)
+    
+    if not need_fetch:
+        # 全部命中缓存，直接返回
+        res = {}
+        for sym in symbols:
+            if not sym or sym == '-': continue
+            clean_sym = sym.strip().upper()
+            if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
+            cache_key = f"{clean_sym}_{today_str}"
+            if cache_key in _index_pct_cache:
+                res[sym] = {"price": 0.0, "pct": _index_pct_cache[cache_key]}
+        return res
         
     import requests
     headers_sina = {
@@ -287,7 +347,7 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
                         if len(parts) >= 4 and float(parts[3]) != 0.0:
                             if code in symbol_map:
                                 res[symbol_map[code]] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                logger.debug(f"[INDEX-SINA] 获取A股指数 {symbol_map[code]} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                logger.info(f"[INDEX-SINA] 获取A股指数 {symbol_map[code]} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
                     elif var_name.startswith('var hq_str_rt_hk'):
                         code = var_name.split('rt_hk')[1]
                         if len(parts) >= 9:
@@ -320,7 +380,7 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
                         code = tc_parts[2] # e.g. 000922, HSI
                         if code in tencent_symbol_map:
                             res[tencent_symbol_map[code]] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
-                            logger.debug(f"[INDEX-TENCENT] 兜底获取指数 {tencent_symbol_map[code]} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
+                            logger.info(f"[INDEX-TENCENT] 兜底获取指数 {tencent_symbol_map[code]} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
         except Exception as e:
             logger.warning(f"预取腾讯指数兜底异常: {e}")
             
@@ -654,12 +714,9 @@ class FundService:
                             # 获取最新汇率
                             current_fx = None 
                             try:
-                                fx_df = pd.read_sql(
-                                    "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1",
-                                    conn
-                                )
-                                if not fx_df.empty and fx_df.iloc[0]['usd_cny_mid'] > 0:
-                                    current_fx = fx_df.iloc[0]['usd_cny_mid']
+                                # [V10.1] 汇率当天不变，直接读内存
+                                _ensure_daily_snapshot(conn)
+                                current_fx = _daily_snapshot.get('usd_cny_mid')
                             except:
                                 pass
                             

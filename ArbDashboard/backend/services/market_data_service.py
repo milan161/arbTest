@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 US_SYMBOL_PATTERN = re.compile(r'^[A-Z]{2,6}$')
 
 class MarketDataService:
+    # [V10.1] 熔断器：连续失败 N 次后自动 disabled
+    CIRCUIT_BREAKER_THRESHOLD = 2
+
     def __init__(self, db_manager):
         self.db = db_manager
         # 初始化管理器
@@ -41,10 +44,49 @@ class MarketDataService:
         
         # [V10.1] 富途兜底日志去重：每 symbol 每 300 秒最多记一次 warning
         self._futu_warn_cooldown: Dict[str, float] = {}
+
+        # [V10.1] 熔断器状态：{source_key: consecutive_failures}
+        self._source_failures: Dict[str, int] = {}
+        # [V10.1] 熔断器冷却：{source_key: tripped_at_timestamp}
+        self._source_tripped: Dict[str, float] = {}
         
         # 启动实时引擎（A股数据源）
         # [V4.2] 移至 lifespan 异步启动，避免与 TradingService 冲突
         # self.realtime_manager.start()
+
+    # ── 熔断器方法 ──
+    def _circuit_is_tripped(self, source_key: str) -> bool:
+        """检查数据源是否被熔断"""
+        return source_key in self._source_tripped
+
+    def _circuit_record_failure(self, source_key: str):
+        """记录一次失败，达到阈值则熔断"""
+        self._source_failures[source_key] = self._source_failures.get(source_key, 0) + 1
+        if self._source_failures[source_key] >= self.CIRCUIT_BREAKER_THRESHOLD:
+            self._source_tripped[source_key] = time.time()
+            logger.warning(f"🔴 [熔断] {source_key} 连续失败 {self._source_failures[source_key]} 次，已自动禁用")
+
+    def _circuit_record_success(self, source_key: str):
+        """记录一次成功，重置失败计数"""
+        self._source_failures.pop(source_key, None)
+        # 如果之前被熔断，现在恢复
+        if source_key in self._source_tripped:
+            del self._source_tripped[source_key]
+            logger.info(f"🟢 [恢复] {source_key} 已恢复正常")
+
+    def _circuit_reset(self, source_key: str):
+        """手动重置熔断器（用户点击重连按钮时调用）"""
+        self._source_failures.pop(source_key, None)
+        self._source_tripped.pop(source_key, None)
+        logger.info(f"🔄 [重置] {source_key} 熔断器已重置")
+
+    def get_circuit_status(self) -> Dict[str, Any]:
+        """获取所有数据源的熔断状态"""
+        return {
+            'threshold': self.CIRCUIT_BREAKER_THRESHOLD,
+            'failures': dict(self._source_failures),
+            'tripped': {k: v for k, v in self._source_tripped.items()},
+        }
 
     def get_realtime_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """获取实时行情
@@ -70,6 +112,11 @@ class MarketDataService:
         
         # [FIX] 根据 source 决定是否走美股通道
         if source == 'IB':
+            # [V10.1] 熔断检查
+            if self._circuit_is_tripped('IB'):
+                logger.debug(f"🔴 IB 已熔断，跳过 {symbol}")
+                return None
+
             # 1. 尝试从 IB 获取
             if self.ib_reader and self.ib_reader.connected:
                 # 直接访问IBReader的prices字典
@@ -79,6 +126,7 @@ class MarketDataService:
                     bid = price_data.get('bid', 0) if isinstance(price_data, dict) else 0
                     ask = price_data.get('ask', 0) if isinstance(price_data, dict) else 0
                     if bid > 0:
+                        self._circuit_record_success('IB')
                         return {
                             'symbol': symbol,
                             'price': price_data.get('last', bid) if price_data.get('last', 0) > 0 else bid,
@@ -93,15 +141,21 @@ class MarketDataService:
                 logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
                 return None
             elif self.ib_reader and not self.ib_reader.connected:
+                self._circuit_record_failure('IB')
                 logger.debug(f"⚠️ IB未连接，美股ETF{symbol}尝试回退至富途")
             else:
                 logger.debug(f"⚠️ IB Reader未初始化，美股ETF{symbol}尝试回退至富途")
             
             # 2. [NEW] IB 不可用时，兜底尝试富途
             if self.futu_reader:
+                # [V10.1] 熔断检查
+                if self._circuit_is_tripped('富途'):
+                    logger.debug(f"🔴 富途已熔断，跳过兜底 {symbol}")
+                    return None
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
                     if success and symbol in prices:
+                        self._circuit_record_success('富途')
                         quote = prices[symbol]
                         bid = quote.get('bid', 0)
                         ask = quote.get('ask', 0)
@@ -115,6 +169,7 @@ class MarketDataService:
                             'source': '富途(兜底)'
                         }
                     else:
+                        self._circuit_record_failure('富途')
                         # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
                         now = time.time()
                         last_warn = self._futu_warn_cooldown.get(symbol, 0)
@@ -122,15 +177,21 @@ class MarketDataService:
                             logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
                             self._futu_warn_cooldown[symbol] = now
                 except Exception as e:
+                    self._circuit_record_failure('富途')
                     logger.error(f"⚠️ 富途兜底获取{symbol}异常: {e}")
             return None # [FIX] 无论如何，美股不能继续往下走A股引擎
                     
         elif source == 'FUTU':
+            # [V10.1] 熔断检查
+            if self._circuit_is_tripped('富途'):
+                logger.debug(f"🔴 富途已熔断，跳过 {symbol}")
+                return None
             # 直接走富途通道
             if self.futu_reader:
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
                     if success and symbol in prices:
+                        self._circuit_record_success('富途')
                         quote = prices[symbol]
                         bid = quote.get('bid', 0)
                         ask = quote.get('ask', 0)
@@ -144,6 +205,7 @@ class MarketDataService:
                             'source': '富途'
                         }
                     else:
+                        self._circuit_record_failure('富途')
                         # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
                         now = time.time()
                         last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
@@ -151,6 +213,7 @@ class MarketDataService:
                             logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
                             self._futu_warn_cooldown[f'futu_{symbol}'] = now
                 except Exception as e:
+                    self._circuit_record_failure('富途')
                     # [V10.1] 异常也加去重
                     now = time.time()
                     last_err = self._futu_warn_cooldown.get(f'futu_err_{symbol}', 0)
