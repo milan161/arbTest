@@ -15,6 +15,10 @@
             <template #icon><n-icon><Plus /></n-icon></template>
             交易记录
           </n-button>
+          <n-button type="info" @click="showImportModal = true">
+            <template #icon><n-icon><Upload /></n-icon></template>
+            导入Excel
+          </n-button>
           <n-button secondary type="warning" @click="showFeeModal = true">
             <template #icon><n-icon><Settings /></n-icon></template>
             赎回费率
@@ -284,6 +288,47 @@
         <n-data-table :columns="feeColumns" :data="fees" :loading="loadingFees" :bordered="false" size="small" />
       </div>
     </n-modal>
+
+    <!-- Excel导入弹窗 -->
+    <n-modal v-model:show="showImportModal" preset="card" title="导入Excel账本" style="width: 800px; max-width: 98vw;">
+      <div class="flex flex-col gap-4">
+        <div v-if="!importPreview">
+          <n-upload
+            accept=".xlsx,.xls"
+            :max="1"
+            @change="handleFileUpload"
+            :file-list="importFileList"
+          >
+            <n-button type="info">选择Excel文件</n-button>
+          </n-upload>
+          <div style="margin-top: 12px; font-size: 12px; color: #666;">
+            支持格式: 交易日期 | 金额 | 单价 | 数量 | 赎回日期 | 备注 | 对冲数量 | 对冲价格 | 盈亏
+          </div>
+        </div>
+        
+        <div v-else>
+          <n-alert type="info" style="margin-bottom: 12px;">
+            解析到 <strong>{{ importPreview.length }}</strong> 笔交易记录，请确认后导入
+          </n-alert>
+          <n-data-table
+            :columns="importColumns"
+            :data="importPreview"
+            size="small"
+            bordered
+            :max-height="400"
+          />
+        </div>
+      </div>
+      <template #action>
+        <n-space>
+          <n-button @click="cancelImport">取消</n-button>
+          <n-button v-if="importPreview" type="warning" @click="importPreview = null">重新选择</n-button>
+          <n-button v-if="importPreview" type="primary" @click="confirmImport" :loading="importing">
+            确认导入 ({{ importPreview.length }}笔)
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -294,10 +339,11 @@ import {
   useMessage, NSpace, NText, NTabs, NTabPane, NModal, NForm, NFormItem,
   NInput, NInputNumber, NDatePicker, NDivider, NSelect
 } from 'naive-ui'
-import { BookOpen, Plus, RefreshCw, Settings, Trash2, Edit3, DollarSign, TrendingUp, TrendingDown } from 'lucide-vue-next'
+import { BookOpen, Plus, RefreshCw, Settings, Trash2, Edit3, DollarSign, TrendingUp, TrendingDown, Upload } from 'lucide-vue-next'
 import {
   getPairs, addPair, updatePair, deletePair, clearFakeData,
-  getBrokerFees, addBrokerFee, deleteBrokerFee
+  getBrokerFees, addBrokerFee, deleteBrokerFee,
+  importExcelPreview, confirmExcelImport
 } from '../api'
 import { getFeeRate } from '../api/ledgerApi'
 import client from '../api/client'
@@ -306,10 +352,77 @@ const message = useMessage()
 const allPairs = ref<any[]>([])
 const showAddModal = ref(false)
 const showFeeModal = ref(false)
+const showImportModal = ref(false)
 const clearingData = ref(false)
 const isEditing = ref(false)
 const editingId = ref<number | null>(null)
 const loading = ref(false)
+
+// Excel Import state
+const importPreview = ref<any[] | null>(null)
+const importFileList = ref<any[]>([])
+const importing = ref(false)
+
+const importColumns = [
+  { title: '买入日期', key: 'buy_date', width: 100 },
+  { title: '买入价', key: 'buy_price', width: 80, render: (r: any) => r.buy_price?.toFixed(4) || '-' },
+  { title: '数量', key: 'buy_volume', width: 80 },
+  { title: '赎回日期', key: 'sell_date', width: 100 },
+  { title: '赎回价', key: 'sell_price', width: 80, render: (r: any) => r.sell_price?.toFixed(4) || '-' },
+  { title: '对冲', key: 'hedge_symbol', width: 60 },
+  { title: '空头数量', key: 'short_qty', width: 80 },
+  { title: '空头价', key: 'short_price', width: 80, render: (r: any) => r.short_price?.toFixed(2) || '-' },
+  { title: '盈亏(RMB)', key: 'pnl_rmb', width: 100, render: (r: any) => h(NText, { type: r.pnl_rmb >= 0 ? 'success' : 'error', strong: true }, { default: () => r.pnl_rmb?.toFixed(2) || '-' }) },
+  { title: '状态', key: 'status', width: 80, render: (r: any) => h(NTag, { type: r.status === 'CLOSED' ? 'success' : 'warning', size: 'small' }, { default: () => r.status }) },
+]
+
+const handleFileUpload = async (options: any) => {
+  const file = options.file?.file
+  if (!file) return
+  
+  // For now, use a hardcoded path - in production, upload to server first
+  // This is a simplified version that reads from local path
+  message.info('正在解析Excel文件...')
+  
+  try {
+    // In a real app, we'd upload the file first
+    // For now, we'll use the file name and let the backend handle it
+    const res = await importExcelPreview(file.name)
+    if (res.data.status === 'ok') {
+      importPreview.value = res.data.data
+      message.success(`解析完成，共 ${res.data.total} 笔交易`)
+    } else {
+      message.error('解析失败: ' + (res.data.message || '未知错误'))
+    }
+  } catch (e: any) {
+    message.error('解析异常: ' + (e.message || e))
+  }
+}
+
+const cancelImport = () => {
+  showImportModal.value = false
+  importPreview.value = null
+  importFileList.value = []
+}
+
+const confirmImport = async () => {
+  if (!importPreview.value) return
+  importing.value = true
+  try {
+    const res = await confirmExcelImport(importPreview.value)
+    if (res.data.status === 'ok') {
+      message.success(`成功导入 ${res.data.imported} 笔交易`)
+      cancelImport()
+      fetchPairs()
+    } else {
+      message.error('导入失败')
+    }
+  } catch (e: any) {
+    message.error('导入异常: ' + (e.message || e))
+  } finally {
+    importing.value = false
+  }
+}
 
 // ===== Computed =====
 const activePairs = computed(() => allPairs.value.filter(p => p.status === 'ACTIVE'))

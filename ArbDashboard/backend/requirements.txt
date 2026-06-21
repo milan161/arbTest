@@ -10,3 +10,5 @@ flask  # For compatibility if needed
 requests
 pyyaml
 paramiko
+chinese-calendar
+openpyxl

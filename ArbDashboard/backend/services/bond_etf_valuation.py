@@ -30,6 +30,42 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+# Manual BP overrides (in-memory, resets on restart)
+# Structure: {code: {"bp_7y": float, "bp_10y": float, "date": str}}
+_manual_bp_overrides: Dict[str, Dict[str, Any]] = {}
+
+
+def set_manual_bp(code: str, bp_7y: float, bp_10y: float):
+    """Store manual BP override for a fund"""
+    from datetime import date
+    _manual_bp_overrides[code] = {
+        "bp_7y": bp_7y,
+        "bp_10y": bp_10y,
+        "date": date.today().isoformat(),
+    }
+    logger.info("[BondETF] Manual BP set for %s: 7Y=%s, 10Y=%s", code, bp_7y, bp_10y)
+
+
+def get_manual_bp(code: str) -> Optional[Dict[str, Any]]:
+    """Get manual BP override for a fund (returns None if not set or expired)"""
+    from datetime import date
+    override = _manual_bp_overrides.get(code)
+    if not override:
+        return None
+    today = date.today().isoformat()
+    if override.get("date") != today:
+        # Expired (different day)
+        _manual_bp_overrides.pop(code, None)
+        return None
+    return override
+
+
+def clear_manual_bp(code: str):
+    """Clear manual BP override for a fund"""
+    _manual_bp_overrides.pop(code, None)
+    logger.info("[BondETF] Manual BP cleared for %s", code)
+
+
 # ── 基金元信息 ──
 BOND_ETF_META = {
     '511880': {
@@ -701,22 +737,34 @@ class BondETFValuation:
 
         # ══ 511520: 日均票息 + T2609期货方向修正 ══
         if code == '511520':
-            daily_coupon = meta.get('daily_coupon', 0.0082)
+            daily_coupon = meta.get('daily_coupon', 0.02)
 
-            # 获取国债期货T2609数据 (15:15收盘, 比指数更及时)
-            futures_data = self._get_treasury_futures_data()
+            # Check manual BP override first (from Choice terminal input)
+            manual_bp = get_manual_bp(code)
             futures_adj = 0.0
-            if futures_data:
-                result['futures_pct'] = futures_data.get('pct_change')
-                # 511520只用T2609(10年期), 不与TF2609取平均
-                t_pct = futures_data.get('pct_change', 0)
-                # T2609涨跌幅% → 511520 NAV变化量
-                # 回测最优值为1.0: T2609涨1%, 511520约涨1%
-                # 公式: latest_nav × t_pct% × coefficient
-                futures_adj = latest_nav * t_pct / 100 * 1.0
-                result['futures_coefficient'] = 1.0
+            if manual_bp:
+                # Manual override: convert BP to NAV adjustment
+                # 10Y BP change: 1bp = 0.01% of NAV
+                bp_10y = manual_bp.get('bp_10y', 0)
+                futures_adj = latest_nav * (bp_10y / 10000)
+                result['bp_source'] = 'manual'
+                result['bp_7y'] = manual_bp.get('bp_7y', 0)
+                result['bp_10y'] = bp_10y
+                logger.info("[511520] Using manual BP: 7Y=%s, 10Y=%s, adj=%.4f",
+                           manual_bp.get('bp_7y', 0), bp_10y, futures_adj)
+            else:
+                # Auto: use T2609 futures data
+                futures_data = self._get_treasury_futures_data()
+                if futures_data:
+                    result['futures_pct'] = futures_data.get('pct_change')
+                    t_pct = futures_data.get('pct_change', 0)
+                    futures_adj = latest_nav * t_pct / 100 * 1.0
+                    result['futures_coefficient'] = 1.0
+                    result['bp_source'] = 'futures'
+                else:
+                    result['bp_source'] = 'none'
 
-            # 公式: 最新净值 + 日均票息 + 期货方向修正
+            # Formula: latest_nav + daily_coupon + futures_adj
             estimated = latest_nav + daily_coupon + futures_adj
             result['daily_coupon'] = daily_coupon
             result['futures_adjustment'] = futures_adj

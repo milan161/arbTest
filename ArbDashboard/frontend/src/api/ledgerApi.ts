@@ -82,3 +82,15 @@ export function getFeeRate(fundCode: string, broker: string = '') {
   return client.get('/api/ledger/fee-rate', { params: { fund_code: fundCode, broker } })
 }
 
+// ===== Excel Import =====
+
+/** 解析Excel文件返回预览数据 */
+export function importExcelPreview(filePath: string) {
+  return client.post('/api/ledger/import-excel', { file_path: filePath })
+}
+
+/** 确认导入Excel数据 */
+export function confirmExcelImport(pairs: Record<string, any>[]) {
+  return client.post('/api/ledger/import-excel/confirm', { pairs })
+}
+

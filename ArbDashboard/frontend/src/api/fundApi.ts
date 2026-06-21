@@ -50,3 +50,38 @@ export function getHistoricalNav(code: string, startDate?: string) {
 export function getHistoricalPrice(code: string, startDate?: string) {
   return client.get(`/api/market/historical/price/${code}`, { params: { start_date: startDate } })
 }
+
+/** 幽灵做市商实时计算 */
+export function getGhostCalc(fundCode: string) {
+  return client.get('/api/private/ghost_calc', { params: { fund_code: fundCode } })
+}
+
+/** 幽灵做市商下单 */
+export function postGhostPlaceOrder(mode: string, fundCode: string) {
+  return client.post('/api/private/ghost_place_order', { mode, fund_code: fundCode })
+}
+
+/** 幽灵模拟器 - 获取状态 */
+export function getGhostSimStatus() {
+  return client.get('/api/private/ghost_simulate/status')
+}
+
+/** 幽灵模拟器 - 控制(start/stop/reset/force_signal) */
+export function postGhostSimControl(action: string, extras?: Record<string, any>) {
+  return client.post('/api/private/ghost_simulate/control', { action, ...extras })
+}
+
+/** 债券ETF - 设置手动BP覆盖 */
+export function postBpOverride(code: string, bp7y: number, bp10y: number) {
+  return client.post('/api/bond/bp-override', { code, bp_7y: bp7y, bp_10y: bp10y })
+}
+
+/** 债券ETF - 获取今日BP覆盖 */
+export function getBpOverride(code: string) {
+  return client.get('/api/bond/bp-override', { params: { code } })
+}
+
+/** 债券ETF - 清除BP覆盖 */
+export function clearBpOverride(code: string) {
+  return client.post('/api/bond/bp-override/clear', { code })
+}
