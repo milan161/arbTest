@@ -165,6 +165,7 @@ _sse_reader.start()
 # [V10.2] 指数涨跌幅日内缓存：同指数同日只查一次新浪
 _index_pct_cache = {}  # "HSCEI_2026-06-18" -> float
 
+_index_pct_cache_time = {}
 def get_index_change_percent(symbol: str) -> float:
     """
     [新浪/腾讯指数极速接口] 直接拉取指数日内涨跌幅百分比
@@ -184,6 +185,13 @@ def get_index_change_percent(symbol: str) -> float:
     if clean_sym.endswith('.CSI'):
         clean_sym = clean_sym[:-4]
     
+    global _index_pct_cache, _index_pct_cache_time
+    import time
+    cache_key = clean_sym
+    now_ts = time.time()
+    if cache_key in _index_pct_cache_time and now_ts - _index_pct_cache_time[cache_key] < 60 and cache_key in _index_pct_cache:
+        return _index_pct_cache[cache_key]
+
     result = 0.0
     try:
         # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
@@ -239,17 +247,27 @@ def get_index_change_percent(symbol: str) -> float:
     # 写入日内缓存
     if result != 0.0:
         _index_pct_cache[cache_key] = result
+        _index_pct_cache_time[cache_key] = time.time()
     return result
+
+_prefetch_cache = {}
+_prefetch_cache_time = 0
 
 def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
     """
     [V6.0 性能优化] 批量预取新浪/腾讯指数数据，将 O(N) 降低为 O(1)
     返回 { "399300": {"price": 4000.0, "pct": 1.63}, ... }
     """
+    global _prefetch_cache, _prefetch_cache_time
+    import time
+    if time.time() - _prefetch_cache_time < 60 and _prefetch_cache:
+        return _prefetch_cache
     if not symbols:
         return {}
+    from arbcore.utils import is_a_share_trading_day
     now = datetime.now()
-    if now.weekday() >= 5:
+    # [V10.4] A 股休市日（含法定节假日）不拉取指数行情
+    if not is_a_share_trading_day(now.date()):
         return {}
     # [V10.2] 非交易时段直接返回空（A股09:15-15:00，港股09:30-16:00，收盘后指数不变）
     hour = now.hour
@@ -384,6 +402,8 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
         except Exception as e:
             logger.warning(f"预取腾讯指数兜底异常: {e}")
             
+    _prefetch_cache = res
+    _prefetch_cache_time = time.time()
     return res
 
 class FundService:
@@ -585,10 +605,11 @@ class FundService:
                                 ti_data = bv._get_treasury_index_data()
                                 if ti_data:
                                     metrics['treasury_index_price'] = ti_data.get('price')
-                            # 511520: 国开债ETF(159649) + 期货
+                            # 511520: 日均票息 + T2609期货方向
                             if code == '511520':
-                                metrics['cdb_etf_pct'] = val.get('cdb_etf_pct')
+                                metrics['daily_coupon'] = val.get('daily_coupon')
                                 metrics['futures_pct'] = val.get('futures_pct')
+                                metrics['futures_coefficient'] = val.get('futures_coefficient')
                             # 用预估净值作为静态估值（因为没有数据库历史记录）
                             metrics['static_val'] = round(est_nav, 4)
                             # 用最新实际净值作为昨收价（用于涨跌幅计算）
@@ -965,6 +986,9 @@ class FundService:
                         
                         # 511360 周一计提周末两天利息，需要日均增长做基数
                         avg_growth_511360 = bv.calc_avg_daily_growth(fund_code, days=20)
+                        # 连续公式参数: 底仓票息 + 国债指数敏感度
+                        daily_coupon_511360 = BOND_ETF_META.get('511360', {}).get('daily_coupon', 0.003)
+                        idx_coeff_511360 = BOND_ETF_META.get('511360', {}).get('idx_coefficient', 0.07)
 
                         from datetime import datetime as _dt
                         df_sorted = df.sort_values('date', ascending=True).reset_index(drop=True)
@@ -973,6 +997,11 @@ class FundService:
                                 df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = df_sorted.iloc[i]['nav']
                             else:
                                 prev_nav = df_sorted.iloc[i - 1]['nav']
+                                # 跳过前一日净值缺失的行
+                                if prev_nav is None or pd.isna(prev_nav) or prev_nav <= 0:
+                                    df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = None
+                                    continue
+                                
                                 row_date = str(df_sorted.iloc[i]['date'])[:10]
                                 idx_pct = pct_map.get(row_date)
                                 
@@ -985,18 +1014,12 @@ class FundService:
                                 except:
                                     pass
 
+                                # 连续公式: prev_nav + 底仓票息 + 指数敏感度 × 涨跌幅 + 周末利息
                                 if idx_pct is not None:
-                                    if idx_pct > 0.1:
-                                        adj = 0.01
-                                    elif idx_pct > 0:
-                                        adj = 0.004
-                                    elif idx_pct > -0.1:
-                                        adj = 0.0
-                                    else:
-                                        adj = -0.01
-                                    estimated_nav = prev_nav + adj + weekend_bonus
+                                    idx_adj = idx_pct * idx_coeff_511360
+                                    estimated_nav = prev_nav + daily_coupon_511360 + idx_adj + weekend_bonus
                                 else:
-                                    estimated_nav = prev_nav + weekend_bonus
+                                    estimated_nav = prev_nav + daily_coupon_511360 + weekend_bonus
                                 
                                 df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = round(estimated_nav, 4)
                         
@@ -1016,6 +1039,12 @@ class FundService:
                                 if i == 0:
                                     df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = df_sorted.iloc[i]['nav']
                                 else:
+                                    prev_nav_gen = df_sorted.iloc[i-1]['nav']
+                                    # 跳过前一日净值缺失的行
+                                    if prev_nav_gen is None or pd.isna(prev_nav_gen) or prev_nav_gen <= 0:
+                                        df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = None
+                                        continue
+                                    
                                     try:
                                         row_dt = _dt.strptime(str(df_sorted.iloc[i]['date'])[:10], '%Y-%m-%d')
                                     except (ValueError, TypeError):
@@ -1028,7 +1057,7 @@ class FundService:
                                         elif weekend_on == 'monday' and row_dt.weekday() == 0:
                                             daily_gain = avg_growth * 3
                                     
-                                    estimated_nav = df_sorted.iloc[i-1]['nav'] + daily_gain
+                                    estimated_nav = prev_nav_gen + daily_gain
                                     df_sorted.iloc[i, df_sorted.columns.get_loc('static_val')] = round(estimated_nav, 4)
                             
                             df = df_sorted.sort_values('date', ascending=False).reset_index(drop=True)
@@ -1126,13 +1155,27 @@ class FundService:
                         item['idx_close'] = idx_data['idx_close']
                         item['idx_pct'] = idx_data['idx_pct']
 
-                # [511520] 附加国债期货数据
+                # [511520] 附加国债期货数据 + 回测预估净值
                 if fund_code == '511520':
                     row_date = str(item.get('date', ''))[:10]
                     fut_data = futures_map.get(row_date)
                     if fut_data:
                         item['futures_close'] = fut_data['futures_close']
                         item['futures_pct'] = fut_data['futures_pct']
+
+                    # 回测: 用前一日NAV + 日均票息 + T2609方向修正 → 预估今日NAV
+                    # 需要data_list已至少有一行（前一日数据）
+                    daily_coupon = BOND_ETF_META.get('511520', {}).get('daily_coupon', 0.0082)
+                    t_pct = fut_data.get('futures_pct') if fut_data else None
+                    if len(data_list) > 0 and t_pct is not None:
+                        prev_item = data_list[-1]
+                        prev_nav = prev_item.get('nav')
+                        if prev_nav and prev_nav > 0:
+                            # 预估 = 前日NAV + 日均票息 + 前日NAV × T2609涨幅% × 系数1.0
+                            estimated_nav = prev_nav + daily_coupon + prev_nav * t_pct / 100 * 1.0
+                            item['estimated_nav'] = round(estimated_nav, 4)
+                            item['estimation_error'] = round(estimated_nav - item.get('nav', 0), 4) if item.get('nav') else None
+                            item['estimation_error_pct'] = round(abs(estimated_nav - item.get('nav', 0)) / item.get('nav', 1) * 100, 4) if item.get('nav') and item.get('nav', 0) > 0 else None
 
                 data_list.append(item)
 
@@ -1276,6 +1319,8 @@ class FundService:
                             'price': q.get('price'),
                             'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
                             'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                            'bid_size': q.get('bid_size', 0),
+                            'ask_size': q.get('ask_size', 0),
                             'source': q.get('source', '')
                         }
                     else:
@@ -1459,6 +1504,9 @@ class FundService:
         """
         [V6.0] 获取"我的自选"基金列表
         优先从fund_watchlist表读取，如果为空则返回所有基金（兼容旧版本）
+
+        注意：用户的自选基金主要存在于浏览器 localStorage，由前端通过 URL 参数传入后端。
+        本函数供后台 snapshot 服务使用（backup 路径），fund_watchlist 表为空属于正常情况。
         """
         conn = self.db._get_conn()
         try:
@@ -1467,13 +1515,15 @@ class FundService:
             watchlist = [row[0] for row in cursor.fetchall()]
             
             # 如果自选表为空，返回所有基金（兼容旧版本，全部采样）
+            # [V10.3] 降级为 DEBUG：fund_watchlist 表空是正常状态（用户自选在 localStorage），
+            #          不应每3秒打 INFO 日志刷屏
             if not watchlist:
-                logger.info("ℹ️ 自选列表为空，采样服务将处理所有基金（兼容模式）")
+                logger.debug("[Snapshot] fund_watchlist 表为空，采样服务兼容模式：处理所有基金")
                 all_funds_cursor = conn.execute("SELECT fund_code FROM unified_fund_list ORDER BY fund_code")
                 watchlist = [row[0] for row in all_funds_cursor.fetchall()]
                 return watchlist
             
-            logger.info(f"✅ 采样服务使用自选列表: {len(watchlist)} 只基金")
+            logger.debug(f"[Snapshot] 采样服务使用数据库自选列表: {len(watchlist)} 只基金")
             return watchlist
         finally:
             conn.close()

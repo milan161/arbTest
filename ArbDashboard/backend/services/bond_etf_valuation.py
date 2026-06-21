@@ -41,11 +41,14 @@ BOND_ETF_META = {
         'name': '短融ETF海富通',
         'type': 'short_bond',
         'weekend_on': 'monday',       # 周末体现在周一
+        'daily_coupon': 0.003,        # 底仓票息: 短融年化~1.2%, 每天~0.003元
+        'idx_coefficient': 0.07,      # 国债指数敏感度: 000012每涨1%, NAV多涨0.007
     },
     '511520': {
         'name': '政金债ETF富国',
         'type': 'mid_bond',
-        'weekend_on': None,
+        'weekend_on': 'monday',       # 周末体现在周一（同511360）
+        'daily_coupon': 0.02,         # 日均票息: 7-10年国开债年化~2.5%, 每天~0.02元
     },
 }
 
@@ -62,6 +65,100 @@ class BondETFValuation:
         self._growth_cache: Dict[str, tuple] = {}
         self._idx_cache: Dict[str, tuple] = {}
         self._cache_lock = threading.Lock()
+        self._init_bp_table()
+
+    def _init_bp_table(self):
+        """初始化国开债BP数据表"""
+        if not self.db:
+            return
+        try:
+            conn = self.db._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cdb_yield_bp (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    cdb_7y_bp REAL,
+                    cdb_10y_bp REAL,
+                    treasury_7y_bp REAL,
+                    treasury_10y_bp REAL,
+                    note TEXT,
+                    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                    UNIQUE(date)
+                )
+            """)
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[BondETF] 初始化BP数据表失败: {e}")
+
+    def save_bp_data(self, date: str, cdb_7y_bp: float = None, cdb_10y_bp: float = None,
+                     treasury_7y_bp: float = None, treasury_10y_bp: float = None,
+                     note: str = None) -> bool:
+        """保存国开债BP数据（手动输入）"""
+        if not self.db:
+            return False
+        try:
+            conn = self.db._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO cdb_yield_bp 
+                (date, cdb_7y_bp, cdb_10y_bp, treasury_7y_bp, treasury_10y_bp, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (date, cdb_7y_bp, cdb_10y_bp, treasury_7y_bp, treasury_10y_bp, note))
+            conn.commit()
+            logger.info(f"[BondETF] 保存BP数据: {date} 国开7Y={cdb_7y_bp}BP 国开10Y={cdb_10y_bp}BP")
+            return True
+        except Exception as e:
+            logger.error(f"[BondETF] 保存BP数据失败: {e}")
+            return False
+
+    def get_bp_data(self, date: str) -> Optional[Dict]:
+        """获取指定日期的BP数据"""
+        if not self.db:
+            return None
+        try:
+            conn = self.db._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT date, cdb_7y_bp, cdb_10y_bp, treasury_7y_bp, treasury_10y_bp, note
+                FROM cdb_yield_bp WHERE date = ?
+            """, (date,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'date': row[0],
+                    'cdb_7y_bp': row[1],
+                    'cdb_10y_bp': row[2],
+                    'treasury_7y_bp': row[3],
+                    'treasury_10y_bp': row[4],
+                    'note': row[5],
+                }
+        except Exception as e:
+            logger.error(f"[BondETF] 获取BP数据失败: {e}")
+        return None
+
+    def get_recent_bp_data(self, days: int = 10) -> List[Dict]:
+        """获取最近N天的BP数据"""
+        if not self.db:
+            return []
+        try:
+            conn = self.db._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT date, cdb_7y_bp, cdb_10y_bp, treasury_7y_bp, treasury_10y_bp, note
+                FROM cdb_yield_bp ORDER BY date DESC LIMIT ?
+            """, (days,))
+            rows = cursor.fetchall()
+            return [
+                {
+                    'date': r[0], 'cdb_7y_bp': r[1], 'cdb_10y_bp': r[2],
+                    'treasury_7y_bp': r[3], 'treasury_10y_bp': r[4], 'note': r[5]
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"[BondETF] 获取BP历史失败: {e}")
+        return []
 
     # ══════════════════════════════════════════
     # 1. NAV 历史获取
@@ -285,7 +382,7 @@ class BondETFValuation:
         
         返回: [{'date': '2026-05-06', 'open': 227.09, 'close': 226.93, 'high': 227.09, 'low': 226.91, 'volume': 43717250}]
         """
-        url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000012,day,,,30,qfq"
+        url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000012,day,,,{days},qfq"
         try:
             resp = requests.get(url, timeout=5, proxies={"http": None, "https": None})
             if resp.status_code != 200:
@@ -320,36 +417,6 @@ class BondETFValuation:
         """获取国债指数涨跌幅(%)"""
         data = self._get_treasury_index_data()
         return data.get('pct_change') if data else None
-
-    # ══════════════════════════════════════════
-    # 3.4.1 国开债ETF 159649 获取（腾讯接口）
-    # ══════════════════════════════════════════
-    def _get_cdb_etf_pct(self) -> Optional[float]:
-        """
-        获取国开债ETF 159649 涨跌幅(%)
-        用于511520估值基准，比000012国债指数更匹配
-        """
-        cache_key = 'cdb_etf_159649'
-        with self._cache_lock:
-            cached = self._idx_cache.get(cache_key)
-            if cached and (time.time() - cached[1]) < 60:  # 缓存60秒
-                return cached[0]
-
-        try:
-            url = "http://qt.gtimg.cn/q=sz159649"
-            resp = requests.get(url, timeout=5, proxies={"http": None, "https": None})
-            if resp.status_code != 200:
-                return None
-
-            parts = resp.text.split('~')
-            if len(parts) > 32:
-                pct = float(parts[32])  # 涨跌幅
-                with self._cache_lock:
-                    self._idx_cache[cache_key] = (pct, time.time())
-                return pct
-        except Exception as e:
-            logger.debug(f"[BondETF] 获取159649失败: {e}")
-        return None
 
     # ══════════════════════════════════════════
     # 3.5 国债期货 T2609 获取（新浪接口）
@@ -608,54 +675,53 @@ class BondETFValuation:
         # 始终用算法计算预估值（即使今天净值已公布）
         today = datetime.now().strftime('%Y-%m-%d')
 
-        # ══ 511360: 国债指数跟踪法 ══
+        # ══ 511360: 日均票息 + 国债指数连续公式 ══
+        # 公式: estimated = prev_nav + daily_coupon + idx_pct × idx_coefficient
         if code == '511360':
+            daily_coupon = meta.get('daily_coupon', 0.003)
+            idx_coeff = meta.get('idx_coefficient', 0.07)
             idx_pct = self._get_treasury_pct()
             result['treasury_index_pct'] = idx_pct
 
             if idx_pct is None:
-                result['estimated_nav'] = latest_nav
-                result['method'] = 'latest_only_no_index'
+                result['estimated_nav'] = latest_nav + daily_coupon
+                result['daily_coupon'] = daily_coupon
+                result['method'] = 'coupon_only_no_index'
                 return result
 
-            idx_adj = self._get_index_adjustment(code, idx_pct)
+            # 连续公式: 底仓票息 + 指数敏感度 × 涨跌幅
+            idx_adj = round(idx_pct * idx_coeff, 4)
             result['index_adjustment'] = idx_adj
-            estimated = latest_nav + idx_adj
+            result['daily_coupon'] = daily_coupon
+            result['idx_coefficient'] = idx_coeff
+            estimated = latest_nav + daily_coupon + idx_adj
             result['estimated_nav'] = round(estimated, 4)
+            result['method'] = 'coupon+treasury_linear'
             return result
 
-        # ══ 511520: 国开债ETF(159649) + 期货修正 ══
+        # ══ 511520: 日均票息 + T2609期货方向修正 ══
         if code == '511520':
-            # 获取国开债ETF 159649涨跌幅 (比000012国债指数更匹配)
-            cdb_pct = self._get_cdb_etf_pct()
-            result['cdb_etf_pct'] = cdb_pct
+            daily_coupon = meta.get('daily_coupon', 0.0082)
 
-            # 获取国债期货数据 (更及时, 15:15收盘)
+            # 获取国债期货T2609数据 (15:15收盘, 比指数更及时)
             futures_data = self._get_treasury_futures_data()
             futures_adj = 0.0
             if futures_data:
                 result['futures_pct'] = futures_data.get('pct_change')
-                result['tf_pct'] = futures_data.get('tf_pct')
-                futures_adj = self._get_futures_adjustment(code, futures_data)
+                # 511520只用T2609(10年期), 不与TF2609取平均
+                t_pct = futures_data.get('pct_change', 0)
+                # T2609涨跌幅% → 511520 NAV变化量
+                # 回测最优值为1.0: T2609涨1%, 511520约涨1%
+                # 公式: latest_nav × t_pct% × coefficient
+                futures_adj = latest_nav * t_pct / 100 * 1.0
+                result['futures_coefficient'] = 1.0
 
-            # 如果两个数据源都没有，返回最新净值
-            if cdb_pct is None and futures_data is None:
-                result['estimated_nav'] = latest_nav
-                result['method'] = 'latest_only_no_data'
-                return result
-
-            # 方案C: 159649涨跌幅 + 期货离散修正
-            # estimated = latest_nav * (1 + cdb_pct/100) + futures_adj
-            if cdb_pct is not None:
-                estimated = latest_nav * (1 + cdb_pct / 100) + futures_adj
-                result['method'] = 'cdb_etf_159649+期货'
-            else:
-                # 159649数据缺失，只用期货
-                estimated = latest_nav + futures_adj
-                result['method'] = 'futures_only'
-
+            # 公式: 最新净值 + 日均票息 + 期货方向修正
+            estimated = latest_nav + daily_coupon + futures_adj
+            result['daily_coupon'] = daily_coupon
             result['futures_adjustment'] = futures_adj
             result['estimated_nav'] = round(estimated, 4)
+            result['method'] = 'coupon+futures_T2609'
             return result
 
         # ══ 511880/其他: 日均增长法 ══
