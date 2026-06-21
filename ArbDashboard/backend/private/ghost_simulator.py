@@ -207,12 +207,13 @@ class GhostSimulator:
         us_bid_size = random.randint(10, 50)
 
         # Premium calculation (same formula as ghost_calc main.py)
-        # val = base_nav * (1 - pos) + pos * (us_price * fx) / hedge
-        val_safe = self.base_nav * (1 - self.position) + self.position * (us_bid * self.fx_rate) / self.hedge if self.fx_rate > 0 and self.hedge > 0 else 0
+        # Correct formula: val = base_nav * (1 - pos) + (us_price * fx) / hedge
+        # 注意: 第二项不乘pos
+        val_safe = self.base_nav * (1 - self.position) + (us_bid * self.fx_rate) / self.hedge if self.fx_rate > 0 and self.hedge > 0 else 0
         premium_safe = (lof_bid / val_safe - 1) * 100 if val_safe > 0 else 0
 
         peg_price = us_ask - 0.01 if us_ask > 0.01 else us_ask
-        val_peg = self.base_nav * (1 - self.position) + self.position * (peg_price * self.fx_rate) / self.hedge if self.fx_rate > 0 and self.hedge > 0 else 0
+        val_peg = self.base_nav * (1 - self.position) + (peg_price * self.fx_rate) / self.hedge if self.fx_rate > 0 and self.hedge > 0 else 0
         premium_peg = (lof_bid / val_peg - 1) * 100 if val_peg > 0 else 0
 
         net_profit_safe = abs(premium_safe) - self.redemption_fee

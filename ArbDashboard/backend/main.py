@@ -982,17 +982,17 @@ async def ghost_calc(fund_code: str = "162411"):
         position = float(fund_cfg.get("position", 95.0)) / 100.0 if fund_cfg else 0.95
 
         # 5. Ghost 特有溢价计算（safe 砸单 / peg 内卷）
-        # 正确公式: val = base_nav * (1 - pos) + pos * (us_price * fx) / hedge
+        # 正确公式: val = base_nav * (1 - pos) + (us_price * fx) / hedge  (注意: 第二项不乘pos)
         base_nav = float(base_data.get("nav", 0)) if base_data else 0
         if base_nav > 0 and hedge > 0:
-            val_safe = base_nav * (1 - position) + position * (us_bid * latest_fx) / hedge
+            val_safe = base_nav * (1 - position) + (us_bid * latest_fx) / hedge
         else:
             val_safe = 0
         premium_safe = (lof_bid / val_safe - 1) * 100 if val_safe > 0 else 0
 
         if base_nav > 0 and hedge > 0:
             peg_price = (us_ask - 0.01) if us_ask > 0.01 else us_ask
-            val_peg = base_nav * (1 - position) + position * (peg_price * latest_fx) / hedge
+            val_peg = base_nav * (1 - position) + (peg_price * latest_fx) / hedge
         else:
             val_peg = 0
         premium_peg = (lof_bid / val_peg - 1) * 100 if val_peg > 0 else 0
