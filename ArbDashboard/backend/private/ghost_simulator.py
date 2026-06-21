@@ -111,12 +111,17 @@ class GhostSimulator:
         us_ask = round(self.us_price + us_spread / 2, 2)
         us_bid_size = random.randint(10, 50)  # XOP low liquidity
 
-        # Premium calculation (same formula as ghost_calc main.py L974-979)
-        val_safe = (us_bid * self.fx_rate) / 100 if self.fx_rate > 0 else 0
+        # Premium calculation (same formula as ghost_calc main.py)
+        # Correct formula: val = base_nav * (1 - pos) + pos * (us_price * fx) / hedge
+        # For simulation, use typical 162411 values: base_nav=0.68, pos=0.95, hedge=1352
+        base_nav = 0.6850
+        position = 0.95
+        hedge = 1352.24
+        val_safe = base_nav * (1 - position) + position * (us_bid * self.fx_rate) / hedge if self.fx_rate > 0 else 0
         premium_safe = (lof_bid / val_safe - 1) * 100 if val_safe > 0 else 0
 
         peg_price = us_ask - 0.01 if us_ask > 0.01 else us_ask
-        val_peg = (peg_price * self.fx_rate) / 100 if self.fx_rate > 0 else 0
+        val_peg = base_nav * (1 - position) + position * (peg_price * self.fx_rate) / hedge if self.fx_rate > 0 else 0
         premium_peg = (lof_bid / val_peg - 1) * 100 if val_peg > 0 else 0
 
         net_profit_safe = abs(premium_safe) - self.redemption_fee
