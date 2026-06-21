@@ -273,57 +273,54 @@
       <!-- [现金管理] 隐藏整个区域：债券ETF不需要ETF实时估值/期货校准/纯期货估值 -->
       <div v-if="!isCashManagement" style="display: flex; flex-direction: column; gap: 8px; width: 100%; margin-bottom: 8px;">
          <!-- Panel 1: ETF实时估值 + 对冲数量（合并） -->
-         <div style="background: #f0f8ff; padding: 8px 14px; border-radius: 8px; border: 1px solid #bae6fd; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-            <div style="display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%;">
-               <!-- 左侧 -->
-               <div style="flex: 1; display: flex; align-items: center; flex-wrap: wrap;">
-                  <span style="font-size:15px; font-weight:bold; color:#0284c7; width: 185px;">ETF实时估值</span>
-                  <div v-for="(item, index) in uniqueValuationSymbols" :key="item.symbol" style="display: flex; align-items: center;">
-                     <span v-if="index === 0" style="color:#1565c0; font-size:14px; font-weight:bold; width: 60px; text-align: right; padding-right: 6px;">{{ item.symbol }}:</span>
-                     <span v-else style="color:#1565c0; font-size:14px; font-weight:bold; padding-right: 6px; padding-left: 12px;">{{ item.symbol }}:</span>
-                     <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center;" :data-sym="item.symbol">
-                  </div>
-               </div>
-               
-               <n-divider vertical style="margin: 0;" />
-               
-               <!-- 中间 估值 & 溢价 -->
-               <div style="width: 220px; display: flex; align-items: center; gap: 6px; justify-content: center;">
-                  <span style="color:#555; font-size:14px; font-weight:bold;">估值:</span>
-                  <span style="font-size: 18px; font-weight: bold; color: #1565c0; font-family: monospace; width: 65px; text-align: left;">{{ etfVal > 0 ? etfVal.toFixed(4) : '-' }}</span>
-                  <span style="color:#555; font-size:14px; font-weight:bold;">溢价:</span>
-                  <span :style="{ fontSize: '16px', fontWeight: 'bold', color: derivedEtfPremium > 0 ? '#d32f2f' : '#388e3c', fontFamily: 'monospace', width: '60px', textAlign: 'left' }">
-                     {{ etfVal > 0 && simLofPrice > 0 ? (derivedEtfPremium > 0 ? '+' : '') + derivedEtfPremium.toFixed(2) + '%' : '-' }}
-                  </span>
-               </div>
-               
-               <n-divider vertical style="margin: 0;" v-if="isComplexCategory" />
-               
-               <!-- 右侧 交易 -->
-               <div v-if="isComplexCategory" style="flex: 1.2; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
-                  <span style="font-size:13px; color:#333;">投入</span>
-                  <input type="number" v-model.number="targetCapitalEtf" step="1000" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; font-weight:bold; text-align:center; color:#d35400;">
-                  <span style="font-size:13px; color:#333;">元 买入LOF</span>
-                  <span style="font-size: 15px; color: #d32f2f; font-weight:bold; font-family: monospace;">{{ lofQtyEtf ? lofQtyEtf.lofQty : '-' }}</span>
-                  <span style="font-size:13px; color:#333;">股，做空 {{ meta?.fund_config?.trade_etf }}</span>
-                  <span style="font-size: 15px; color: #1565c0; font-weight:bold; font-family: monospace;">{{ lofQtyEtf ? lofQtyEtf.etfQty : '-' }}</span>
-                  <span style="font-size:13px; color:#333;">股</span>
-               </div>
-            </div>
-            <div v-if="isComplexCategory" style="display: flex; justify-content: center; gap: 24px; font-size:11px; color:#888; margin-top: 3px;">
-               <span>对冲值: <span style="color:#1565c0; font-family: monospace;">{{ (meta?.base_data?.hedge || 0).toFixed(4) }}</span></span>
-               <span>敞口: <span style="color:#e65100; font-family: monospace;">{{ lofQtyEtf ? lofQtyEtf.exposure.toFixed(2) : '-' }}元</span></span>
-               <span>锚点ETF: {{ lofQtyEtf ? lofQtyEtf.etfQty : '-' }}</span>
-            </div>
-            <!-- 一篮子详细拆解 -->
-            <div v-if="lofQtyEtf && lofQtyEtf.breakdown && lofQtyEtf.breakdown.length > 1" style="display: flex; justify-content: center; font-size: 11px; color: #1565c0; margin-top: 2px;">
-              <span>一篮子拆解: 
-                <span v-for="(item, idx) in lofQtyEtf.breakdown" :key="item.symbol" style="font-family: monospace; font-weight: bold;">
-                  {{ item.symbol }}={{ item.qty }}股<span v-if="idx < lofQtyEtf.breakdown.length - 1">, </span>
-                </span>
-              </span>
-            </div>
-         </div>
+          <div style="background: #f0f8ff; padding: 8px 14px; border-radius: 8px; border: 1px solid #bae6fd; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+             <!-- 2行3列网格，列宽与基准日估值日信息对齐：160px | 140px | flex -->
+             <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+                <!-- Row 1 -->
+                <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                   <div style="width: 160px; flex-shrink: 0;">
+                      <span style="font-size:15px; font-weight:bold; color:#0284c7;">ETF实时估值</span>
+                   </div>
+                   <div style="width: 140px; flex-shrink: 0; display: flex; align-items: center;">
+                      <div v-for="(item, index) in uniqueValuationSymbols" :key="item.symbol" style="display: flex; align-items: center;">
+                         <span v-if="index === 0" style="color:#1565c0; font-size:14px; font-weight:bold; width: 60px; text-align: right; padding-right: 6px;">{{ item.symbol }}价</span>
+                         <span v-else style="color:#1565c0; font-size:14px; font-weight:bold; padding-right: 6px; padding-left: 12px;">{{ item.symbol }}价</span>
+                         <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center;" :data-sym="item.symbol">
+                      </div>
+                   </div>
+                   <div v-if="isComplexCategory" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;">
+                      <span style="font-size:13px; color:#333; white-space: nowrap;">投入</span>
+                      <input type="number" v-model.number="targetCapitalEtf" step="1000" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; font-weight:bold; text-align:center; color:#d35400;">
+                      <span style="font-size:13px; color:#333; white-space: nowrap;">元 买入LOF</span>
+                      <span style="font-size: 15px; color: #d32f2f; font-weight:bold; font-family: monospace; white-space: nowrap;">{{ lofQtyEtf ? lofQtyEtf.lofQty : '-' }}</span>
+                      <span style="font-size:13px; color:#333; white-space: nowrap;">股，做空 {{ meta?.fund_config?.trade_etf }}</span>
+                      <span style="font-size: 15px; color: #1565c0; font-weight:bold; font-family: monospace; white-space: nowrap;">{{ lofQtyEtf ? lofQtyEtf.etfQty : '-' }}</span>
+                      <span style="font-size:13px; color:#333; white-space: nowrap;">股</span>
+                   </div>
+                </div>
+                <!-- Row 2 -->
+                <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                   <div style="width: 160px; flex-shrink: 0; display: flex; align-items: center; gap: 6px;">
+                      <span style="color:#555; font-size:14px; font-weight:bold; white-space: nowrap;">估值:</span>
+                      <span style="font-size: 18px; font-weight: bold; color: #1565c0; font-family: monospace;">{{ etfVal > 0 ? etfVal.toFixed(4) : '-' }}</span>
+                   </div>
+                   <div style="width: 140px; flex-shrink: 0; display: flex; align-items: center; gap: 6px;">
+                      <span style="color:#555; font-size:14px; font-weight:bold; white-space: nowrap; padding-left: 16px;">溢价:</span>
+                      <span :style="{ fontSize: '16px', fontWeight: 'bold', color: derivedEtfPremium > 0 ? '#d32f2f' : '#388e3c', fontFamily: 'monospace' }">
+                         {{ etfVal > 0 && simLofPrice > 0 ? (derivedEtfPremium > 0 ? '+' : '') + derivedEtfPremium.toFixed(2) + '%' : '-' }}
+                      </span>
+                   </div>
+                   <div v-if="isComplexCategory" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; flex-wrap: nowrap;">
+                      <span style="font-size:11px; color:#888; white-space: nowrap;">对冲值: <span style="color:#1565c0; font-family: monospace;">{{ (meta?.base_data?.hedge || 0).toFixed(4) }}</span></span>
+                      <span style="font-size:11px; color:#888; white-space: nowrap;">敞口: <span style="color:#e65100; font-family: monospace;">{{ lofQtyEtf ? lofQtyEtf.exposure.toFixed(2) : '-' }}元</span></span>
+                      <span v-if="lofQtyEtf && lofQtyEtf.breakdown && lofQtyEtf.breakdown.length > 0" style="font-size: 11px; color: #1565c0; white-space: nowrap;">
+                         一篮子拆解: 
+                         <span v-for="(item, idx) in lofQtyEtf.breakdown" :key="item.symbol" style="font-family: monospace; font-weight: bold;">{{ item.symbol }}={{ item.qty }}股<span v-if="idx < lofQtyEtf.breakdown.length - 1">, </span></span>
+                      </span>
+                   </div>
+                </div>
+             </div>
+          </div>
 
          <!-- Panel 2: 期货校准估值 + 对冲数量（合并） -->
          <div v-if="showFutCalib && isComplexCategory" style="background: #fffaf0; padding: 8px 14px; border-radius: 8px; border: 1px solid #fed7aa; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
@@ -536,6 +533,80 @@
          </n-card>
       </div>
 
+      <!-- [现金管理] 估值算法历史记录表 (替代分时曲线图) -->
+      <n-card v-if="isCashManagement && (fundCode === '511520' || fundCode === '511360') && historyBacktestData.length > 0" :title="fundCode === '511520' ? '估值算法回测 (预估 vs 实际)' : '历史记录'" :bordered="false" class="shadow-soft" style="margin-top: 12px;" size="small">
+         <template #header-extra>
+            <span v-if="fundCode === '511520'" style="font-size: 12px; color: #64748b;">公式: 前日NAV + 0.0082 + 前日NAV × T2609涨幅% × 1.0</span>
+         </template>
+         <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; font-family: monospace;">
+               <thead>
+                  <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0;">
+                     <th style="padding: 6px 8px; text-align: left;">日期</th>
+                     <th style="padding: 6px 8px; text-align: right;">净值涨幅</th>
+                     <th style="padding: 6px 8px; text-align: right;">收盘价</th>
+                     <template v-if="fundCode === '511520'">
+                        <th style="padding: 6px 8px; text-align: right;">T2609%</th>
+                        <th style="padding: 6px 8px; text-align: right;">预估NAV</th>
+                     </template>
+                     <th style="padding: 6px 8px; text-align: right;">实际NAV</th>
+                     <template v-if="fundCode === '511520'">
+                        <th style="padding: 6px 8px; text-align: right;">误差</th>
+                        <th style="padding: 6px 8px; text-align: right;">误差率</th>
+                     </template>
+                     <template v-if="fundCode === '511360'">
+                        <th style="padding: 6px 8px; text-align: right;">国债指数%</th>
+                     </template>
+                  </tr>
+               </thead>
+               <tbody>
+                  <tr v-for="(row, idx) in historyBacktestData" :key="idx" :style="{ background: row.estimation_error_pct != null && row.estimation_error_pct > 0.05 ? '#fef2f2' : 'transparent', borderBottom: '1px solid #f1f5f9' }">
+                     <td style="padding: 4px 8px;">{{ row.date ? row.date.substring(5) : '-' }}</td>
+                     <!-- 净值涨幅 = 今日NAV / 昨日NAV - 1 -->
+                     <td style="padding: 4px 8px; text-align: right;">
+                        <template v-if="row.nav && idx < historyBacktestData.length - 1 && historyBacktestData[idx + 1].nav">
+                           <span :style="{ color: (row.nav / historyBacktestData[idx + 1].nav - 1) > 0 ? '#d32f2f' : (row.nav / historyBacktestData[idx + 1].nav - 1) < 0 ? '#388e3c' : '#999', fontWeight: 'bold' }">
+                              {{ ((row.nav / historyBacktestData[idx + 1].nav - 1) * 100).toFixed(3) }}%
+                           </span>
+                        </template>
+                        <span v-else style="color: #999;">-</span>
+                     </td>
+                     <!-- 收盘价 -->
+                     <td style="padding: 4px 8px; text-align: right;">{{ row.price != null ? row.price.toFixed(3) : '-' }}</td>
+                     <!-- 511520 专属列 -->
+                     <template v-if="fundCode === '511520'">
+                        <td style="padding: 4px 8px; text-align: right;" :style="{ color: row.futures_pct != null ? (row.futures_pct > 0 ? '#d32f2f' : '#388e3c') : '#999' }">{{ row.futures_pct != null ? (row.futures_pct > 0 ? '+' : '') + row.futures_pct.toFixed(3) + '%' : '-' }}</td>
+                        <td style="padding: 4px 8px; text-align: right; font-weight: bold; color: #1565c0;">{{ row.estimated_nav != null ? row.estimated_nav.toFixed(4) : '-' }}</td>
+                     </template>
+                     <td style="padding: 4px 8px; text-align: right; font-weight: bold;">{{ row.nav != null ? row.nav.toFixed(4) : '-' }}</td>
+                     <!-- 511520 误差列 -->
+                     <template v-if="fundCode === '511520'">
+                        <td style="padding: 4px 8px; text-align: right;" :style="{ color: row.estimation_error != null ? (row.estimation_error > 0 ? '#388e3c' : '#d32f2f') : '#999' }">{{ row.estimation_error != null ? (row.estimation_error > 0 ? '+' : '') + row.estimation_error.toFixed(4) : '-' }}</td>
+                        <td style="padding: 4px 8px; text-align: right;">
+                           <n-tag v-if="row.estimation_error_pct != null" :type="row.estimation_error_pct <= 0.05 ? 'success' : row.estimation_error_pct <= 0.10 ? 'warning' : 'error'" size="tiny" round>
+                              {{ row.estimation_error_pct.toFixed(4) }}%
+                           </n-tag>
+                           <span v-else style="color: #999;">-</span>
+                        </td>
+                     </template>
+                     <!-- 511360 国债指数列 -->
+                     <template v-if="fundCode === '511360'">
+                        <td style="padding: 4px 8px; text-align: right;" :style="{ color: row.idx_pct != null ? (row.idx_pct > 0 ? '#d32f2f' : '#388e3c') : '#999' }">{{ row.idx_pct != null ? (row.idx_pct > 0 ? '+' : '') + row.idx_pct.toFixed(3) + '%' : '-' }}</td>
+                     </template>
+                  </tr>
+               </tbody>
+            </table>
+         </div>
+         <!-- 511520 回测统计 -->
+         <div v-if="fundCode === '511520'" style="margin-top: 8px; font-size: 11px; color: #64748b; display: flex; gap: 16px;">
+            <span>有效回测天数: {{ historyBacktestData.filter(r => r.estimation_error_pct != null).length }}</span>
+            <span>平均误差: {{ (historyBacktestData.filter(r => r.estimation_error_pct != null).reduce((s, r) => s + r.estimation_error_pct, 0) / Math.max(historyBacktestData.filter(r => r.estimation_error_pct != null).length, 1)).toFixed(4) }}%</span>
+            <span>最大误差: {{ Math.max(...historyBacktestData.filter(r => r.estimation_error_pct != null).map(r => r.estimation_error_pct), 0).toFixed(4) }}%</span>
+            <span>≤0.05%: {{ (historyBacktestData.filter(r => r.estimation_error_pct != null && r.estimation_error_pct <= 0.05).length / Math.max(historyBacktestData.filter(r => r.estimation_error_pct != null).length, 1) * 100).toFixed(1) }}%</span>
+            <span>≤0.10%: {{ (historyBacktestData.filter(r => r.estimation_error_pct != null && r.estimation_error_pct <= 0.10).length / Math.max(historyBacktestData.filter(r => r.estimation_error_pct != null).length, 1) * 100).toFixed(1) }}%</span>
+         </div>
+      </n-card>
+
       <!-- 第六行: 分时曲线图 (从中间移到下方) -->
       <!-- [现金管理] 隐藏：债券ETF无分时采样数据 -->
       <n-card v-if="!isCashManagement" title="分时对冲走势 (1分钟采样)" :bordered="false" class="shadow-soft" style="margin-top: 12px;" size="small">
@@ -579,6 +650,7 @@ const fundName = ref((route.query.name as string) || '')
 const opportunityData = ref<any[]>([])
 const intradayData = ref<any[]>([])
 const basketData = ref<any[]>([])
+const historyBacktestData = ref<any[]>([])
 const loading = ref(false)
 const selectedDate = ref(Date.now())
 const showFutCalib = ref(false)
@@ -588,7 +660,7 @@ const showPureFut = ref(false)
 const selectedCategories = ref<string[]>([])
 const premiumThreshold = ref(-0.5)
 const premiumUpperThreshold = ref(2.0)
-const showWatchlistOnly = ref(true) // 我的自选Tab（默认选中）
+const showWatchlistOnly = ref(false) // 我的自选Tab（默认关闭，选中分类时才不会过滤掉非自选基金）
 const watchlist = ref<string[]>(JSON.parse(localStorage.getItem('watchlist') || '[]')) // 自选基金列表
 
 // 分类映射：前端显示名称 → 数据库category值
@@ -824,21 +896,33 @@ const chartOption = computed(() => {
 })
 
 const uniqueValuationSymbols = computed(() => {
-  if (!meta.value?.fund_config?.valuation_portfolio) return []
-  const seen = new Set()
-  const result: any[] = []
-  for (const item of meta.value.fund_config.valuation_portfolio) {
-    if (!item.symbol) continue
-    const baseSym = item.symbol.replace(/^\^/, '').split('-')[0].toUpperCase()
-    if (!seen.has(baseSym)) {
-      seen.add(baseSym)
-      result.push({
-        symbol: baseSym,
-        currency: item.currency || 'USD'
-      })
+  // Priority 1: valuation_portfolio from basket weights
+  if (meta.value?.fund_config?.valuation_portfolio?.length > 0) {
+    const seen = new Set()
+    const result: any[] = []
+    for (const item of meta.value.fund_config.valuation_portfolio) {
+      if (!item.symbol) continue
+      const baseSym = item.symbol.replace(/^\^/, '').split('-')[0].toUpperCase()
+      if (!seen.has(baseSym)) {
+        seen.add(baseSym)
+        result.push({
+          symbol: baseSym,
+          currency: item.currency || 'USD'
+        })
+      }
     }
+    return result
   }
-  return result
+  // Priority 2: realtime_quotes keys (backend gave us prices for these)
+  const rqKeys = Object.keys(meta.value?.realtime_quotes || {})
+  if (rqKeys.length > 0) {
+    return rqKeys.map(sym => ({ symbol: sym.toUpperCase(), currency: 'USD' }))
+  }
+  // Priority 3: trade_etf single symbol
+  if (meta.value?.fund_config?.trade_etf) {
+    return [{ symbol: meta.value.fund_config.trade_etf.toUpperCase(), currency: 'USD' }]
+  }
+  return []
 })
 
 const positionRatio = computed(() => {
@@ -939,6 +1023,15 @@ const etfVal = computed(() => {
     const p = portfolio[0]
     const sym = p.symbol || ''
     const cleanSym = sym.replace(/^\^/, '').split('-')[0].toUpperCase()
+    const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
+    if (cPrice > 0) {
+      return baseNav * (1.0 - pos) + (cPrice * currentFx) / bHedge
+    }
+  }
+  
+  // basket为空时，用trade_etf兜底（如162411只有XOP，没有basket数据）
+  if (bHedge > 0 && portfolio.length === 0 && cfg.trade_etf) {
+    const cleanSym = cfg.trade_etf.replace(/^\^/, '').toUpperCase()
     const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
     if (cPrice > 0) {
       return baseNav * (1.0 - pos) + (cPrice * currentFx) / bHedge
@@ -1293,6 +1386,10 @@ const fetchHistoryMeta = async () => {
             const latest = res.data.data[0]
             navDate.value = latest.nav_date || '-'; t2Nav.value = latest.nav || 0
             t1StaticVal.value = latest.static_val || 0; calibrationValue.value = latest.calibration || '-'
+            // [现金管理] 存储完整历史数据用于回测表展示
+            if (fundCode.value === '511520' || fundCode.value === '511360') {
+                historyBacktestData.value = res.data.data
+            }
         }
     } catch (e) {}
 }

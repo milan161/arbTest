@@ -608,6 +608,9 @@ async def get_fund_valuation_meta(code: str):
                     sym = sym[:-len(suffix)]
                     break
             etf_symbols.append(sym)
+        # basket为空时，用trade_etf兜底（如162411没有basket数据但有XOP）
+        if not etf_symbols and fund_cfg.get('trade_etf'):
+            etf_symbols.append(fund_cfg['trade_etf'])
             
         from concurrent.futures import ThreadPoolExecutor, as_completed
         realtime_quotes = {}

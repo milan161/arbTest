@@ -62,13 +62,8 @@ export const useFundStore = defineStore('fund', () => {
   let dashboardInFlight = false
   let dashboardController: AbortController | null = null
   let dashboardRequestSeq = 0
-  // 从 localStorage 恢复上次 TAB；若自选为空则默认切到"黄金原油"
-  const savedTab = typeof localStorage !== 'undefined' ? localStorage.getItem('dashboard_tab') : null
-  const _wl = (() => {
-    try { const w = JSON.parse(localStorage.getItem('watchlist') || '[]'); return Array.isArray(w) ? w : [] } catch { return [] }
-  })()
-  const defaultTab = (savedTab === '自选' && _wl.length === 0) ? '黄金原油' : (savedTab || '自选')
-  const currentTab = ref(defaultTab)
+  // 始终默认"我的自选"TAB（用户从其他页面回来时永远看到自选）
+  const currentTab = ref('自选')
   const searchKeyword = ref('')
   const fundHistory = ref<any[]>([])
   const fundHistoryLoading = ref(false)
@@ -76,12 +71,13 @@ export const useFundStore = defineStore('fund', () => {
   const basketData = ref<any[]>([])
 
   // ---- watchlist（持久化到 localStorage） ----
+  const DEFAULT_WATCHLIST = ['162411']
   const savedWatchlist = (() => {
     try {
-      const w = JSON.parse(localStorage.getItem('watchlist') || '[]')
-      return Array.isArray(w) ? w : []
+      const w = JSON.parse(localStorage.getItem('watchlist') || 'null')
+      return Array.isArray(w) && w.length > 0 ? w : DEFAULT_WATCHLIST
     } catch {
-      return []
+      return DEFAULT_WATCHLIST
     }
   })()
   const watchlist = ref<string[]>(savedWatchlist)
@@ -92,10 +88,7 @@ export const useFundStore = defineStore('fund', () => {
     let data = tableData.value || []
 
     if (currentTab.value === '自选') {
-      // [V10.1] 自选列表为空时显示全部基金，避免空面板
-      if (watchlist.value.length > 0) {
-        data = data.filter((item) => watchlist.value.includes(item.fund_code))
-      }
+      data = data.filter((item) => watchlist.value.includes(item.fund_code))
     } else {
       const categories = TAB_CATEGORIES[currentTab.value]
       if (categories) {
