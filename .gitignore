@@ -63,7 +63,7 @@ ArbDashboard/backend/core/database/
 *.bat
 !/ArbDashboard/start_dashboard.bat
 GEMINI.md
-Gemini-Proxy
+Proxy.bat
 push_to_vercel.py
 deploy_vps.py
 *.txt
