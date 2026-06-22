@@ -10,26 +10,36 @@
                   <template #icon><n-icon><Bot /></n-icon></template>
                   {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
                 </n-tag>
-                <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectTdx">
+                <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round
+                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasTdx ? 'default' : 'pointer' }"
+                    @click="reconnectWithGuard(hasTdx, '通达信', reconnectTdx)">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     通达信
                 </n-tag>
                 <div style="display: flex; gap: 4px; justify-content: center;">
-                    <n-tag :type="hasIb ? 'success' : 'warning'" size="small" round style="font-weight: bold; flex: 1; justify-content: center; cursor: pointer;" @click="reconnectIB">
+                    <n-tag :type="hasIb ? 'success' : 'warning'" size="small" round
+                        :style="{ fontWeight: 'bold', flex: 1, justifyContent: 'center', cursor: hasIb ? 'default' : 'pointer' }"
+                        @click="reconnectWithGuard(hasIb, 'IB', reconnectIB)">
                         <template #icon><n-icon><Zap /></n-icon></template>
                         IB
                     </n-tag>
                 </div>
                 
-                <n-tag :type="hasGalaxy ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectGalaxy">
+                <n-tag :type="hasGalaxy ? 'success' : 'warning'" size="small" round
+                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasGalaxy ? 'default' : 'pointer' }"
+                    @click="reconnectWithGuard(hasGalaxy, '银河QMT', reconnectGalaxy)">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     银河QMT
                 </n-tag>
-                <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectGuojin">
+                <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
+                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasGuojin ? 'default' : 'pointer' }"
+                    @click="reconnectWithGuard(hasGuojin, '国金QMT', reconnectGuojin)">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     国金QMT
                 </n-tag>
-                <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round style="font-weight: bold; justify-content: center; cursor: pointer;" @click="reconnectFutu">
+                <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round
+                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasFutu ? 'default' : 'pointer' }"
+                    @click="reconnectWithGuard(hasFutu, '富途', reconnectFutu)">
                     <template #icon><n-icon><Zap /></n-icon></template>
                     富途
                 </n-tag>
@@ -102,7 +112,7 @@
     <!-- 历史对账详情弹窗 -->
     <n-modal v-model:show="showHistoryModal" preset="card" :title="`[历史记录] ${selectedFund?.fund_code} - ${selectedFund?.fund_name}`" style="width: 95%; max-width: 1500px;">
       <div v-if="selectedFund && !isCashManagementFund" style="margin-bottom: 16px; display: flex; gap: 24px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px;">
-        <div><strong>关联指数：</strong> {{ selectedFund.idx_name || '-' }} ({{ selectedFund.idx_code || '-' }})</div>
+        <div><strong>跟踪标的：</strong> {{ selectedFund.idx_name || selectedFund.related_index || '-' }} ({{ selectedFund.idx_code || selectedFund.related_index || '-' }})</div>
         <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
         <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
       </div>
@@ -135,7 +145,7 @@ import { Zap, Bot, Star, StarOff, History } from 'lucide-vue-next'
 // --- 新架构导入 ---
 import { useFundStore, useMarketStore, useAppStore } from '../store'
 import { formatPrice, formatValuation, formatPercent, formatPremium,
-         formatVolume, formatShares, formatSharesChange, formatTurnoverRate,
+         formatVolume, formatShares, formatSharesChange,
          formatIndexPrice, priceColor, shortDate, cleanFundName } from '../utils'
 import { getFundHistory } from '../api'
 
@@ -199,6 +209,15 @@ const reconnectEngine = async (sourceLabel: string, reconnectFn: () => Promise<a
   }
 }
 
+/**
+ * 带"已连接→跳过"守卫的 reconnect 包装。
+ * 已连接的源：不执行重连、不弹消息、不改光标（cursor: default）。
+ */
+const reconnectWithGuard = (isConnected: boolean, label: string, fn: () => void) => {
+  if (isConnected) return
+  fn()
+}
+
 const reconnectTdx = () => reconnectEngine('通达信', () => marketStore.reconnectTdx())
 const reconnectGalaxy = () => reconnectEngine('银河QMT', () => marketStore.reconnectGalaxy())
 const reconnectGuojin = () => reconnectEngine('国金QMT', () => marketStore.reconnectGuojin())
@@ -215,20 +234,21 @@ const pagination = { pageSize: 100 }
 const toggleWatchlist = (code: string) => fundStore.toggleWatchlist(code)
 
 const rowProps = (row: any) => {
-  // 黄金原油 / QDII欧美 / 现金管理 跳转到分析页
-  const developableTabs = ['黄金原油', 'QDII欧美', '现金管理']
-  const isDevelopable = developableTabs.includes(currentTab.value)
+  // 黄金原油/QDII欧美/现金管理/自选 → 沙盘分析页
+  const fullSandboxTabs = ['自选', '黄金原油', 'QDII欧美', '现金管理']
+  // QDII亚洲/国内LOF/白银 → 开发中占位页
+  const developingTabs = ['QDII亚洲', '国内LOF', '白银']
   
   return {
     style: 'cursor: pointer;',
     onClick: () => {
-      if (isDevelopable) {
+      if (fullSandboxTabs.includes(currentTab.value)) {
         router.push({
           path: '/analysis',
           query: { code: row.fund_code, name: row.fund_name }
         })
-      } else {
-        message.info(`${row.fund_name}（${row.fund_code}）实盘交易模式待开发`)
+      } else if (developingTabs.includes(currentTab.value)) {
+        router.push({ path: '/developing' })
       }
     }
   }
@@ -258,6 +278,8 @@ watch(currentTab, () => {
 })
 
 onMounted(() => {
+  // 每次进 Dashboard 都默认显示 我的自选（从其他页面返回时重置）
+  currentTab.value = '自选'
   fetchData()
   setupRefreshTimer()
 })
@@ -411,8 +433,18 @@ const allColumns: DataTableColumns<any> = [
 
 // 通用数值渲染函数，historyColumns 和 columns 共享
 const renderValWithChg = (val: number, chg: number, precision: number = 4) => {
-    if (!val || val === 0) return '-'
-    return h('span', { style: 'font-weight: 500;' }, val.toFixed(precision))
+    if (!val || val === 0) return h('span', { style: 'color: #999;' }, '-')
+    const valStr = val.toFixed(precision)
+    if (chg == null || chg === 0) {
+        return h('span', { style: 'font-weight: 500;' }, valStr)
+    }
+    const color = chg > 0 ? '#dc2626' : '#16a34a'
+    const arrow = chg > 0 ? '▲' : '▼'
+    const chgStr = (chg > 0 ? '+' : '') + chg.toFixed(2) + '%'
+    return h('span', {}, [
+        h('span', { style: 'font-weight: 500;' }, valStr),
+        h('span', { style: `color: ${color}; font-size: 11px; margin-left: 3px;` }, `${arrow}${chgStr}`)
+    ])
 }
 
 const historyColumns = computed<DataTableColumns<any>>(() => {
@@ -505,15 +537,26 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
     ]
 
     if (fundHistory.value.length > 0) {
-        const firstRow = fundHistory.value[0]
         const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'latest_nav', 'futures_close', 'futures_pct']
-        Object.keys(firstRow).forEach(key => {
-            if (!knownKeys.includes(key) && !key.endsWith('_chg') && (typeof firstRow[key] === 'number' || firstRow[key] === null)) {
-                baseCols.push({
-                    title: key, key: key, width: 90, align: 'center',
-                    render(row: any) { return renderValWithChg(row[key], row[`${key}_chg`], 4) }
-                })
+        // Scan ALL rows to find dynamic keys (first row may lack data, e.g. 06-19 has no XOP_price)
+        const dynamicKeys = new Set<string>()
+        for (const row of fundHistory.value) {
+            for (const key of Object.keys(row)) {
+                if (!knownKeys.includes(key) && !key.endsWith('_chg') && typeof row[key] === 'number') {
+                    dynamicKeys.add(key)
+                }
             }
+        }
+        dynamicKeys.forEach(key => {
+            let title = key
+            const priceMatch = key.match(/^(.+)_price$/)
+            if (priceMatch) {
+                title = priceMatch[1] + '价格'
+            }
+            baseCols.push({
+                title: title, key: key, width: 95, align: 'center',
+                render(row: any) { return renderValWithChg(row[key], row[`${key}_chg`], 2) }
+            })
         })
     }
     return baseCols
@@ -733,5 +776,28 @@ const tableScrollX = computed(() => {
 :deep(.n-data-table .n-data-table-th--fixed-right) {
   background-color: #fff1f2 !important; /* 粉红色背景 */
   color: #e11d48 !important; /* 玫瑰红文字 */
+}
+/* 滚动条加粗：方便鼠标点击（水平+垂直） */
+:deep(.n-scrollbar-rail) {
+  width: 14px !important;
+  height: 14px !important;
+  right: 1px;
+  bottom: 1px;
+}
+:deep(.n-scrollbar-rail--vertical) {
+  width: 14px !important;
+}
+:deep(.n-scrollbar-rail--horizontal) {
+  height: 14px !important;
+}
+:deep(.n-scrollbar-thumb) {
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 5px !important;
+  border: 1px solid transparent !important;
+}
+:deep(.n-scrollbar-thumb:hover) {
+  width: 10px !important;
+  height: 10px !important;
 }
 </style>

@@ -75,6 +75,9 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
     
     def reconnect(self):
         """手动重连（供用户点击"银河QMT"按钮时调用）"""
+        if self.is_connected:
+            logger.info("[QMT银河] 已经连接，跳过重复重连")
+            return True, "银河QMT已经连接"
         logger.info("[QMT银河] 用户手动触发重连...")
         self.disabled = False
         self.is_connected = False
@@ -195,6 +198,32 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         if s.startswith('5') or s.startswith('6'):
             return f"{s}.SH"
         return f"{s}.SZ"
+
+    def send_order(self, action: str, code: str, price: float, volume: int) -> tuple:
+        """
+        通过 QMT Socket 发送买卖指令
+        Args:
+            action: 'BUY' 或 'SELL'
+            code: 股票代码（如 162411.SZ）
+            price: 委托价格
+            volume: 委托数量（股）
+        Returns:
+            (success: bool, msg: str)
+        """
+        if not self.is_connected:
+            return False, "银河QMT 未连接"
+        if action not in ('BUY', 'SELL'):
+            return False, f"无效指令: {action}"
+        try:
+            qmt_code = self.normalize_symbol(code)
+            cmd = f"{action},{qmt_code},{price},{volume}\n"
+            with self.lock:
+                self.sock.sendall(cmd.encode('utf-8'))
+            logger.info(f"✅ [QMT银河] 指令已发送: {action} {qmt_code} {volume}股 @ {price}")
+            return True, f"指令已发送: {action} {qmt_code} {volume}股 @ {price}"
+        except Exception as e:
+            logger.error(f"❌ [QMT银河] 下单失败: {e}")
+            return False, f"下单失败: {e}"
 
     def disconnect(self):
         """断开连接"""

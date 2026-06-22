@@ -66,13 +66,13 @@ def _ensure_daily_snapshot(conn):
     except Exception:
         pass
 
-# TAB → SQL category 值映射
+# TAB → SQL category 值映射（与 unified_fund_list.category 保持一致）
 _TAB_CATEGORY_MAP = {
-    '黄金原油': ['黄金原油', '黄金', '原油'],
-    'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
-    'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
-    '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
-    '白银': ['白银', '白银LOF'],
+    '黄金原油': ['黄金原油'],
+    'QDII欧美': ['纯ETF', '混合跨境', '欧美指数'],
+    'QDII亚洲': ['QDII亚洲'],
+    '国内LOF': ['国内指数'],
+    '白银': ['白银'],
     '现金管理': ['债券/货币'],
 }
 
@@ -216,6 +216,13 @@ def get_index_change_percent(symbol: str) -> float:
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSI 涨跌幅: {parts[8]}%")
                     result = float(parts[8])
+        elif 'CES300' in clean_sym or 'CES300.HI' in clean_sym:
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkCES300", headers=headers_sina, timeout=1.5)
+            if r.status_code == 200 and '="' in r.text:
+                parts = r.text.split('"')[1].split(',')
+                if len(parts) >= 9:
+                    logger.info(f"[INDEX-SINA] 获取港股指数 CES300 涨跌幅: {parts[8]}%")
+                    result = float(parts[8])
                     
         # 2. A股指数 (6位代码)
         elif clean_sym.isdigit() and len(clean_sym) == 6:
@@ -256,7 +263,7 @@ _prefetch_cache_time = 0
 def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
     """
     [V6.0 性能优化] 批量预取新浪/腾讯指数数据，将 O(N) 降低为 O(1)
-    返回 { "399300": {"price": 4000.0, "pct": 1.63}, ... }
+    [V10.8] 修复指数多重映射Bug，切换腾讯接口优先
     """
     global _prefetch_cache, _prefetch_cache_time
     import time
@@ -266,92 +273,117 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
         return {}
     from arbcore.utils import is_a_share_trading_day
     now = datetime.now()
-    # [V10.4] A 股休市日（含法定节假日）不拉取指数行情
     if not is_a_share_trading_day(now.date()):
-        return {}
-    # [V10.2] 非交易时段直接返回空（A股09:15-15:00，港股09:30-16:00，收盘后指数不变）
-    hour = now.hour
-    if hour < 9 or (hour == 9 and now.minute < 15) or hour >= 16:
         return {}
 
     today_str = now.strftime('%Y-%m-%d')
     
-    # 过滤掉已缓存的指数
     need_fetch = []
     for sym in symbols:
-        if not sym or sym == '-':
-            continue
+        if not sym or sym == '-': continue
         clean_sym = sym.strip().upper()
-        if clean_sym.endswith('.CSI'):
-            clean_sym = clean_sym[:-4]
+        if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
+        if clean_sym.startswith('SZ') or clean_sym.startswith('SH'): clean_sym = clean_sym[2:]
+        if clean_sym == '中小100': clean_sym = '399011'
+        elif clean_sym == '移动互联': clean_sym = '399363'
+        
         cache_key = f"{clean_sym}_{today_str}"
         if cache_key not in _index_pct_cache:
             need_fetch.append(sym)
-    
+            
     if not need_fetch:
-        # 全部命中缓存，直接返回
         res = {}
         for sym in symbols:
             if not sym or sym == '-': continue
             clean_sym = sym.strip().upper()
             if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
+            if clean_sym.startswith('SZ') or clean_sym.startswith('SH'): clean_sym = clean_sym[2:]
+            if clean_sym == '中小100': clean_sym = '399011'
+            elif clean_sym == '移动互联': clean_sym = '399363'
+            
             cache_key = f"{clean_sym}_{today_str}"
             if cache_key in _index_pct_cache:
                 res[sym] = {"price": 0.0, "pct": _index_pct_cache[cache_key]}
         return res
-        
+
     import requests
-    headers_sina = {
-        'Referer': 'https://finance.sina.com.cn/',
-        'Accept': 'text/event-stream'
-    }
-    headers_tencent = {
-        'Referer': 'https://finance.qq.com/',
-        'User-Agent': 'Mozilla/5.0'
-    }
+    headers_tencent = {'Referer': 'https://finance.qq.com/', 'User-Agent': 'Mozilla/5.0'}
+    headers_sina = {'Referer': 'https://finance.sina.com.cn/', 'Accept': 'text/event-stream'}
     
-    sina_codes = []
-    tencent_codes = []
-    symbol_map = {}  # code -> original_symbol
-    tencent_symbol_map = {} # tc_code -> original_symbol
+    tencent_requests = set()
+    sina_requests = set()
+    tc_to_syms = {}
+    sina_to_syms = {}
     
     for sym in symbols:
-        if not sym or sym == '-':
-            continue
+        if not sym or sym == '-': continue
         clean_sym = sym.strip().upper()
-        if clean_sym.endswith('.CSI'):
-            clean_sym = clean_sym[:-4]
-            
+        if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
+        if clean_sym.startswith('SZ') or clean_sym.startswith('SH'): clean_sym = clean_sym[2:]
+        
+        if clean_sym == '中小100': clean_sym = '399011'
+        elif clean_sym == '移动互联': clean_sym = '399363'
+        
+        tc_req = ""
+        sina_req = ""
+        ret_code = ""
+        
         if clean_sym.isdigit() and len(clean_sym) == 6:
             if clean_sym.startswith('399') or clean_sym.startswith('159') or clean_sym.startswith('3999'):
-                sina_codes.append(f"s_sz{clean_sym}")
-                tencent_codes.append(f"sz{clean_sym}")
+                tc_req = f"sz{clean_sym}"
+                sina_req = f"s_sz{clean_sym}"
             else:
-                sina_codes.append(f"s_sh{clean_sym}")
-                tencent_codes.append(f"sh{clean_sym}")
-            symbol_map[clean_sym] = sym
-            tencent_symbol_map[clean_sym] = sym
-                
+                tc_req = f"sh{clean_sym}"
+                sina_req = f"s_sh{clean_sym}"
+            ret_code = clean_sym
         elif 'HSTECH' in clean_sym:
-            sina_codes.append("rt_hkHSTECH")
-            tencent_codes.append("hkHSTECH")
-            symbol_map['HSTECH'] = sym
-            tencent_symbol_map['HSTECH'] = sym
+            tc_req, sina_req, ret_code = "hkHSTECH", "rt_hkHSTECH", "HSTECH"
         elif 'HSCEI' in clean_sym:
-            sina_codes.append("rt_hkHSCEI")
-            tencent_codes.append("hkHSCEI")
-            symbol_map['HSCEI'] = sym
-            tencent_symbol_map['HSCEI'] = sym
+            tc_req, sina_req, ret_code = "hkHSCEI", "rt_hkHSCEI", "HSCEI"
         elif 'HSI' in clean_sym:
-            sina_codes.append("rt_hkHSI")
-            tencent_codes.append("hkHSI")
-            tencent_symbol_map['HSI'] = sym
+            tc_req, sina_req, ret_code = "hkHSI", "rt_hkHSI", "HSI"
+        else:
+            continue
             
+        tencent_requests.add(tc_req)
+        tc_to_syms.setdefault(ret_code, []).append(sym)
+        sina_to_syms.setdefault(ret_code, []).append(sym)
+
     res = {}
     
-    # 1. 尝试从新浪获取
-    if sina_codes:
-        url = f"http://hq.sinajs.cn/list={','.join(sina_codes)}"
+    # 1. 优先从腾讯获取
+    if tencent_requests:
+        url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
+        try:
+            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
+            if r_tc.status_code == 200:
+                for line in r_tc.text.split(';'):
+                    if 'v_' not in line or '=' not in line: continue
+                    data_str = line.split('=')[1].strip(' "')
+                    tc_parts = data_str.split('~')
+                    if len(tc_parts) >= 33:
+                        code = tc_parts[2]
+                        if code in tc_to_syms:
+                            for original_sym in tc_to_syms[code]:
+                                res[original_sym] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
+                            logger.info(f"[INDEX-TENCENT] 获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
+        except Exception as e:
+            logger.warning(f"预取腾讯指数异常: {e}")
+
+    # 2. 对于腾讯没拿到数据的指数，用新浪接口兜底
+    missing_sina_reqs = set()
+    for ret_code, syms in sina_to_syms.items():
+        if any(s not in res for s in syms):
+            if ret_code.isdigit():
+                if ret_code.startswith('399') or ret_code.startswith('159') or ret_code.startswith('3999'):
+                    missing_sina_reqs.add(f"s_sz{ret_code}")
+                else:
+                    missing_sina_reqs.add(f"s_sh{ret_code}")
+            else:
+                missing_sina_reqs.add(f"rt_hk{ret_code}")
+                
+    if missing_sina_reqs:
+        url = f"http://hq.sinajs.cn/list={','.join(missing_sina_reqs)}"
         try:
             r = requests.get(url, headers=headers_sina, timeout=2.0)
             if r.status_code == 200:
@@ -359,49 +391,23 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
                     if '="' not in line: continue
                     var_name = line.split('=')[0].strip()
                     parts = line.split('"')[1].split(',')
-                    
                     if var_name.startswith('var hq_str_s_sh') or var_name.startswith('var hq_str_s_sz'):
                         code = var_name[-6:]
                         if len(parts) >= 4 and float(parts[3]) != 0.0:
-                            if code in symbol_map:
-                                res[symbol_map[code]] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                logger.info(f"[INDEX-SINA] 获取A股指数 {symbol_map[code]} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                            if code in sina_to_syms:
+                                for original_sym in sina_to_syms[code]:
+                                    if original_sym not in res:
+                                        res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
                     elif var_name.startswith('var hq_str_rt_hk'):
                         code = var_name.split('rt_hk')[1]
                         if len(parts) >= 9:
-                            if code in symbol_map:
-                                res[symbol_map[code]] = {"price": float(parts[6]), "pct": float(parts[8])}
-                                logger.info(f"[INDEX-SINA] 获取港股指数 {symbol_map[code]} 价格: {parts[6]} 涨跌幅: {parts[8]}%")
+                            if code in sina_to_syms:
+                                for original_sym in sina_to_syms[code]:
+                                    if original_sym not in res:
+                                        res[original_sym] = {"price": float(parts[6]), "pct": float(parts[8])}
         except Exception as e:
-            logger.warning(f"预取新浪指数异常: {e}")
-            
-    # 2. 对于新浪没拿到数据的指数，用腾讯接口批量兜底
-    missing_tc_codes = []
-    missing_tc_keys = []
-    for tc_code, tc_req in zip(symbol_map.keys(), tencent_codes):
-        if symbol_map[tc_code] not in res:
-            missing_tc_codes.append(tc_req)
-            missing_tc_keys.append(tc_code)
-            
-    if missing_tc_codes:
-        url_tc = f"http://qt.gtimg.cn/q={','.join(missing_tc_codes)}"
-        try:
-            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
-            if r_tc.status_code == 200:
-                for line in r_tc.text.split(';'):
-                    if 'v_' not in line or '=' not in line: continue
-                    var_name = line.split('=')[0].strip()
-                    data_str = line.split('=')[1].strip(' "')
-                    tc_parts = data_str.split('~')
-                    
-                    if len(tc_parts) >= 33:
-                        code = tc_parts[2] # e.g. 000922, HSI
-                        if code in tencent_symbol_map:
-                            res[tencent_symbol_map[code]] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
-                            logger.info(f"[INDEX-TENCENT] 兜底获取指数 {tencent_symbol_map[code]} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
-        except Exception as e:
-            logger.warning(f"预取腾讯指数兜底异常: {e}")
-            
+            logger.warning(f"预取新浪指数兜底异常: {e}")
+
     _prefetch_cache = res
     _prefetch_cache_time = time.time()
     return res
@@ -693,26 +699,29 @@ class FundService:
 
 
                     # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子的基金使用简化指数估值
+                    # ⚠️ 必须判断 pct != 0 才设置 rt_val，否则会错误地将 NAV 当成实时估值
+                    # （如 162411 的 related_index='XOP' 是 ETF 而非指数，pct 必然为 0，
+                    #   此时应跳过此路径，让 calculator 或 fallback 处理）
                     if not metrics.get('rt_val') and code not in funds_with_basket:
                         rel_idx = fund.get('related_index')
                         nav_home = float(metrics.get('nav', 0))
                         if rel_idx and rel_idx != '-' and nav_home > 0:
                             idx_data = index_changes_map.get(rel_idx)
-                            pct = 0.0
                             if idx_data is not None and isinstance(idx_data, dict):
                                 pct = idx_data.get('pct', 0.0)
                                 metrics['index_close'] = idx_data.get('price', 0.0)
+                                metrics['index_pct'] = pct
+                                # 仅在有实时涨跌幅数据时才套用指数简化估值
+                                if pct != 0:
+                                    pos = float(fund.get('pos_ratio') or 0.95)
+                                    rt_val = nav_home * (1.0 + pos * (pct / 100.0))
+                                    metrics['rt_val'] = round(rt_val, 4)
+                                    if metrics.get('price', 0) > 0:
+                                        metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
                             else:
-                                pct = 0.0  # [FIX] 移除阻塞的同步兜底请求，防止周末前端疯狂转圈圈
-                            
-                            # 🚀 把最新涨跌幅赋值给 metrics 供看板展示
-                            metrics['index_pct'] = pct
-                            
-                            pos = float(fund.get('pos_ratio') or 0.95)
-                            rt_val = nav_home * (1.0 + pos * (pct / 100.0))
-                            metrics['rt_val'] = round(rt_val, 4)
-                            if metrics.get('price', 0) > 0:
-                                metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                                # [FIX] 无实时数据时标记 index_pct=0 但不设置 rt_val
+                                # 让下游 calculator 路径或 fallback 处理
+                                metrics['index_pct'] = 0.0
 
                     # 3.3 【美股原油/黄金等高价值一篮子基金】 - 保持原有基于 lof_config.yaml 的矩阵公式推演
                     calculator = self._get_calculator() if not metrics.get('rt_val') else None
@@ -765,35 +774,40 @@ class FundService:
                                     # 重新计算溢价率
                                     if metrics['price'] > 0:
                                         metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
-                                
-                                # 尝试基于指数的实时估值 (QDII亚洲, 国内指数等)
-                                if not val_res:
-                                    tracking_index = fund_cfg.get('tracking_index')
-                                    if tracking_index and self.market_data_service:
-                                        q = self.market_data_service.get_realtime_quote(tracking_index)
-                                        if q and q.get('price') and q.get('price') > 0:
-                                            idx_price = q['price']
-                                            base_data = calculator.get_base_data(code)
-                                            if base_data and base_data.get('index_close') and base_data['index_close'] > 0:
-                                                index_b = base_data['index_close']
-                                                b_nav = base_data.get('nav', 0)
-                                                position = base_data.get('position', 1.0)
-                                                if pd.isna(position):
-                                                    position = fund_cfg.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
-                                                
-                                                fx_ratio = 1.0
-                                                # 如果支持获取汇率日内波动，可以在这里添加 fx_ratio = 1 + fx_pct / 100
-                                                index_ratio = idx_price / index_b
-                                                
-                                                # 🚀 把最新指数价格和涨跌幅赋值给 metrics 供看板展示
-                                                metrics['index_close'] = idx_price
-                                                metrics['index_pct'] = (index_ratio - 1) * 100
-                                                
-                                                val_res = b_nav * (1 + position * (index_ratio * fx_ratio - 1))
-                                                if val_res > 0:
-                                                    metrics['rt_val'] = round(val_res, 4)
-                                                    if metrics['price'] > 0:
-                                                        metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
+
+                            # 尝试用 trade_etf 兜底 [V10.8]
+                            # basket为空时（如162411的XOP），直接用 trade_etf 获取实时ETF价格做 hedge 估值
+                            # 放在 current_fx 条件外，让无basket基金也能走魔法公式
+                            if not metrics.get('rt_val'):
+                                trade_etf = fund_cfg.get('trade_etf', '')
+                                if trade_etf and self.market_data_service:
+                                    # [V10.9] 跳过指数类符号（HSI/HSTECH等），指数走 get_index_change_percent 路径
+                                    from arbcore.config.symbol_source_map import get_symbol_source
+                                    if get_symbol_source(trade_etf) == 'SINA':
+                                        pass  # 指数符号不加入实时行情查询
+                                    else:
+                                        try:
+                                            q = self.market_data_service.get_realtime_quote(trade_etf)
+                                            if q and q.get('price') and q['price'] > 0:
+                                                etf_price = q['price']
+                                                base_data = calculator.get_base_data(code)
+                                                if base_data:
+                                                    b_nav = float(base_data.get('nav', 0) or 0)
+                                                    b_hedge = float(base_data.get('hedge', 0) or 0)
+                                                    b_position = base_data.get('position', None)
+                                                    if pd.isna(b_position) or b_position is None:
+                                                        b_position = float(fund.get('pos_ratio') or 0.95)
+                                                    # current_fx 可能为空（_daily_snapshot 未加载），从 base_data 兜底
+                                                    fx = current_fx if (current_fx and current_fx > 0) else float(base_data.get('exchange_rate', 0) or 0)
+                                                    if b_nav > 0 and b_hedge > 0 and fx > 0:
+                                                        # val = nav * (1 - pos) + (etf_price * fx) / hedge
+                                                        val_res = b_nav * (1.0 - b_position) + (etf_price * fx) / b_hedge
+                                                        if val_res > 0:
+                                                            metrics['rt_val'] = round(val_res, 4)
+                                                            if metrics['price'] > 0:
+                                                                metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
+                                        except Exception as e:
+                                            logger.warning(f"{code} trade_etf({trade_etf}) 实时行情获取失败: {e}")
                 except Exception as e:
                     logger.error(f"实时计算 {code} 估值失败: {e}")
 
@@ -942,8 +956,7 @@ class FundService:
                 return result
 
             if 'usd_cny_mid' in df.columns:
-                # 汇率用 bfill 填充历史空缺（合理：汇率每天都有）
-                df['usd_cny_mid'] = df['usd_cny_mid'].bfill()
+                # 汇率不 bfill：中国假期（如端午）不公布中间价，应显示 '-'
                 df['usd_cny_mid_chg'] = safe_pct_change(df['usd_cny_mid'])
             df['price_chg'] = safe_pct_change(df['price'])
             df['nav_chg'] = safe_pct_change(df['nav'])
@@ -962,9 +975,9 @@ class FundService:
             import numpy as np
             df = df.replace([np.inf, -np.inf], np.nan)
 
-            # 过滤：当天若有全空行（仅 exchange_rate 带回汇率，无实际基金数据），排除掉
-            # 条件：price/nav/static_val 全为 None → 删除
-            df = df.dropna(subset=['price', 'nav', 'static_val', 'shares', 'volume'], how='all')
+            # 过滤：非交易日行（仅有份额数据无实际行情）排除
+            # 条件：price/nav/static_val 全为 None → 删除（shares 单独存在无意义）
+            df = df.dropna(subset=['price', 'nav', 'static_val'], how='all')
 
             # [债券ETF] 为现金管理基金回溯计算静态估值
             if fund_code in BOND_ETF_CODES and not df.empty:
@@ -1127,7 +1140,45 @@ class FundService:
                         }
                 except Exception as e:
                     logger.warning(f"[BondETF] 获取国债期货历史数据失败: {e}")
-            
+
+            # [通用] 获取该基金跟踪的ETF历史价格（如162411→XOP，160719→GLD+^GLD-EU，501225→SOXX）
+            etf_price_map = {}  # {symbol: {date: {price, chg}}}
+            try:
+                # 1) 从 related_index 获取主 ETF
+                fl_row = conn.execute("SELECT related_index FROM unified_fund_list WHERE fund_code=?", (fund_code,)).fetchone()
+                trade_etf = fl_row[0] if fl_row and fl_row[0] and fl_row[0] != '-' else ''
+                etf_symbols = [trade_etf] if trade_etf else []
+
+                # 2) 从 basket 获取所有 ETF 符号（含锚点变体如 ^GLD-EU）
+                basket_rows = conn.execute(
+                    "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code=? AND date=(SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)",
+                    (fund_code, fund_code)
+                ).fetchall()
+                for br in basket_rows:
+                    sym = br[0]
+                    if sym and sym not in etf_symbols:
+                        etf_symbols.append(sym)
+
+                # 3) 逐个查询价格（仅查 usa_etf_daily_prices 里存在的）
+                for sym in etf_symbols:
+                    etf_rows = conn.execute(
+                        "SELECT date, price FROM usa_etf_daily_prices WHERE symbol=? ORDER BY date DESC",
+                        (sym,)
+                    ).fetchall()
+                    if etf_rows:
+                        prices = {r[0]: r[1] for r in etf_rows}
+                        dates_sorted = sorted(prices.keys(), reverse=True)
+                        etf_chg = {}
+                        for i in range(len(dates_sorted) - 1):
+                            d_curr, d_prev = dates_sorted[i], dates_sorted[i + 1]
+                            if prices[d_prev] and prices[d_prev] > 0:
+                                etf_chg[d_curr] = (prices[d_curr] / prices[d_prev] - 1) * 100
+                        etf_price_map[sym] = {
+                            d: {'price': prices[d], 'chg': etf_chg.get(d)} for d in prices
+                        }
+            except Exception as e:
+                logger.warning(f"[FundHistory] 获取ETF历史价格失败 {fund_code}: {e}")
+
             data_list = []
             for _, row in df.iterrows():
                 item = {}
@@ -1164,18 +1215,25 @@ class FundService:
                         item['futures_pct'] = fut_data['futures_pct']
 
                     # 回测: 用前一日NAV + 日均票息 + T2609方向修正 → 预估今日NAV
-                    # 需要data_list已至少有一行（前一日数据）
                     daily_coupon = BOND_ETF_META.get('511520', {}).get('daily_coupon', 0.0082)
                     t_pct = fut_data.get('futures_pct') if fut_data else None
                     if len(data_list) > 0 and t_pct is not None:
                         prev_item = data_list[-1]
                         prev_nav = prev_item.get('nav')
                         if prev_nav and prev_nav > 0:
-                            # 预估 = 前日NAV + 日均票息 + 前日NAV × T2609涨幅% × 系数1.0
                             estimated_nav = prev_nav + daily_coupon + prev_nav * t_pct / 100 * 1.0
                             item['estimated_nav'] = round(estimated_nav, 4)
                             item['estimation_error'] = round(estimated_nav - item.get('nav', 0), 4) if item.get('nav') else None
                             item['estimation_error_pct'] = round(abs(estimated_nav - item.get('nav', 0)) / item.get('nav', 1) * 100, 4) if item.get('nav') and item.get('nav', 0) > 0 else None
+
+                # [通用] 附加ETF历史价格（如XOP价格、XOP价格涨跌幅）
+                if etf_price_map:
+                    row_date = str(item.get('date', ''))[:10]
+                    for etf_sym, sym_data in etf_price_map.items():
+                        ed = sym_data.get(row_date)
+                        if ed:
+                            item[f'{etf_sym}_price'] = ed['price']
+                            item[f'{etf_sym}_price_chg'] = ed.get('chg')
 
                 data_list.append(item)
 
@@ -1309,6 +1367,20 @@ class FundService:
                         sym = sym[:-len(suffix)]
                         break
                 etf_symbols.append(sym)
+
+            # [V10.8] basket为空时用 trade_etf 兜底获取行情（如162411→XOP）
+            if not etf_symbols:
+                trade_etf = fund_cfg.get('trade_etf', '')
+                if trade_etf:
+                    # [V10.9] 跳过指数类符号（HSI/HSTECH/399300等），指数无可用的实时行情
+                    from arbcore.config.symbol_source_map import get_symbol_source
+                    if get_symbol_source(trade_etf) == 'SINA':
+                        pass  # 指数符号不加入实时行情查询
+                    else:
+                        etf_symbols.append(trade_etf)
+            # [V10.9] 加入基金自身行情（供 Ghost 保守/内卷模式使用 lof_bid/lof_ask）
+            if code not in etf_symbols:
+                etf_symbols.append(code)
 
             realtime_quotes = {}
             for sym in etf_symbols:

@@ -2,10 +2,32 @@
   <div class="analysis-page">
     <!-- 详情模式：专业狙击工作站 -->
     <div class="detail-mode animate-fade-in">
-      <!-- 顶部专业摘要栏 (标题 + 基础仓位) -->
+      <!-- 顶部专业摘要栏 (标题 + 基础仓位 + 基金选择器) -->
       <div class="fund-summary-header shadow-soft" style="background: #fff; padding: 12px 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 2px solid #ffcc80;">
          <div class="header-left" style="display: flex; align-items: center; gap: 16px;">
             <n-button quaternary circle @click="handleBack"><template #icon><n-icon><ArrowLeft /></n-icon></template></n-button>
+            <!-- [V10.10] 基金选择器：手动输入代码或从预设下拉选择 -->
+            <div style="display: flex; align-items: center; gap: 8px;">
+               <span style="font-size: 13px; color: #64748b;">基金代码:</span>
+               <n-select
+                  :value="selectedFundCode"
+                  :options="fundDropdownOptions"
+                  @update:value="onFundSelected"
+                  style="width: 160px;"
+                  size="small"
+                  placeholder="选择或输入代码"
+                  filterable
+                  clearable
+               />
+               <n-input
+                  v-model:value="manualFundCode"
+                  placeholder="手动输入代码"
+                  size="small"
+                  style="width: 120px;"
+                  @keyup.enter="onManualFundEnter"
+               />
+               <n-button size="tiny" type="primary" @click="onManualFundSubmit">加载</n-button>
+            </div>
             <div class="fund-info">
                <div style="font-size:18px; font-weight:bold; color: #d35400;">
                    {{ fundName }} ({{ fundCode }})
@@ -593,7 +615,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote, placeOrder, addTrade, getGhostCalc, postGhostPlaceOrder, getGhostSimStatus, postGhostSimControl, postBpOverride, getBpOverride, clearBpOverride as clearBpOverrideApi } from '../api'
+import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote, placeOrder, addTrade, postGhostPlaceOrder, getGhostSimStatus, postGhostSimControl, postBpOverride, getBpOverride, clearBpOverride as clearBpOverrideApi } from '../api'
 
 use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent])
 
@@ -605,6 +627,50 @@ const dialog = useDialog()
 // 基础状态
 const fundCode = ref((route.query.code as string) || '')
 const fundName = ref((route.query.name as string) || '')
+
+// [V10.10] 基金选择器：预设下拉 + 手动输入
+const presetFundCodes = ['162411', '164701', '164824']
+const manualFundCode = ref('')
+const selectedFundCode = ref(fundCode.value || '')
+const fundDropdownOptions = computed(() =>
+  presetFundCodes.map(c => ({ label: c, value: c }))
+)
+const onFundSelected = (code: string) => {
+  if (!code) return
+  loadFundByCode(code)
+}
+const onManualFundEnter = () => {
+  if (manualFundCode.value.trim()) loadFundByCode(manualFundCode.value.trim())
+}
+const onManualFundSubmit = () => {
+  if (manualFundCode.value.trim()) loadFundByCode(manualFundCode.value.trim())
+}
+const loadFundByCode = async (code: string) => {
+  code = code.trim()
+  if (!code || !/^\d{6}$/.test(code)) {
+    message.warning('请输入 6 位基金代码')
+    return
+  }
+  // 先查数据库获取基金名
+  try {
+    const res = await getFundValuationMeta(code)
+    if (res.data?.status === 'ok') {
+      fundCode.value = code
+      selectedFundCode.value = code
+      fundName.value = res.data.fund_name || code
+      manualFundCode.value = ''
+      // 重置初始化标志，让 simLofPrice 重新加载
+      isLofPriceInitialized.value = false
+      // 重新加载所有数据
+      fetchAll()
+      message.success(`已加载 ${fundName.value} (${code})`)
+    } else {
+      message.error('基金不存在或加载失败')
+    }
+  } catch (e: any) {
+    message.error('加载失败: ' + (e.message || e))
+  }
+}
 const opportunityData = ref<any[]>([])
 const intradayData = ref<any[]>([])
 const basketData = ref<any[]>([])
@@ -620,11 +686,56 @@ const premiumUpperThreshold = ref(2.0)
 const showWatchlistOnly = ref(false) // 我的自选Tab（默认关闭，选中分类时才不会过滤掉非自选基金）
 const watchlist = ref<string[]>(JSON.parse(localStorage.getItem('watchlist') || '[]')) // 自选基金列表
 
-// Ghost Trader 幽灵做市商
-const ghostData = ref<any>(null)
+// Ghost Trader 幽灵做市商 — 从 meta.value.realtime_quotes 前端计算，无需独立 API
 const ghostLogs = ref<{ time: string; msg: string }[]>([])
 const targetNetProfit = ref(Number(localStorage.getItem('ghostNetProfit')) || 0.3)
-let ghostTimer: any = null
+const ghostData = computed(() => {
+  if (!meta.value?.realtime_quotes) return null
+  const rq = meta.value.realtime_quotes
+  const bd = meta.value.base_data || {}
+  const cfg = meta.value.fund_config || {}
+  const tradeEtf = cfg.trade_etf || ''
+  const fundCode = meta.value.fund_config?.code || ''
+  const lofQ = rq[fundCode]
+  const usQ = rq[tradeEtf]
+  const bNav = parseFloat(bd.nav) || 0
+  const bPos = (parseFloat(cfg.position) || 95) / 100
+  const fx = parseFloat(meta.value.latest_exchange_rate) || 0
+  const bHedge = parseFloat(bd.hedge) || 0
+  // 确保 bid/ask 取单值（某些源返回数组 [价, 量]）
+  const getVal = (v: any): number => {
+    if (v == null) return 0
+    if (Array.isArray(v)) return parseFloat(v[0]) || 0
+    return parseFloat(v) || 0
+  }
+  // Ghost Trader 使用 A股盘口买一价（depth.bid[0]），而非 realtime_quotes（可能不准/是最新价）
+  const lofBid = depth.bid && depth.bid[0] ? depth.bid[0] : getVal(lofQ?.bid || lofQ?.price || simLofPrice.value || (bd.close as any))
+  const usBid = getVal(usQ?.bid || usQ?.price)
+  const usAsk = getVal(usQ?.ask || usQ?.price)
+  const usBidSize = Array.isArray(usQ?.bid_size) ? (usQ.bid_size[1] || usQ.bid_size[0]) : (usQ?.bid_size || 0)
+  // 保守砸单：用美股买一价
+  let valSafe = 0, premiumSafe = 0
+  if (bNav > 0 && bHedge > 0 && usBid > 0 && fx > 0) {
+    valSafe = bNav * (1 - bPos) + (usBid * fx) / bHedge
+    premiumSafe = lofBid > 0 ? (lofBid / valSafe - 1) * 100 : 0
+  }
+  // 卖一内卷：用美股卖一价减 $0.01
+  const pegPrice = usAsk > 0.01 ? usAsk - 0.01 : usAsk
+  let valPeg = 0, premiumPeg = 0
+  if (bNav > 0 && bHedge > 0 && pegPrice > 0 && fx > 0) {
+    valPeg = bNav * (1 - bPos) + (pegPrice * fx) / bHedge
+    premiumPeg = lofBid > 0 ? (lofBid / valPeg - 1) * 100 : 0
+  }
+  return {
+    lof_bid: lofBid,
+    us_bid: usBid,
+    us_ask: usAsk,
+    us_bid_size: usBidSize,
+    premium_safe: premiumSafe,
+    premium_peg: premiumPeg,
+    redemption_fee: 0.50,
+  }
+})
 
 // Ghost Simulator 周末模拟
 const simRunning = ref(false)
@@ -719,22 +830,6 @@ const addGhostLog = (msg: string) => {
   const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
   ghostLogs.value.unshift({ time, msg })
   if (ghostLogs.value.length > 50) ghostLogs.value.pop()
-}
-
-const fetchGhostData = async () => {
-  if (!fundCode.value || !isComplexCategory.value) return
-  try {
-    const res = await getGhostCalc(fundCode.value)
-    if (res.data.status === 'ok') {
-      ghostData.value = res.data.data
-      // 首次加载时记录一条日志
-      if (ghostLogs.value.length === 0) {
-        addGhostLog(`幽灵做市商控制台已加载 | 基金: ${fundCode.value}`)
-      }
-    }
-  } catch (e) {
-    // 静默失败（Ghost Trader 未加载时返回 403）
-  }
 }
 
 const handleGhostPlace = async (mode: 'safe' | 'peg') => {
@@ -1123,6 +1218,15 @@ const etfVal = computed(() => {
     }
   }
   
+  // basket为空时，用trade_etf兜底（如162411只有XOP，没有basket数据）
+  if (bHedge > 0 && portfolio.length === 0 && cfg.trade_etf) {
+    const cleanSym = cfg.trade_etf.replace(/^\^/, '').toUpperCase()
+    const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
+    if (cPrice > 0) {
+      return baseNav * (1.0 - pos) + (cPrice * currentFx) / bHedge
+    }
+  }
+  
   if (portfolio.length > 0) {
     const fxChange = currentFx / (baseFx || 1.0)
     let wChange = 0.0
@@ -1396,15 +1500,9 @@ watch(() => route.query.code, (newCode) => {
   fundCode.value = (newCode as string) || ''; fundName.value = (route.query.name as string) || ''
   isLofPriceInitialized.value = false
   simLofPrice.value = 0
-  ghostData.value = null
   ghostLogs.value = []
   // orderVol 保持用户设置，不做自动覆盖
   if (fundCode.value) fetchAll(); else fetchDashboard()
-  if (fundCode.value && isComplexCategory.value) {
-    fetchGhostData()
-    if (ghostTimer) clearInterval(ghostTimer)
-    ghostTimer = setInterval(fetchGhostData, 5000)
-  }
 })
 
 const formatDate = (ts: number) => {
@@ -1675,19 +1773,14 @@ onMounted(() => {
     if (fundCode.value) fetchAll()
     else fetchDashboard()
     realtimeTimer = setInterval(pollRealtime, 3000)
-    // Ghost Trader 5秒轮询
-    if (isComplexCategory.value && fundCode.value) {
-      fetchGhostData()
-      ghostTimer = setInterval(fetchGhostData, 5000)
-      // Check simulator status
-      fetchSimStatus().then(() => {
-        if (simRunning.value) {
-          simTimer = setInterval(fetchSimStatus, 5000)
-        }
-      })
-    }
+    // Ghost Trader — 模拟器状态检测
+    fetchSimStatus().then(() => {
+      if (simRunning.value) {
+        simTimer = setInterval(fetchSimStatus, 5000)
+      }
+    })
 })
-onUnmounted(() => { if (realtimeTimer) clearInterval(realtimeTimer); if (ghostTimer) clearInterval(ghostTimer); if (simTimer) clearInterval(simTimer) })
+onUnmounted(() => { if (realtimeTimer) clearInterval(realtimeTimer); if (simTimer) clearInterval(simTimer) })
 </script>
 
 <style scoped>

@@ -191,9 +191,8 @@ class GhostSimulator:
         us_fluct = random.uniform(-0.05, 0.05)
         self.us_price = round(self.us_price * (1 + us_fluct), 2)
 
-        # FX: tiny fluctuation (±0.1%)
-        fx_fluct = random.uniform(-0.001, 0.001)
-        self.fx_rate = round(self.fx_rate * (1 + fx_fluct), 4)
+        # FX: 固定使用当天人民币中间价（不随机波动，真实汇率日内不变）
+        # self.fx_rate 已在 _load_base_prices() 从数据库加载
 
         # Bid/Ask spreads
         lof_spread = 0.001

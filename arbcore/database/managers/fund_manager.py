@@ -38,6 +38,25 @@ class FundManager(BaseManager):
             conn.commit()
             conn.close()
             
+    def update_fund_pos_ratio(self, fund_code: str, pos_ratio: float):
+        """更新 unified_fund_list 的 pos_ratio（Woody API 获取的最新仓位同步到静态配置）"""
+        if pos_ratio is None:
+            return
+        with self.lock:
+            conn = self._get_conn()
+            try:
+                conn.execute('''
+                    UPDATE unified_fund_list SET pos_ratio = ?
+                    WHERE fund_code = ?
+                ''', (pos_ratio, fund_code))
+                if conn.rowcount > 0:
+                    logger.info(f"✅ pos_ratio 同步: {fund_code} → {pos_ratio*100:.2f}%")
+                conn.commit()
+            except Exception as e:
+                logger.error(f"❌ 更新 {fund_code} pos_ratio 失败: {e}")
+            finally:
+                conn.close()
+            
     def upsert_fund_basket_weight(self, date: str, fund_code: str, underlying_symbol: str, weight: float):
         with self.lock:
             conn = self._get_conn()

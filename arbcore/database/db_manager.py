@@ -262,6 +262,7 @@ class DatabaseManager:
     def save_fund_data(self, *args, **kwargs): return self.funds.save_fund_data(*args, **kwargs)
     def update_fund_valuation(self, *args, **kwargs): return self.funds.update_fund_valuation(*args, **kwargs)
     def upsert_fund_factor(self, *args, **kwargs): return self.funds.upsert_fund_factor(*args, **kwargs)
+    def update_fund_pos_ratio(self, *args, **kwargs): return self.funds.update_fund_pos_ratio(*args, **kwargs)
     def upsert_fund_basket_weight(self, *args, **kwargs): return self.funds.upsert_fund_basket_weight(*args, **kwargs)
     def get_latest_fund_factor(self, *args, **kwargs): return self.funds.get_latest_fund_factor(*args, **kwargs)
     def get_fund_basket(self, *args, **kwargs): return self.funds.get_fund_basket(*args, **kwargs)

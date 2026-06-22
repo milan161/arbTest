@@ -173,6 +173,15 @@ class WoodyAPIService:
             
             db.upsert_fund_factor(date=b_date, fund_code=fund_code, calibration=cal, hedge=hed, position=pos, nav=nav_val)
             
+            # 🌟 Woody API 返回了真实仓位时，同步更新 unified_fund_list.pos_ratio
+            raw_pos = f_data.get('position')
+            if raw_pos is not None:
+                try:
+                    clean_pos = float(raw_pos)/100.0 if float(raw_pos) > 2 else float(raw_pos)
+                    db.update_fund_pos_ratio(fund_code, clean_pos)
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"⚠️ 解析 position 失败 {fund_code}: raw={raw_pos}, err={e}")
+            
             # 保存 Woody 提供的估值日汇率 (CNYest) 到汇率表 (可选的增强)
             if e_date and f_data.get('CNYest'):
                 try:

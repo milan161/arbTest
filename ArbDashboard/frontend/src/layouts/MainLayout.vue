@@ -105,6 +105,7 @@ import {
   BookOpen,
   AlertTriangle,
   Repeat,
+  Cpu,
 } from 'lucide-vue-next'
 
 const collapsed = ref(false)
@@ -206,7 +207,7 @@ const menuOptions = [
     icon: renderIcon(LineChart)
   },
   {
-    label: () => h(RouterLink, { to: '/auto-trade' }, { default: () => '信号监控' }),
+    label: () => h(RouterLink, { to: '/auto-trade' }, { default: () => '信号监视' }),
     key: 'auto-trade',
     icon: renderIcon(Activity)
   },
@@ -229,6 +230,11 @@ const menuOptions = [
     label: () => h(RouterLink, { to: '/settings' }, { default: () => '系统配置' }),
     key: 'settings',
     icon: renderIcon(Settings)
+  },
+  {
+    label: () => h(RouterLink, { to: '/godmode' }, { default: () => '我的交易' }),
+    key: 'godmode',
+    icon: renderIcon(Bot)
   }
 ]
 </script>

@@ -37,13 +37,17 @@ export interface FundItem {
   [key: string]: any
 }
 
-/** TAB 分类映射（与后端 fund_service.py 保持一致） */
+/**
+ * TAB 分类映射（与 unified_fund_list.category 字段保持一致）
+ * 每个值对应数据库中真实存在的 category，无历史遗留空壳条目。
+ * DB 已有的 category: 黄金原油 | 纯ETF | 混合跨境 | 欧美指数 | QDII亚洲 | 国内指数 | 白银 | 债券/货币
+ */
 export const TAB_CATEGORIES: Record<string, string[]> = {
-  '黄金原油': ['黄金原油', '黄金', '原油'],
-  'QDII欧美': ['纯ETF', 'QDII 欧美', '混合跨境', 'QDII欧美'],
-  'QDII亚洲': ['QDII 亚洲', 'QDII亚洲'],
-  '国内LOF': ['指数LOF', '其他', '国内LOF', 'lof_domestic'],
-  '白银': ['白银', '白银LOF'],
+  '黄金原油': ['黄金原油'],
+  'QDII欧美': ['纯ETF', '混合跨境', '欧美指数'],
+  'QDII亚洲': ['QDII亚洲'],
+  '国内LOF': ['国内指数'],
+  '白银': ['白银'],
   '现金管理': ['债券/货币']
 }
 

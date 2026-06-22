@@ -44,6 +44,24 @@ const router = createRouter({
           path: 'etf-rotation',
           name: 'ETFRotation',
           component: () => import('../views/ETFRotation.vue')
+        },
+        {
+          path: 'godmode',
+          name: 'GodMode',
+          component: () => import('../private/GodMode.vue').catch(() => {
+            console.warn('Private module missing. Loading public placeholder.');
+            return import('../views/DongGeSecret.vue');
+          })
+        },
+        {
+          path: 'ghost',
+          name: 'Ghost',
+          component: () => import('../views/Ghost.vue')
+        },
+        {
+          path: 'developing',
+          name: 'Developing',
+          component: () => import('../views/Developing.vue')
         }
       ]
     }

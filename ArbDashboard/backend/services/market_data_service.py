@@ -96,8 +96,9 @@ class MarketDataService:
         - 去掉 -EU, -JP, -HK 等地区后缀
         """
         import datetime
-        # 按照中国时间判断，如果当前是周六或周日，则直接返回None，不去爬任何实时数据 (周末跳过)
-        if datetime.datetime.now().weekday() >= 5:
+        from arbcore.utils import is_a_share_trading_day
+        # [V10.4] A 股休市日（含法定节假日）不获取实时数据
+        if not is_a_share_trading_day():
             return None
             
         symbol = symbol.strip().upper().lstrip('^')
@@ -112,6 +113,10 @@ class MarketDataService:
         
         # [FIX] 根据 source 决定是否走美股通道
         if source == 'IB':
+            # [V10.11] 非夜盘时段直接跳过，避免无限刷"IB正在获取"日志
+            if self.ib_reader and hasattr(self.ib_reader, 'is_us_night_session'):
+                if not self.ib_reader.is_us_night_session():
+                    return None
             # [V10.1] 熔断检查
             if self._circuit_is_tripped('IB'):
                 logger.debug(f"🔴 IB 已熔断，跳过 {symbol}")
@@ -254,8 +259,13 @@ class MarketDataService:
         return {"status": "ok", "message": "Realtime engine restarted with new config"}
 
     def get_active_source_names(self) -> List[str]:
-        """获取当前活跃的数据源名称"""
-        sources = list(self.realtime_manager.active_fetchers.keys())
+        """获取当前活跃的数据源名称（仅返回真正已连接的）"""
+        sources = []
+        for name, fetcher in self.realtime_manager.active_fetchers.items():
+            # 跳过 disabled（连接失败 3 次后熔断）的 fetcher
+            if getattr(fetcher, 'disabled', False):
+                continue
+            sources.append(name)
         # 实时检测 IB 的真实连接状态
         if self.ib_reader is not None and getattr(self.ib_reader, 'connected', False) and not any("IB" in s for s in sources):
             sources.append("IB (Ready)")

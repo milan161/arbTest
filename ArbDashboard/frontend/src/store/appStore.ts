@@ -19,7 +19,7 @@ export const useAppStore = defineStore('app', () => {
     try {
       const [milestoneRes, engineRes] = await Promise.all([
         api.getMilestones(),
-        api.getAutoTradeStatus()
+        api.getSignalDetectorStatus()
       ])
       if (milestoneRes.data?.status === 'ok') {
         milestones.value = milestoneRes.data.data || []

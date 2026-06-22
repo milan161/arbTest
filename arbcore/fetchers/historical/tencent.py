@@ -79,6 +79,11 @@ class TencentHistoricalFetcher(BaseHistoricalFetcher):
         s = symbol.upper()
         if s.startswith('SH') or s.startswith('SZ'):
             return s.lower()
+        if s.startswith('HK'):
+            return s.lower()
+        # 港股: 5位纯数字 (00700, 00883, 09988)
+        if s.isdigit() and len(s) == 5:
+            return f"hk{s}"
         if s.startswith('5') or s.startswith('6'):
             return f"sh{s}"
         if s.startswith('0') or s.startswith('3') or s.startswith('1'):

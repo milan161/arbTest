@@ -236,7 +236,11 @@ INDEX_MAP = {
     '.NDX': 'SINA',   # 纳斯达克100
     '.DJI': 'SINA',   # 道琼斯
     '.IXIC': 'SINA',  # 纳斯达克综合
-    '.HSI': 'SINA',   # 恒生指数
+    '.HSI': 'SINA',   # 恒生指数（带.前缀）
+    'HSI': 'SINA',    # 恒生指数（基金related_index存的格式，无.前缀）
+    'HSTECH': 'SINA', # 恒生科技指数
+    'HSCEI': 'SINA',  # 恒生中国企业指数
+    'CES300.HI': 'SINA', # 恒生沪深300指数（数据库存储格式，新浪用rt_hkCES300）
     '.SSEC': 'SINA',  # 上证指数
     '.SZSC': 'SINA',  # 深证成指
     '.CSI300': 'SINA',  # 沪深300

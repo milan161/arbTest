@@ -953,6 +953,9 @@ async def ghost_calc(fund_code: str = "162411"):
         # 3. 确定 underlying_symbol 和最相关的 ETF 实时价格
         portfolio = fund_cfg.get("valuation_portfolio", [])
         underlying_symbol = portfolio[0].get("symbol", "") if portfolio else ""
+        # [V10.8] basket为空时用 trade_etf（related_index）兜底（如162411→XOP）
+        if not underlying_symbol:
+            underlying_symbol = fund_cfg.get("trade_etf", "")
         underlying_clean = ""
         if underlying_symbol:
             s = underlying_symbol.replace("^", "")
@@ -966,6 +969,7 @@ async def ghost_calc(fund_code: str = "162411"):
         us_ask = 0.0
         us_bid_size = 0
         us_ask_size = 0
+        # [V10.8] 优先从 rt_quotes 取；basket为空时 rt_quotes 为空，直接行情驱动兜底
         if underlying_clean and underlying_clean in rt_quotes and rt_quotes[underlying_clean]:
             q = rt_quotes[underlying_clean]
             us_bid = float(q.get("bid", 0) or 0)
@@ -976,6 +980,20 @@ async def ghost_calc(fund_code: str = "162411"):
                 us_bid = float(q.get("price", 0) or 0)
             if us_ask <= 0:
                 us_ask = float(q.get("price", 0) or 0)
+        elif underlying_clean and market_data_service:
+            try:
+                q = market_data_service.get_realtime_quote(underlying_clean)
+                if q:
+                    us_bid = float(q.get("bid", 0) or 0)
+                    us_ask = float(q.get("ask", 0) or 0)
+                    us_bid_size = int(q.get("bid_size", 0) or 0)
+                    us_ask_size = int(q.get("ask_size", 0) or 0)
+                    if us_bid <= 0:
+                        us_bid = float(q.get("price", 0) or 0)
+                    if us_ask <= 0:
+                        us_ask = float(q.get("price", 0) or 0)
+            except Exception as e:
+                logger.error(f"[GhostCalc] failed to get quote for {underlying_clean}: {e}")
 
         # 4. hedge 值（复用 get_valuation_meta 返回的）
         hedge = float(base_data.get("hedge", 0)) if base_data else 0

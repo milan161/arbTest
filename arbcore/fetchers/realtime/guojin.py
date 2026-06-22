@@ -71,6 +71,9 @@ class GuojinQmtFetcher(BaseRealtimeFetcher):
     
     def reconnect(self):
         """手动重连（供用户点击"国金QMT"按钮时调用）"""
+        if self.is_connected:
+            logger.info("[QMT国金] 已经连接，跳过重复重连")
+            return True, "国金QMT已经连接"
         logger.info("[QMT国金] 用户手动触发重连...")
         self.disabled = False
         self.is_connected = False

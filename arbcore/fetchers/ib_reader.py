@@ -336,10 +336,15 @@ class IBReader(EWrapper, EClient):
     
     def reconnect(self):
         """手动重连（供用户点击"IB"按钮时调用）"""
+        # [V10.4] 如果已经连接，直接返回成功，避免 Error 326 重复客户号
+        if self.isConnected():
+            logger.info("[IB] 已经连接，跳过重复重连")
+            return True, "IB 已经连接"
         logger.info("[IB] 用户手动触发重连...")
         self.disabled = False
         self.connected = False
         self.last_connect_time = 0
+        self.current_port_index = 0
         for attempt in range(1, self.max_retries + 1):
             try:
                 if self.connect_to_ib():
@@ -367,7 +372,8 @@ class IBReader(EWrapper, EClient):
         else:
             return
         # 🤫 彻底屏蔽 10089(延时警告) 和 10346(持仓通道被TWS强制抢占警告)
-        if errorCode in [200, 2104, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
+        # [V10.11] 新增 502（连接被拒/端口不对）— 端口重试过程中的 502 是预期行为，不应触发断连
+        if errorCode in [200, 502, 2104, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
             return
             
         if errorCode in [2103, 2105]:
@@ -386,7 +392,7 @@ class IBReader(EWrapper, EClient):
             print(f"[IBReader] [INFO] 提示: 请求 {reqId} 发生错误，已解除其等待锁。")
             self.req_events[reqId].set()
 
-        if errorCode in [502, 504, 1100, 1101, 1102]:
+        if errorCode in [504, 1100, 1101, 1102]:
             self.connected = False
             self.disconnect_from_ib()
             self.mkt_req_ids.clear()
