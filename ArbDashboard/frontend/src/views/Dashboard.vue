@@ -840,7 +840,7 @@ const tableScrollX = computed(() => {
 /* 表格外层容器：固定高度，同时处理水平和垂直滚动 */
 .table-scroll-wrapper {
   width: 100%;
-  max-height: calc(100vh - 120px);
+  height: calc(100vh - 220px);
   overflow: auto;
 }
 
