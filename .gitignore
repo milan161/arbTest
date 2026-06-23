@@ -41,6 +41,7 @@ ArbDashboard/backend/core/database/
 /scratch/
 /test_read_data/
 /arbcore/scripts/data/
+ArbDashboard/data/
 .gemini/
 
 # === 文档、日志、自媒体内容与测试代码 (绝对禁止上传) ===
@@ -51,6 +52,7 @@ ArbDashboard/backend/core/database/
 /公众号文章/
 *.md
 !/README.md
+!/指数数据源梳理报告.md
 
 # === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
 *.xlsx

@@ -40,13 +40,13 @@ export interface FundItem {
 /**
  * TAB 分类映射（与 unified_fund_list.category 字段保持一致）
  * 每个值对应数据库中真实存在的 category，无历史遗留空壳条目。
- * DB 已有的 category: 黄金原油 | 纯ETF | 混合跨境 | 欧美指数 | QDII亚洲 | 国内指数 | 白银 | 债券/货币
+ * DB 已有的 category: 黄金原油 | QDII欧美 | 混合跨境 | QDII亚洲 | 国内指数 | 指数LOF | 白银 | 债券/货币
  */
 export const TAB_CATEGORIES: Record<string, string[]> = {
   '黄金原油': ['黄金原油'],
-  'QDII欧美': ['纯ETF', '混合跨境', '欧美指数'],
+  'QDII欧美': ['QDII欧美', '混合跨境'],
   'QDII亚洲': ['QDII亚洲'],
-  '国内LOF': ['国内指数'],
+  '国内LOF': ['国内指数', '指数LOF'],
   '白银': ['白银'],
   '现金管理': ['债券/货币']
 }

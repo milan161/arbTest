@@ -14,7 +14,7 @@ US_SYMBOL_PATTERN = re.compile(r'^[A-Z]{2,6}$')
 
 class MarketDataService:
     # [V10.1] 熔断器：连续失败 N 次后自动 disabled
-    CIRCUIT_BREAKER_THRESHOLD = 2
+    CIRCUIT_BREAKER_THRESHOLD = 5
 
     def __init__(self, db_manager):
         self.db = db_manager
@@ -146,8 +146,8 @@ class MarketDataService:
                 logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
                 return None
             elif self.ib_reader and not self.ib_reader.connected:
-                self._circuit_record_failure('IB')
-                logger.debug(f"⚠️ IB未连接，美股ETF{symbol}尝试回退至富途")
+                # [V10.12] IB 未连接不算失败（用户尚未点击连接按钮），不触发熔断
+                logger.debug(f"⚠️ IB未连接（待手动连接），美股ETF{symbol}尝试回退至富途")
             else:
                 logger.debug(f"⚠️ IB Reader未初始化，美股ETF{symbol}尝试回退至富途")
             

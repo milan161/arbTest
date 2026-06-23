@@ -896,10 +896,12 @@ async def get_private_status():
 @app.get("/api/private/export/{code}")
 async def export_fund_data(code: str):
     if not export_service:
+        logger.warning(f"导出失败: 私有插件未加载 (code={code})")
         return JSONResponse(status_code=403, content={"status": "error", "message": "Private export plugin not loaded"})
     
     csv_data, error = export_service.export_fund_to_csv(code)
     if error:
+        logger.error(f"导出失败 (code={code}): {error}")
         return JSONResponse(status_code=500, content={"status": "error", "message": error})
     
     from fastapi.responses import Response

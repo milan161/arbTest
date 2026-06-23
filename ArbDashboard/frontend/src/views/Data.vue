@@ -457,7 +457,24 @@ const handleExport = async () => {
     link.click()
     document.body.removeChild(link)
     message.success('导出成功')
-  } catch (e) { message.error('导出失败') }
+  } catch (e: any) {
+    // 尝试从 Blob 错误响应中提取真实错误信息
+    const errData = e?.response?.data
+    if (errData instanceof Blob) {
+      try {
+        const text = await errData.text()
+        const json = JSON.parse(text)
+        if (json?.message) {
+          console.error('[导出失败]', json.message)
+          message.error(`导出失败: ${json.message}`)
+          return
+        }
+      } catch { /* ignore parse errors */ }
+    }
+    const errMsg = e?.response?.data?.message || e?.message || '未知错误'
+    console.error('[导出失败]', errMsg)
+    message.error(`导出失败: ${errMsg}`)
+  }
 }
 
 onMounted(() => {

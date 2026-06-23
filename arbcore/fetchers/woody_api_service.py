@@ -122,9 +122,15 @@ class WoodyAPIService:
         except Exception as e:
             logger.error(f"⚠️ 生成备份文件失败: {e}")
 
-        # 5. 调用提纯入库逻辑
+        # 5. 验证数据有效性（防止错误信息被标记为成功）
+        if not isinstance(api_data, dict) or len(api_data) == 0:
+            logger.error(f"❌ [{source_id}] API 返回数据无效（非字典或为空），不标记防刷。原始内容: {str(api_data)[:200]}")
+            return None
+
+        # 6. 调用提纯入库逻辑
         WoodyAPIService.process(db, api_data, source_id)
 
+        # 7. 数据验证通过后才标记防刷（修复 bug：之前错误信息也会被标记）
         db.mark_access_synced(today_str, sync_key)
         logger.info(f"✅ [{source_id}] 因子提纯入库与双备份完毕！")
         return api_data

@@ -50,14 +50,6 @@ class MarketManager(BaseManager):
             conn.commit()
             conn.close()
 
-    def upsert_index_price(self, date: str, symbol: str, price: float):
-        with self.lock:
-            conn = self._get_conn()
-            query = "INSERT OR REPLACE INTO index_daily (date, symbol, price, updated_at) VALUES (?, ?, ?, (datetime('now', 'localtime')))"
-            conn.execute(query, (date, symbol, price))
-            conn.commit()
-            conn.close()
-
     def get_latest_usa_etf_date(self, symbol: str) -> str:
         conn = self._get_conn()
         query = "SELECT MAX(date) FROM usa_etf_daily_prices WHERE symbol = ?"

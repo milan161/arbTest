@@ -92,19 +92,18 @@
             <n-input v-model:value="searchKeyword" placeholder="搜索代码/名称..." class="search-input" size="small" clearable />
           </div>
 
-          <n-data-table
-            :columns="columns"
-            :data="filteredTableData"
-            :loading="loading"
-            :pagination="pagination"
-            flex-height
-            style="height: calc(100vh - 200px);"
-            :scroll-x="tableScrollX"
-            virtual-scroll
-            size="small"
-            bordered
-            :row-props="rowProps"
-          />
+          <div class="table-scroll-wrapper">
+            <n-data-table
+              :columns="columns"
+              :data="filteredTableData"
+              :loading="loading"
+              :pagination="pagination"
+              style="min-width: 1500px;"
+              size="small"
+              bordered
+              :row-props="rowProps"
+            />
+          </div>
         </n-card>
       </n-gi>
     </n-grid>
@@ -145,7 +144,7 @@ import { Zap, Bot, Star, StarOff, History } from 'lucide-vue-next'
 // --- 新架构导入 ---
 import { useFundStore, useMarketStore, useAppStore } from '../store'
 import { formatPrice, formatValuation, formatPercent, formatPremium,
-         formatVolume, formatShares, formatSharesChange,
+         formatVolume, formatShares, formatSharesChange, formatTurnoverRate,
          formatIndexPrice, priceColor, shortDate, cleanFundName } from '../utils'
 import { getFundHistory } from '../api'
 
@@ -297,23 +296,23 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '代码', key: 'fund_code', width: 68, fixed: 'left', align: 'center',
+    title: '代码', key: 'fund_code', width: 42, fixed: 'left', align: 'center',
     sorter: (a: any, b: any) => a.fund_code.localeCompare(b.fund_code),
     render(row: any) { return h(NText, { code: true, class: 'code-cell' }, { default: () => row.fund_code || '-' }) }
   },
   {
-    title: '名称', key: 'fund_name', width: 118, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
+    title: '名称', key: 'fund_name', width: 68, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
     render(row: any) {
       return h('span', { class: 'fund-name-cell' }, cleanFundName(row.fund_name))
     }
   },
   {
-    title: '现价', key: 'price', width: 64, align: 'center',
+    title: '现价', key: 'price', width: 38, align: 'center',
     sorter: (a: any, b: any) => (a.price || 0) - (b.price || 0),
     render(row: any) { return h('span', { class: 'num-cell' }, formatPrice(row.price)) }
   },
   {
-    title: '涨跌幅', key: 'price_change', width: 82, align: 'center',
+    title: '涨跌幅', key: 'price_change', width: 54, align: 'center',
     sorter: (a: any, b: any) => (a.price_change || 0) - (b.price_change || 0),
     render(row: any) {
       const chg = row.price_change || 0
@@ -322,14 +321,14 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '实时估值', key: 'rt_val_display', width: 78, align: 'center',
+    title: '实时估值', key: 'rt_val_display', width: 48, align: 'center',
     render(row: any) {
       if (row.rt_val && row.rt_val > 0) return h('span', { class: 'num-cell strong' }, row.rt_val.toFixed(4))
       return h('span', { class: 'num-cell muted' }, '-')
     }
   },
   {
-    title: '实时溢价', key: 'rt_premium', width: 82, align: 'center',
+    title: '实时溢价', key: 'rt_premium', width: 52, align: 'center',
     render(row: any) {
       if (!row.rt_val || !row.price) return h('span', { class: 'num-cell muted' }, '-')
       const p = (row.price / row.rt_val - 1) * 100
@@ -337,19 +336,19 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: 'T-2/1日净值', key: 'nav', width: 82, align: 'center',
+    title: 'T-2/1日净值', key: 'nav', width: 52, align: 'center',
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.nav)) }
   },
   {
-    title: '净值日期', key: 'nav_date', width: 66, align: 'center',
+    title: '净值日期', key: 'nav_date', width: 40, align: 'center',
     render(row: any) { return h(NText, { depth: 3, class: 'date-cell' }, { default: () => shortDate(row.nav_date) }) }
   },
   {
-    title: '静态估值', key: 'static_val_display', width: 78, align: 'center',
+    title: '静态估值', key: 'static_val_display', width: 48, align: 'center',
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.static_val)) }
   },
   {
-    title: '静态溢价', key: 'static_premium', width: 82, align: 'center',
+    title: '静态溢价', key: 'static_premium', width: 52, align: 'center',
     sorter: (a: any, b: any) => (a.static_premium || 0) - (b.static_premium || 0),
     render(row: any) {
       if (!row.static_premium) return '-'
@@ -357,17 +356,17 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '成交额(万)', key: 'volume', width: 100, align: 'right',
+    title: '成交额(万)', key: 'volume', width: 56, align: 'right',
     sorter: (a: any, b: any) => (a.volume || 0) - (b.volume || 0),
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatVolume(row.volume)) }
   },
   {
-    title: '份额(万)', key: 'shares', width: 72, align: 'right',
+    title: '份额(万)', key: 'shares', width: 52, align: 'right',
     sorter: (a: any, b: any) => (a.shares || 0) - (b.shares || 0),
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatShares(row.shares)) }
   },
   {
-    title: '新增(万)', key: 'shares_added', width: 68, align: 'right',
+    title: '新增(万)', key: 'shares_added', width: 48, align: 'right',
     sorter: (a: any, b: any) => (a.shares_added || 0) - (b.shares_added || 0),
     fixedHeader: true,
     render(row: any) {
@@ -376,15 +375,15 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-      title: '换手率', key: 'turnover_rate', width: 64, align: 'center',
+      title: '换手率', key: 'turnover_rate', width: 48, align: 'center',
       render(row: any) { return h('span', { class: 'num-cell muted' }, formatTurnoverRate(row.turnover_rate)) }
   },
   {
-    title: '指数价', key: 'index_close', width: 72, align: 'center',
+    title: '指数价', key: 'index_close', width: 48, align: 'center',
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatIndexPrice(row.index_close)) }
   },
   {
-    title: '指数涨跌幅', key: 'index_pct', width: 82, align: 'center',
+    title: '指数涨跌', key: 'index_pct', width: 54, align: 'center',
     render(row: any) {
       if (!row.index_pct) return '-'
       return h('span', { class: 'num-cell compact', style: { color: priceColor(Number(row.index_pct)) } }, formatPercent(Number(row.index_pct), 2))
@@ -392,28 +391,54 @@ const allColumns: DataTableColumns<any> = [
   },
 
   {
-    title: '申购', key: 'purchase_status', width: 68, align: 'center',
+    title: '申购', key: 'purchase_status', width: 46, align: 'center',
     render(row: any) {
       const status = row.purchase_status || '未知'
-      const isOk = status.includes('开放')
-      return h(NTag, { type: isOk ? 'success' : 'warning', size: 'small', round: true, class: 'status-pill' }, { default: () => status })
+      let shortText = status
+      let type = 'warning'
+      if (status.includes('开放')) {
+        if (status.includes('限大额')) {
+          shortText = '限大额'
+          type = 'warning'
+        } else {
+          shortText = '开放'
+          type = 'success'
+        }
+      } else {
+        shortText = '暂停'
+        type = 'warning'
+      }
+      return h(NTag, { type, size: 'small', round: true, class: 'status-pill' }, { default: () => shortText })
     }
   },
   {
     title: '赎回',
     key: 'redemption_status',
-    width: 68,
+    width: 46,
     align: 'center',
     render(row: any) {
       const status = row.redemption_status || '未知'
-      const isOk = status.includes('开放')
-      return h(NTag, { type: isOk ? 'success' : 'warning', size: 'small', round: true, class: 'status-pill' }, { default: () => status })
+      let shortText = status
+      let type = 'warning'
+      if (status.includes('开放')) {
+        if (status.includes('限大额')) {
+          shortText = '限大额'
+          type = 'warning'
+        } else {
+          shortText = '开放'
+          type = 'success'
+        }
+      } else {
+        shortText = '暂停'
+        type = 'warning'
+      }
+      return h(NTag, { type, size: 'small', round: true, class: 'status-pill' }, { default: () => shortText })
     }
   },
   {
     title: '验算',
     key: 'actions',
-    width: 60,
+    width: 40,
     fixed: 'right',
     align: 'center',
     render(row: any) {
@@ -656,12 +681,20 @@ const columns = computed<DataTableColumns<any>>(() => {
 })
 
 const tableScrollX = computed(() => {
-  return columns.value.reduce((total, col: any) => total + Number(col.width || 80), 0)
+  const minRequired = columns.value.reduce((total, col: any) => total + Number(col.width || 80), 0)
+  // 深度压缩后列宽总和约900px，设置底线确保水平滚动在窄屏下可用
+  return Math.max(1500, minRequired)
 })
 </script>
 
 <style scoped>
-.dashboard { color: #1f2937; }
+.dashboard { 
+  color: #1f2937;
+  width: 100%;
+  max-width: 100vw;
+  min-width: 0;
+  box-sizing: border-box;
+}
 :deep(.n-data-table),
 :deep(.n-data-table-wrapper),
 :deep(.n-data-table-base-table),
@@ -671,22 +704,28 @@ const tableScrollX = computed(() => {
 :deep(.n-scrollbar-container),
 :deep(.n-scrollbar-content) {
   background: #ffffff !important;
+  border-spacing: 0 !important;
 }
 :deep(.n-data-table-tr) {
   background-color: #ffffff !important;
 }
 :deep(.n-data-table-td) {
-  padding: 3px 4px !important;
+  padding: 2px 2px !important;
   color: #1f2937 !important;
   background-color: #ffffff !important;
-  border-color: #edf1f7 !important;
+  border-color: #f0f4f8 !important;
+  border-width: 1px 0 !important;
 }
 :deep(.n-data-table-th) {
-  padding: 5px 4px !important;
+  padding: 3px 2px !important;
   background-color: #eef5ff !important;
+  border-width: 1px 0 !important;
 }
 :deep(.n-data-table-tr:nth-child(even) .n-data-table-td) { background-color: #fbfdff !important; }
 :deep(.n-data-table-tr:hover .n-data-table-td) { background-color: #f6faff !important; }
+:deep(.n-data-table-cell) {
+  padding: 0 !important;
+}
 
 .table-toolbar {
   display: flex;
@@ -723,6 +762,9 @@ const tableScrollX = computed(() => {
   border: 1px solid #e5edf7;
   box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
   overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .code-cell {
   font-family: "Fira Code", Consolas, monospace;
@@ -783,6 +825,7 @@ const tableScrollX = computed(() => {
   height: 14px !important;
   right: 1px;
   bottom: 1px;
+  opacity: 0.8;
 }
 :deep(.n-scrollbar-rail--vertical) {
   width: 14px !important;
@@ -794,10 +837,21 @@ const tableScrollX = computed(() => {
   width: 10px !important;
   height: 10px !important;
   border-radius: 5px !important;
-  border: 1px solid transparent !important;
+  background-color: #cbd5e1 !important;
+  cursor: pointer !important;
 }
 :deep(.n-scrollbar-thumb:hover) {
   width: 10px !important;
   height: 10px !important;
+  background-color: #94a3b8 !important;
+}
+:deep(.n-scrollbar-rail:hover .n-scrollbar-thumb) {
+  background-color: #94a3b8 !important;
+}
+
+/* 表格外层容器：自然高度 + 水平滚动。页面自己处理垂直滚动 */
+.table-scroll-wrapper {
+  width: 100%;
+  overflow-x: auto;
 }
 </style>

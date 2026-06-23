@@ -69,9 +69,9 @@ def _ensure_daily_snapshot(conn):
 # TAB → SQL category 值映射（与 unified_fund_list.category 保持一致）
 _TAB_CATEGORY_MAP = {
     '黄金原油': ['黄金原油'],
-    'QDII欧美': ['纯ETF', '混合跨境', '欧美指数'],
+    'QDII欧美': ['QDII欧美', '混合跨境'],
     'QDII亚洲': ['QDII亚洲'],
-    '国内LOF': ['国内指数'],
+    '国内LOF': ['国内指数', '指数LOF'],
     '白银': ['白银'],
     '现金管理': ['债券/货币'],
 }
@@ -260,51 +260,267 @@ def get_index_change_percent(symbol: str) -> float:
 _prefetch_cache = {}
 _prefetch_cache_time = 0
 
-def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
+# [V10.9] 非标代码映射表（模块级，prefetch_index_changes 和 fallback 共用）
+_INDEX_CODE_MAP = {
+    '中小100': '399011', '移动互联': '399363', '中证500': '000905',
+    '中证TMT': '399989', '中证白酒': '399997', '中证消费': '399932',
+    '中证养老': '399812', '中证银行': '399986', '国证有色': '399395',
+    '证券公司': '399975', '国企改革': '399974',
+    'SZ399989': '399989', 'SZ399990': '399990', 'SZ399993': '399993',
+    'H30094': '000852', '950090': '000852',
+    '930713': '399006', '930875': '399006',
+    '930720': '399005', '930997': '399005',
+    '000922': '399001', '000961': '399330', '000979': '399441',
+    'CES300.HI': '399300',
+    'KWEB': None, 'RSPH': None,
+}
+
+def _clean_index_symbol(sym: str) -> str:
+    """对指数符号做清洗和映射，返回可用于 index_history 查询的代码"""
+    clean = sym.strip().upper()
+    if not clean:
+        return ''
+    # 映射表
+    if clean in _INDEX_CODE_MAP:
+        return _INDEX_CODE_MAP[clean] or ''
+    # .CSI 后缀
+    if clean.endswith('.CSI'):
+        clean = clean[:-4]
+    # SZ/SH 前缀
+    if clean.startswith('SZ') or clean.startswith('SH'):
+        clean = clean[2:]
+    # 再次查映射表
+    if clean in _INDEX_CODE_MAP:
+        return _INDEX_CODE_MAP[clean] or ''
+    # HK 指数保持原样
+    # A股 6位纯数字保持原样
+    return clean
+
+def _is_hk_index_symbol(clean_sym: str) -> bool:
+    """判断清洗后的符号是否为港股指数"""
+    if not clean_sym:
+        return False
+    hk_prefixes = ('HSI', 'HSTECH', 'HSCEI', 'HSCI', 'HSCCI', 'HSSCNE',
+                   'HSSI', 'HSMI', 'HSSFML25', 'HSSCBBAI')
+    return any(clean_sym.upper().startswith(p) for p in hk_prefixes)
+
+def _is_a_share_index_symbol(clean_sym: str) -> bool:
+    """判断清洗后的符号是否为A股指数（6位纯数字）"""
+    if not clean_sym:
+        return False
+    return clean_sym.isdigit() and len(clean_sym) == 6
+
+def _classify_index_symbol(sym: str) -> str:
     """
-    [V6.0 性能优化] 批量预取新浪/腾讯指数数据，将 O(N) 降低为 O(1)
-    [V10.8] 修复指数多重映射Bug，切换腾讯接口优先
+    对单个 symbol 做清洗 + 分类，返回 ('a_share'|'hk'|'other', clean_sym)
+    """
+    if not sym or sym == '-':
+        return ('skip', '')
+    clean = _clean_index_symbol(sym)
+    if not clean:
+        return ('skip', '')
+    # 美股ETF 标记为 skip（走IB/Futu）
+    US_ETF_KEYWORDS = {'XOP', 'GLD', 'USO', 'SPY', 'QQQ', 'XBI', 'XLY', 'SOXX',
+                       'ARKK', 'ARKG', 'EEM', 'VWO', 'INDA', 'EWJ', 'KWEB', 'RSPH',
+                       'LQD', 'HYG', 'TLT', 'IEF', 'SHY', 'AGG', 'BND'}
+    if any(etf in clean.upper() for etf in US_ETF_KEYWORDS):
+        return ('skip', '')
+    if _is_a_share_index_symbol(clean):
+        return ('a_share', sym)
+    if _is_hk_index_symbol(clean):
+        return ('hk', sym)
+    return ('other', sym)
+
+def _build_index_daily_fallback(symbols: List[str], conn, now) -> Dict[str, Dict[str, float]]:
+    """[V10.16] 从 index_history 兜底读取最新收盘价，并计算真实涨跌幅
+
+    涨跌幅 = (最新收盘价 - 前一个交易日收盘价) / 前一个交易日收盘价 × 100
+
+    index_history 表包含 84 个指数、12946 条记录（含全部港股/A股/CSI），
+    由 backfill_tdx_index.py 通过 TDX 回补写入。
+
+    场景举例：
+    - 周一 17:00（收盘后）：最新=周一收盘价, 前一=上周五收盘价 → pct=周一真实涨跌幅
+    - 周六（周末）：最新=上周五收盘价, 前一=上周四收盘价 → pct=上周五真实涨跌幅
+    - 盘中（当天数据已入库）：最新=今天盘中, 前一=昨天收盘价 → pct 就是实时涨跌幅
+    """
+    if not conn or not symbols:
+        return {}
+
+    # 1. 清洗所有符号
+    orig_to_clean = {}
+    clean_set = set()
+    for sym in symbols:
+        if not sym or sym == '-':
+            continue
+        c = _clean_index_symbol(sym)
+        if c:
+            orig_to_clean[sym] = c
+            clean_set.add(c)
+
+    if not clean_set:
+        return {}
+
+    # 2. 从 index_history 用 ROW_NUMBER pivot 取每个 symbol 最新两条收盘价
+    #    LAG 在 rn=1 行永远是 NULL，所以改用 rn=1 和 rn=2 的 GROUP BY pivot
+    placeholders = ','.join(['?' for _ in clean_set])
+    rows = conn.execute(f"""
+        SELECT symbol,
+            MAX(CASE WHEN rn = 1 THEN close END) as latest_close,
+            MAX(CASE WHEN rn = 2 THEN close END) as prev_close
+        FROM (
+            SELECT symbol, close,
+                ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) as rn
+            FROM index_history
+            WHERE symbol IN ({placeholders})
+        )
+        WHERE rn IN (1, 2)
+        GROUP BY symbol
+    """, list(clean_set)).fetchall()
+
+    # 3. 计算真实涨跌幅
+    db_data = {}
+    for symbol, latest_price, prev_price in rows:
+        if latest_price and latest_price > 0:
+            if prev_price and prev_price > 0 and prev_price != latest_price:
+                pct = (latest_price - prev_price) / prev_price * 100
+            else:
+                pct = 0.0  # 只有一条记录或价格平盘
+            db_data[symbol] = {"price": latest_price, "pct": round(pct, 4)}
+
+    # 4. 映射回原始 symbols
+    res = {}
+    for orig_sym, clean_sym in orig_to_clean.items():
+        data = db_data.get(clean_sym)
+        if data:
+            res[orig_sym] = data
+
+    return res
+
+
+def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str, float]]:
+    """
+    [V10.16] 收盘后不再爬实时数据：
+    - 周末/假期 → 全部指数走 index_history 收盘价，不调任何 API
+    - 15:00后 A股指数 → 直接取 index_history 收盘价，不调API
+    - 16:00后 港股指数 → 直接取 index_history 收盘价，不调API
+    - 交易时段内 → 正常拉腾讯/新浪/东财API
     """
     global _prefetch_cache, _prefetch_cache_time
     import time
+    # [V10.17] 缓存改为 symbol-aware：必须所有请求的符号都在缓存中才返回
+    requested_set = set(s for s in symbols if s and s != '-')
     if time.time() - _prefetch_cache_time < 60 and _prefetch_cache:
-        return _prefetch_cache
+        if requested_set.issubset(_prefetch_cache.keys()):
+            return _prefetch_cache
+        # 否则缓存不完整，穿透重新获取
     if not symbols:
         return {}
-    from arbcore.utils import is_a_share_trading_day
+
     now = datetime.now()
+
+    # ====== Step 0: 非交易日（周末/假期）→ 全部走 DB 兜底 ======
+    from arbcore.utils import is_a_share_trading_day
     if not is_a_share_trading_day(now.date()):
+        if conn:
+            try:
+                db_results = _build_index_daily_fallback(symbols, conn, now)
+                if db_results:
+                    _prefetch_cache = db_results
+                    _prefetch_cache_time = time.time()
+                    logger.info(
+                        f"[INDEX-DB] 非交易日 {now.date()}（周末/假期），"
+                        f"{len(db_results)}/{len(symbols)} 个指数取上一交易日收盘价"
+                    )
+                    return db_results
+            except Exception as e:
+                logger.warning(f"[INDEX-DB] 非交易日兜底失败: {e}")
+        # 兜底失败 → 返回旧缓存
+        if _prefetch_cache:
+            return _prefetch_cache
         return {}
 
-    today_str = now.strftime('%Y-%m-%d')
-    
-    need_fetch = []
+    # ====== Step 1: 分类 symbols → A股/港股/其他 ======
+    a_share_syms = []
+    hk_syms = []
+    other_syms = []
     for sym in symbols:
-        if not sym or sym == '-': continue
-        clean_sym = sym.strip().upper()
-        if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
-        if clean_sym.startswith('SZ') or clean_sym.startswith('SH'): clean_sym = clean_sym[2:]
-        if clean_sym == '中小100': clean_sym = '399011'
-        elif clean_sym == '移动互联': clean_sym = '399363'
-        
-        cache_key = f"{clean_sym}_{today_str}"
-        if cache_key not in _index_pct_cache:
-            need_fetch.append(sym)
-            
-    if not need_fetch:
-        res = {}
-        for sym in symbols:
-            if not sym or sym == '-': continue
-            clean_sym = sym.strip().upper()
-            if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
-            if clean_sym.startswith('SZ') or clean_sym.startswith('SH'): clean_sym = clean_sym[2:]
-            if clean_sym == '中小100': clean_sym = '399011'
-            elif clean_sym == '移动互联': clean_sym = '399363'
-            
-            cache_key = f"{clean_sym}_{today_str}"
-            if cache_key in _index_pct_cache:
-                res[sym] = {"price": 0.0, "pct": _index_pct_cache[cache_key]}
-        return res
+        cat, _ = _classify_index_symbol(sym)
+        if cat == 'a_share':
+            a_share_syms.append(sym)
+        elif cat == 'hk':
+            hk_syms.append(sym)
+        elif cat == 'other':
+            other_syms.append(sym)
+        # 'skip' → 忽略
+
+    # ====== Step 2: 判断各市场是否已收盘 ======
+    a_closed = now.hour >= 15      # A股 15:00 收盘
+    hk_closed = now.hour >= 16     # 港股 16:00 收盘
+
+    db_results = {}
+    api_syms = []
+
+    # 已收盘的 → 从 DB 取收盘价
+    closed_syms = []
+    if a_closed:
+        closed_syms.extend(a_share_syms)
+    else:
+        api_syms.extend(a_share_syms)
+
+    if hk_closed:
+        closed_syms.extend(hk_syms)
+    else:
+        api_syms.extend(hk_syms)
+
+    # [V10.17] 'other' 符号（如 .SPACEVCP/.SPHCMSHP/800有色 等非标指数）
+    # 收盘后走 DB 兜底，交易时段走 API
+    if a_closed and hk_closed:
+        closed_syms.extend(other_syms)
+    else:
+        api_syms.extend(other_syms)
+
+    if closed_syms and conn:
+        try:
+            db_results = _build_index_daily_fallback(closed_syms, conn, now)
+            if db_results:
+                logger.info(
+                    f"[INDEX-DB] 收盘兜底: "
+                    f"A股{'已收盘' if a_closed else '交易中'} / 港股{'已收盘' if hk_closed else '交易中'} "
+                    f"→ {len(db_results)}个指数从DB取收盘价"
+                )
+        except Exception as e:
+            logger.warning(f"[INDEX-DB] 收盘兜底失败: {e}")
+
+    # ====== Step 3: 还在交易时段的 → 调 API ======
+    api_results = {}
+    if api_syms:
+        api_results = _fetch_realtime_indices(api_syms, now)
+
+    # ====== Step 4: 合并并缓存 ======
+    res = {**db_results, **api_results}
+    if res:
+        _prefetch_cache = res
+        _prefetch_cache_time = time.time()
+    elif _prefetch_cache:
+        # API和DB都没拿到数据，返回旧缓存
+        return _prefetch_cache
+
+    return res
+
+
+def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, float]]:
+    """
+    [V10.14] 从腾讯→新浪→东财 三级瀑布获取实时指数行情
+    仅用于还在交易时段的指数（收盘后的指数已在 prefetch_index_changes 中走DB兜底）
+    """
+    if not symbols:
+        return {}
+
+    # [V10.14] 统一使用模块级 _INDEX_CODE_MAP，不再重复定义
+    US_ETF_KEYWORDS = {'XOP', 'GLD', 'USO', 'SPY', 'QQQ', 'XBI', 'XLY', 'SOXX',
+                       'ARKK', 'ARKG', 'EEM', 'VWO', 'INDA', 'EWJ', 'KWEB', 'RSPH',
+                       'LQD', 'HYG', 'TLT', 'IEF', 'SHY', 'AGG', 'BND'}
 
     import requests
     headers_tencent = {'Referer': 'https://finance.qq.com/', 'User-Agent': 'Mozilla/5.0'}
@@ -318,11 +534,20 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
     for sym in symbols:
         if not sym or sym == '-': continue
         clean_sym = sym.strip().upper()
+
+        if any(etf in clean_sym for etf in US_ETF_KEYWORDS):
+            continue
+
+        if clean_sym in _INDEX_CODE_MAP:
+            mapped = _INDEX_CODE_MAP[clean_sym]
+            if mapped is None:
+                continue
+            clean_sym = mapped
+
         if clean_sym.endswith('.CSI'): clean_sym = clean_sym[:-4]
         if clean_sym.startswith('SZ') or clean_sym.startswith('SH'): clean_sym = clean_sym[2:]
-        
-        if clean_sym == '中小100': clean_sym = '399011'
-        elif clean_sym == '移动互联': clean_sym = '399363'
+        if clean_sym in _INDEX_CODE_MAP:
+            clean_sym = _INDEX_CODE_MAP[clean_sym]
         
         tc_req = ""
         sina_req = ""
@@ -342,6 +567,10 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
             tc_req, sina_req, ret_code = "hkHSCEI", "rt_hkHSCEI", "HSCEI"
         elif 'HSI' in clean_sym:
             tc_req, sina_req, ret_code = "hkHSI", "rt_hkHSI", "HSI"
+        elif clean_sym.startswith('.') and len(clean_sym) <= 10:
+            # [V10.13] 美股指数（.INX, .NDX, .SP500-45 等）走新浪获取
+            sina_req = f"s_sh{clean_sym}"
+            ret_code = clean_sym
         else:
             continue
             
@@ -405,11 +634,99 @@ def prefetch_index_changes(symbols: List[str]) -> Dict[str, Dict[str, float]]:
                                 for original_sym in sina_to_syms[code]:
                                     if original_sym not in res:
                                         res[original_sym] = {"price": float(parts[6]), "pct": float(parts[8])}
+                    elif var_name.startswith('var hq_str_s_sh.'):
+                        # [V10.13] 美股指数新浪格式: var hq_str_s_sh.INX="..."
+                        # 新浪美股指数返回格式: 名称,当前点位,涨跌额,涨跌幅%,最高,最低,昨收,...
+                        code = var_name.replace('var hq_str_s_sh.', '')
+                        if len(parts) >= 4 and float(parts[3]) != 0.0:
+                            if code in sina_to_syms:
+                                for original_sym in sina_to_syms[code]:
+                                    if original_sym not in res:
+                                        res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
+                                        logger.info(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
         except Exception as e:
             logger.warning(f"预取新浪指数兜底异常: {e}")
 
-    _prefetch_cache = res
-    _prefetch_cache_time = time.time()
+    # [V10.12] 3. 东财API兜底：港股/CSI非标指数（腾讯/新浪不识别的）
+    # 东财 secid 映射规则：
+    #   HSSI, HSMI, HSFML25, HSSCBBAI → 124.{code}
+    #   HSCEI → 100.{code}
+    #   CSI前缀 → 2.{code[3:]}
+    #   其余港股(HSI, HSCI, HSCCI, HSSCNE等) → 116.{code}
+    EM_SECID_MAP = {
+        'HSSI': '124.HSSI', 'HSMI': '124.HSMI', 'HSSFML25': '124.HSSFML25',
+        'HSSCBBAI': '124.HSSCBBAI', 'HSCEI': '100.HSCEI',
+    }
+    EM_HK_KEYWORDS = {'HSI', 'HSCI', 'HSCCI', 'HSSCNE', 'HSTECH'}
+
+    em_requests = {}  # original_sym -> secid
+    for sym in symbols:
+        if not sym or sym == '-': continue
+        clean_sym = sym.strip().upper()
+        if any(etf in clean_sym for etf in US_ETF_KEYWORDS):
+            continue
+        if sym in res:
+            continue  # 已有数据，跳过
+        # 已在腾讯/新浪获取成功的 ret_code 也跳过
+        # 判断是否需要东财兜底
+        secid = None
+        if clean_sym in EM_SECID_MAP:
+            secid = EM_SECID_MAP[clean_sym]
+        elif clean_sym[:3] == 'CSI':
+            secid = f"2.{clean_sym[3:]}"
+        elif clean_sym.startswith('H') and any(kw in clean_sym for kw in EM_HK_KEYWORDS):
+            secid = f"116.{clean_sym}"
+        elif clean_sym.endswith('.CSI'):
+            # 930914.CSI → 2.930914
+            code_part = clean_sym[:-4]
+            if code_part.isdigit():
+                secid = f"2.{code_part}"
+        if secid:
+            em_requests[sym] = secid
+
+    if em_requests:
+        headers_em = {
+            'Referer': 'https://quote.eastmoney.com/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+        for original_sym, secid in em_requests.items():
+            try:
+                url_em = f"https://push2.eastmoney.com/api/qt/stock/get"
+                params_em = {
+                    'secid': secid,
+                    'fields': 'f43,f58,f170',
+                    'ut': 'fa5fd1943c7b386f172d6893dbfba10b',
+                    'fltt': '1',
+                }
+                r_em = requests.get(url_em, params=params_em, headers=headers_em, timeout=3.0)
+                data_em = r_em.json()
+                if data_em.get('rc') == 0 and data_em.get('data'):
+                    d = data_em['data']
+                    price = d.get('f43', 0)
+                    pct = d.get('f170', 0)
+                    name = d.get('f58', '')
+                    # 东财 f43/f170 已经是实际值（fltt=1时），无需除以100
+                    if price and price > 0:
+                        res[original_sym] = {"price": float(price), "pct": float(pct)}
+                        logger.info(f"[INDEX-EASTMONEY] 获取指数 {original_sym}({secid}) 价格: {price} 涨跌幅: {pct}%")
+            except Exception as e:
+                logger.debug(f"东财获取 {original_sym}({secid}) 失败: {e}")
+
+    # 4. 增加未获取到的指数 Debug 记录（跳过美股ETF和已映射的非标代码）
+    # [V10.13] 美股相关符号（含 S&P 系列、美股指数代理 .INX/.NDX 等）全部跳过，不报 DEBUG
+    US_RELATED_SYMBOLS = {'.INX', '.NDX', '.SPHCMSHP', '.SPACEVCP', 'VNQ', 'H11136'}
+    for sym in symbols:
+        if not sym or sym == '-': continue
+        clean_sym_check = sym.strip().upper()
+        if any(etf in clean_sym_check for etf in US_ETF_KEYWORDS):
+            continue  # 美股ETF不报错，它们走IB/Futu
+        if clean_sym_check in US_RELATED_SYMBOLS:
+            continue  # 美股相关符号不报错
+        if clean_sym_check in _INDEX_CODE_MAP:
+            continue  # 已映射的代码不报错
+        if sym not in res:
+            logger.debug(f"[INDEX-DEBUG] 指数行情完全缺失: {sym} (未匹配到腾讯/新浪数据)")
+
     return res
 
 class FundService:
@@ -498,7 +815,7 @@ class FundService:
 
             # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅
             all_related_indices = funds_df['related_index'].dropna().tolist()
-            index_changes_map = prefetch_index_changes(all_related_indices)
+            index_changes_map = prefetch_index_changes(all_related_indices, conn=conn)
 
             # 预查哪些基金有完整权重篮子（跳过简化指数估值，直接用计算器）
             funds_with_basket = set()
@@ -568,11 +885,11 @@ class FundService:
                             metrics['shares_added'] = float(shares_t - shares_t1)
 
                     if metrics.get('turnover_rate') == 0.0:
-                        vol = metrics.get('volume', 0)
-                        sh = metrics.get('shares', 0)
-                        pr = metrics.get('price', 0)
-                        if vol > 0 and sh > 0 and pr > 0:
-                            metrics['turnover_rate'] = vol / (sh * 10000.0 * pr)
+                        vol = metrics.get('volume', 0)  # 成交额(万元)
+                        sh = metrics.get('shares', 0)  # 份额(万份)
+                        price = metrics.get('price', 0)  # 现价
+                        if vol > 0 and sh > 0 and price > 0:
+                            metrics['turnover_rate'] = (vol / (price * sh)) * 100  # 换手率(%) = 成交额/(现价×份额) × 100
 
                     if not valid_prices.empty:
                         metrics['prev_close'] = valid_prices.iloc[0]['price']
@@ -584,14 +901,14 @@ class FundService:
                     rt = quotes_dict[code]
                     metrics['price'] = rt['price']
                     if rt.get('amount'):
-                        metrics['volume'] = rt['amount']
+                        metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
                 elif self.market_data_service:
                     try:
                         rt = self.market_data_service.get_realtime_quote(code)
                         if rt and rt.get('price'):
                             metrics['price'] = rt['price']
                             if rt.get('amount'):
-                                metrics['volume'] = rt['amount']
+                                metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
                     except Exception as e:
                         logger.error(f"Error getting realtime quote for {code}: {e}")
 
@@ -699,9 +1016,6 @@ class FundService:
 
 
                     # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子的基金使用简化指数估值
-                    # ⚠️ 必须判断 pct != 0 才设置 rt_val，否则会错误地将 NAV 当成实时估值
-                    # （如 162411 的 related_index='XOP' 是 ETF 而非指数，pct 必然为 0，
-                    #   此时应跳过此路径，让 calculator 或 fallback 处理）
                     if not metrics.get('rt_val') and code not in funds_with_basket:
                         rel_idx = fund.get('related_index')
                         nav_home = float(metrics.get('nav', 0))
@@ -711,17 +1025,21 @@ class FundService:
                                 pct = idx_data.get('pct', 0.0)
                                 metrics['index_close'] = idx_data.get('price', 0.0)
                                 metrics['index_pct'] = pct
-                                # 仅在有实时涨跌幅数据时才套用指数简化估值
-                                if pct != 0:
-                                    pos = float(fund.get('pos_ratio') or 0.95)
-                                    rt_val = nav_home * (1.0 + pos * (pct / 100.0))
-                                    metrics['rt_val'] = round(rt_val, 4)
-                                    if metrics.get('price', 0) > 0:
-                                        metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                                # [V10.15] pct!=0：用实时涨跌幅计算 rt_val
+                                # pct==0：指数未变化（收盘后/非交易日/平盘）→ rt_val=最新净值
+                                pos = float(fund.get('pos_ratio') or 0.95)
+                                rt_val = nav_home * (1.0 + pos * (pct / 100.0))
+                                metrics['rt_val'] = round(rt_val, 4)
+                                if metrics.get('price', 0) > 0:
+                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
                             else:
-                                # [FIX] 无实时数据时标记 index_pct=0 但不设置 rt_val
-                                # 让下游 calculator 路径或 fallback 处理
+                                # [FIX] 无实时数据时设置为0，前端统一显示 '-'
+                                # 注：index_changes_map 中找不到该指数，可能原因：
+                                # 1. index_history 表没有该指数数据
+                                # 2. related_index 字段值为文本描述而非代码
+                                # 3. 数据源异常
                                 metrics['index_pct'] = 0.0
+                                metrics['index_close'] = 0.0
 
                     # 3.3 【美股原油/黄金等高价值一篮子基金】 - 保持原有基于 lof_config.yaml 的矩阵公式推演
                     calculator = self._get_calculator() if not metrics.get('rt_val') else None
