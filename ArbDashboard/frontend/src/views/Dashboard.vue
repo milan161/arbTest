@@ -233,24 +233,7 @@ const pagination = { pageSize: 100 }
 const toggleWatchlist = (code: string) => fundStore.toggleWatchlist(code)
 
 const rowProps = (row: any) => {
-  // 黄金原油/QDII欧美/现金管理/自选 → 沙盘分析页
-  const fullSandboxTabs = ['自选', '黄金原油', 'QDII欧美', '现金管理']
-  // QDII亚洲/国内LOF/白银 → 开发中占位页
-  const developingTabs = ['QDII亚洲', '国内LOF', '白银']
-  
-  return {
-    style: 'cursor: pointer;',
-    onClick: () => {
-      if (fullSandboxTabs.includes(currentTab.value)) {
-        router.push({
-          path: '/analysis',
-          query: { code: row.fund_code, name: row.fund_name }
-        })
-      } else if (developingTabs.includes(currentTab.value)) {
-        router.push({ path: '/developing' })
-      }
-    }
-  }
+  return {}
 }
 
 const fetchData = async (isSilent = false) => {
@@ -321,10 +304,18 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '实时估值', key: 'rt_val_display', width: 48, align: 'center',
+    title: () => h('div', { class: 'col-title-wrapper' }, [
+      h('div', { style: 'font-size: 12px; font-weight: bold;' }, '实时估值'),
+      h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击进实盘')
+    ]),
+    key: 'rt_val_display', width: 58, align: 'center',
+    className: 'col-rt-val',
     render(row: any) {
-      if (row.rt_val && row.rt_val > 0) return h('span', { class: 'num-cell strong' }, row.rt_val.toFixed(4))
-      return h('span', { class: 'num-cell muted' }, '-')
+      const val = row.rt_val && row.rt_val > 0 ? row.rt_val.toFixed(4) : '-'
+      return h('span', { 
+        class: 'num-cell strong clickable-cell',
+        onClick: () => router.push({ path: '/analysis', query: { code: row.fund_code, name: row.fund_name } })
+      }, val)
     }
   },
   {
@@ -344,8 +335,19 @@ const allColumns: DataTableColumns<any> = [
     render(row: any) { return h(NText, { depth: 3, class: 'date-cell' }, { default: () => shortDate(row.nav_date) }) }
   },
   {
-    title: '静态估值', key: 'static_val_display', width: 48, align: 'center',
-    render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.static_val)) }
+    title: () => h('div', { class: 'col-title-wrapper' }, [
+      h('div', { style: 'font-size: 12px; font-weight: bold;' }, '静态估值'),
+      h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击看历史记录')
+    ]),
+    key: 'static_val_display', width: 60, align: 'center',
+    className: 'col-static-val',
+    render(row: any) {
+      const val = formatValuation(row.static_val)
+      return h('span', { 
+        class: 'num-cell strong clickable-cell',
+        onClick: () => { selectedFund.value = row; showHistoryModal.value = true; fundStore.fetchFundHistory(row.fund_code) }
+      }, val)
+    }
   },
   {
     title: '静态溢价', key: 'static_premium', width: 52, align: 'center',
@@ -435,25 +437,6 @@ const allColumns: DataTableColumns<any> = [
       return h(NTag, { type, size: 'small', round: true, class: 'status-pill' }, { default: () => shortText })
     }
   },
-  {
-    title: '验算',
-    key: 'actions',
-    width: 40,
-    fixed: 'right',
-    align: 'center',
-    render(row: any) {
-      return h(NButton, {
-        quaternary: true,
-        circle: true,
-        size: 'tiny',
-        type: 'info',
-        onClick: (e: MouseEvent) => {
-          e.stopPropagation()
-          openHistory(row)
-        }
-      }, { default: () => h(NIcon, null, { default: () => h(History, { style: { color: '#0284c7' } }) }) })
-    }
-  }
   ]
 
 // 通用数值渲染函数，historyColumns 和 columns 共享
@@ -787,6 +770,11 @@ const tableScrollX = computed(() => {
 .num-cell.muted { color: #64748b; }
 .num-cell.compact { font-size: 12px; }
 .date-cell, .index-cell { font-size: 11px; color: #64748b; }
+.clickable-cell { cursor: pointer; text-decoration: underline; color: #2563eb !important; }
+.clickable-cell:hover { color: #1d4ed8 !important; }
+.col-title-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px 0; width: 100%; }
+.bg-blue-light { background-color: #dbeafe; }
+.bg-orange-light { background-color: #ffedd5; }
 .status-pill { font-size: 10px; padding-inline: 5px !important; }
 :deep(.n-tabs .n-tabs-tab) {
   padding: 6px 10px;
@@ -849,9 +837,26 @@ const tableScrollX = computed(() => {
   background-color: #94a3b8 !important;
 }
 
-/* 表格外层容器：自然高度 + 水平滚动。页面自己处理垂直滚动 */
+/* 表格外层容器：固定高度，同时处理水平和垂直滚动 */
 .table-scroll-wrapper {
   width: 100%;
-  overflow-x: auto;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+}
+
+/* 整列底色 - 覆盖奇偶行交替背景 */
+:deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-rt-val),
+:deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-rt-val) {
+  background-color: #f0f9ff !important;
+}
+:deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-static-val),
+:deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-static-val) {
+  background-color: #fff7ed !important;
+}
+:deep(.n-data-table-th.col-rt-val) {
+  background-color: #e0f2fe !important;
+}
+:deep(.n-data-table-th.col-static-val) {
+  background-color: #ffedd5 !important;
 }
 </style>
