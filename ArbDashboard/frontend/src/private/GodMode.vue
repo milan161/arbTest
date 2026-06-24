@@ -295,15 +295,15 @@
                          <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center;" :data-sym="item.symbol">
                       </div>
                    </div>
-                   <div v-if="isComplexCategory" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;">
-                      <span style="font-size:13px; color:#333; white-space: nowrap;">投入</span>
-                      <input type="number" v-model.number="targetCapitalEtf" step="1000" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; font-weight:bold; text-align:center; color:#d35400;">
-                      <span style="font-size:13px; color:#333; white-space: nowrap;">元 买入LOF</span>
-                      <span style="font-size: 15px; color: #d32f2f; font-weight:bold; font-family: monospace; white-space: nowrap;">{{ lofQtyEtf ? lofQtyEtf.lofQty : '-' }}</span>
-                      <span style="font-size:13px; color:#333; white-space: nowrap;">股，做空 {{ meta?.fund_config?.trade_etf }}</span>
-                      <span style="font-size: 15px; color: #1565c0; font-weight:bold; font-family: monospace; white-space: nowrap;">{{ lofQtyEtf ? lofQtyEtf.etfQty : '-' }}</span>
-                      <span style="font-size:13px; color:#333; white-space: nowrap;">股</span>
-                   </div>
+                    <div v-if="isComplexCategory" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;">
+                       <span style="font-size:13px; color:#333; white-space: nowrap;">买LOF</span>
+                       <input type="number" v-model.number="targetLofQty" step="100" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; font-weight:bold; text-align:center; color:#d32f2f;">
+                       <span style="font-size:13px; color:#333; white-space: nowrap;">股，投入</span>
+                       <span style="font-size: 15px; color: #d35400; font-weight:bold; font-family: monospace; white-space: nowrap;">{{ syncedCapital || '-' }}</span>
+                       <span style="font-size:13px; color:#333; white-space: nowrap;">元，做空 {{ meta?.fund_config?.trade_etf }}</span>
+                       <span style="font-size: 15px; color: #1565c0; font-weight:bold; font-family: monospace; white-space: nowrap;">{{ lofQtyEtf ? lofQtyEtf.etfQty : '-' }}</span>
+                       <span style="font-size:13px; color:#333; white-space: nowrap;">股</span>
+                    </div>
                 </div>
                 <!-- Row 2 -->
                 <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
@@ -437,17 +437,31 @@
             </div>
          </n-card>
 
-          <!-- 中间：Ghost Trader 幽灵做市商控制台 -->
-          <n-card title="👻 幽灵做市商控制台" :bordered="false" class="chart-card-middle sandbox-card shadow-soft" size="small" style="background: #1a1a2e; border: 1px solid #16213e; color: #e0e0e0;">
+          <!-- 中间：懒人做市商控制台 -->
+          <n-card :bordered="false" class="chart-card-middle sandbox-card shadow-soft" size="small" style="background: #1a1a2e; border: 1px solid #16213e; color: #e0e0e0;">
              <div style="display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap;">
                 <span style="color: #888; font-size: 12px;">当前基金:</span>
                 <span style="color: #ff003c; font-weight: bold; font-size: 14px;">{{ fundName }} ({{ fundCode }})</span>
                 <span style="color: #888; font-size: 12px;">| 赎回费:</span>
-                <span style="color: yellow; font-family: monospace; font-weight: bold;">{{ ghostData?.redemption_fee?.toFixed(3) || '-' }}%</span>
+                <span style="color: yellow; font-family: monospace; font-weight: bold;">{{ lazyData?.redemption_fee?.toFixed(3) || '-' }}%</span>
                 <span style="flex:1;"></span>
                 <span style="color: #888; font-size: 12px;">期望纯利润底线:</span>
-                <n-input-number v-model:value="targetNetProfit" :step="0.05" size="small" style="width: 80px;" :show-button="false" />
+                <n-input-number v-model:value="targetNetProfit" :step="0.05" size="small" style="width: 100px;" :show-button="true" :precision="2" />
                 <span style="color: #888; font-size: 12px;">%</span>
+             </div>
+
+             <!-- 买入LOF 便捷操作 -->
+             <div style="display: flex; gap: 8px; margin-bottom: 10px; align-items: center; padding: 6px 10px; background: #0d2818; border: 1px solid #2d5a3d; border-radius: 6px;">
+                <span style="font-size: 16px;">🛒</span>
+                <span style="color: #4ade80; font-weight: bold; font-size: 13px;">买入LOF</span>
+                <span style="color: #888; font-size: 12px;">@</span>
+                <n-input-number v-model:value="lofBuyPrice" :step="0.001" size="small" style="width: 100px;" :show-button="true" :min="0" />
+                <span style="color: #888; font-size: 12px;">元 × {{ targetLofQty }}股 =</span>
+                <span style="color: #4ade80; font-family: monospace; font-weight: bold;">{{ lofBuyPrice && targetLofQty ? (lofBuyPrice * targetLofQty).toFixed(0) : '-' }}元</span>
+                <span style="flex:1;"></span>
+                <n-button type="success" size="small" style="font-weight: bold;" :disabled="!lofBuyPrice || !targetLofQty" @click="handleLofBuy">
+                   买入LOF
+                </n-button>
              </div>
 
              <!-- 周末模拟控制栏 -->
@@ -477,33 +491,33 @@
                    <div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px;">
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">A股排队价(买一):</span>
-                         <span style="color: #00ff00; font-family: monospace;">￥{{ ghostData?.lof_bid?.toFixed(3) || '-' }}</span>
+                         <span style="color: #00ff00; font-family: monospace;">￥{{ lazyData?.lof_bid?.toFixed(3) || '-' }}</span>
                       </div>
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">直接吃美股买一:</span>
-                         <span style="color: #00ff00; font-family: monospace;">${{ ghostData?.us_bid?.toFixed(2) || '-' }}</span>
-                         <span v-if="ghostData?.us_bid_size" :style="{ color: ghostData.us_bid_size >= 100 ? '#00ff00' : '#ff003c', fontSize: '10px', marginLeft: '4px' }">
-                            (量:{{ ghostData.us_bid_size }})
+                         <span style="color: #00ff00; font-family: monospace;">${{ lazyData?.us_bid?.toFixed(2) || '-' }}</span>
+                         <span v-if="lazyData?.us_bid_size" :style="{ color: lazyData.us_bid_size >= 100 ? '#00ff00' : '#ff003c', fontSize: '10px', marginLeft: '4px' }">
+                            (量:{{ lazyData.us_bid_size }})
                          </span>
                       </div>
-                      <div v-if="ghostData?.us_bid_size && ghostData.us_bid_size < 100" style="color: #ff003c; font-size: 10px; text-align: center;">
+                      <div v-if="lazyData?.us_bid_size && lazyData.us_bid_size < 100" style="color: #ff003c; font-size: 10px; text-align: center;">
                          ⚠️ 买一量不足，考虑拆单到买二
                       </div>
                       <div style="border-top: 1px solid #333; margin: 4px 0;"></div>
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">理论折价:</span>
-                         <span :style="{ color: ghostData?.premium_safe && ghostData.premium_safe < 0 ? '#00ff00' : '#ff003c', fontFamily: 'monospace', fontWeight: 'bold' }">
-                            {{ ghostData?.premium_safe != null ? (ghostData.premium_safe > 0 ? '+' : '') + ghostData.premium_safe.toFixed(2) + '%' : '-' }}
+                         <span :style="{ color: lazyData?.premium_safe && lazyData.premium_safe < 0 ? '#00ff00' : '#ff003c', fontFamily: 'monospace', fontWeight: 'bold' }">
+                            {{ lazyData?.premium_safe != null ? (lazyData.premium_safe > 0 ? '+' : '') + lazyData.premium_safe.toFixed(2) + '%' : '-' }}
                          </span>
                       </div>
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">扣费后利润:</span>
-                         <span :style="{ color: isGhostProfitable('safe') ? '#00ff00' : '#ff003c', fontWeight: 'bold' }">
-                            {{ ghostProfit('safe')?.toFixed(3) || '-' }}%
+                         <span :style="{ color: isLazyProfitable('safe') ? '#00ff00' : '#ff003c', fontWeight: 'bold' }">
+                            {{ lazyProfit('safe')?.toFixed(3) || '-' }}%
                          </span>
                       </div>
-                      <n-button type="success" size="small" style="width: 100%; margin-top: 6px; font-weight: bold;" :disabled="!isGhostProfitable('safe')" @click="handleGhostPlace('safe')">
-                         立即砸盘套利
+                      <n-button type="success" size="small" style="width: 100%; margin-top: 6px; font-weight: bold;" :disabled="!isLazyProfitable('safe')" @click="handleLazyPlace('safe')">
+                         立即吃买一
                       </n-button>
                    </div>
                 </div>
@@ -517,28 +531,28 @@
                    <div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px;">
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">A股排队价(买一):</span>
-                         <span style="color: #00ff00; font-family: monospace;">￥{{ ghostData?.lof_bid?.toFixed(3) || '-' }}</span>
+                         <span style="color: #00ff00; font-family: monospace;">￥{{ lazyData?.lof_bid?.toFixed(3) || '-' }}</span>
                       </div>
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">抢占美股卖一:</span>
-                         <span style="color: #ff003c; font-family: monospace;">${{ ghostData?.us_ask ? (ghostData.us_ask - 0.01).toFixed(2) : '-' }}</span>
                          <span style="color: #888; font-size: 10px;">(减$0.01)</span>
+                         <span style="color: #ff003c; font-family: monospace;">${{ lazyData?.us_ask ? (lazyData.us_ask - 0.01).toFixed(2) : '-' }}</span>
                       </div>
                       <div style="border-top: 1px solid #333; margin: 4px 0;"></div>
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">理论折价:</span>
-                         <span :style="{ color: ghostData?.premium_peg && ghostData.premium_peg < 0 ? '#00ff00' : '#ff003c', fontFamily: 'monospace', fontWeight: 'bold' }">
-                            {{ ghostData?.premium_peg != null ? (ghostData.premium_peg > 0 ? '+' : '') + ghostData.premium_peg.toFixed(2) + '%' : '-' }}
+                         <span :style="{ color: lazyData?.premium_peg && lazyData.premium_peg < 0 ? '#00ff00' : '#ff003c', fontFamily: 'monospace', fontWeight: 'bold' }">
+                            {{ lazyData?.premium_peg != null ? (lazyData.premium_peg > 0 ? '+' : '') + lazyData.premium_peg.toFixed(2) + '%' : '-' }}
                          </span>
                       </div>
                       <div style="display: flex; justify-content: space-between;">
                          <span style="color: #888;">扣费后利润:</span>
-                         <span :style="{ color: isGhostProfitable('peg') ? '#00ff00' : '#ff003c', fontWeight: 'bold' }">
-                            {{ ghostProfit('peg')?.toFixed(3) || '-' }}%
+                         <span :style="{ color: isLazyProfitable('peg') ? '#00ff00' : '#ff003c', fontWeight: 'bold' }">
+                            {{ lazyProfit('peg')?.toFixed(3) || '-' }}%
                          </span>
                       </div>
-                      <n-button type="error" size="small" style="width: 100%; margin-top: 6px; font-weight: bold;" :disabled="!isGhostProfitable('peg')" @click="handleGhostPlace('peg')">
-                         启动内卷机器人 (REL)
+                      <n-button type="error" size="small" style="width: 100%; margin-top: 6px; font-weight: bold;" :disabled="!isLazyProfitable('peg')" @click="handleLazyPlace('peg')">
+                         减一分排队
                       </n-button>
                    </div>
                 </div>
@@ -548,10 +562,10 @@
              <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 8px;">
                 <div style="font-size: 11px; color: #666; margin-bottom: 4px;">📝 交易日志:</div>
                 <div style="background: #0a0a0a; border-radius: 4px; padding: 6px; max-height: 80px; overflow-y: auto; font-family: monospace; font-size: 11px; color: #00ff00;">
-                   <div v-for="(log, i) in ghostLogs" :key="i" style="margin-bottom: 2px;">
+                   <div v-for="(log, i) in lazyLogs" :key="i" style="margin-bottom: 2px;">
                       <span style="color: #666;">{{ log.time }}</span> {{ log.msg }}
                    </div>
-                   <div v-if="ghostLogs.length === 0" style="color: #666;">等待信号...</div>
+                   <div v-if="lazyLogs.length === 0" style="color: #666;">等待信号...</div>
                 </div>
              </div>
           </n-card>
@@ -615,7 +629,8 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote, placeOrder, addTrade, postGhostPlaceOrder, getGhostSimStatus, postGhostSimControl, postBpOverride, getBpOverride, clearBpOverride as clearBpOverrideApi } from '../api'
+import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote, getGhostSimStatus, postGhostSimControl, postBpOverride, getBpOverride, clearBpOverride as clearBpOverrideApi } from '../api'
+import { useOrderLogic } from '../composables/useOrderLogic'
 
 use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent])
 
@@ -623,6 +638,7 @@ const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
+const { sendLofOrder, sendIbOrder } = useOrderLogic()
 
 // 基础状态
 const fundCode = ref((route.query.code as string) || '')
@@ -686,10 +702,10 @@ const premiumUpperThreshold = ref(2.0)
 const showWatchlistOnly = ref(false) // 我的自选Tab（默认关闭，选中分类时才不会过滤掉非自选基金）
 const watchlist = ref<string[]>(JSON.parse(localStorage.getItem('watchlist') || '[]')) // 自选基金列表
 
-// Ghost Trader 幽灵做市商 — 从 meta.value.realtime_quotes 前端计算，无需独立 API
-const ghostLogs = ref<{ time: string; msg: string }[]>([])
-const targetNetProfit = ref(Number(localStorage.getItem('ghostNetProfit')) || 0.3)
-const ghostData = computed(() => {
+// 懒人做市商 — 从 meta.value.realtime_quotes 前端计算，无需独立 API
+const lazyLogs = ref<{ time: string; msg: string }[]>([])
+const targetNetProfit = ref(Number(localStorage.getItem('lazyNetProfit')) || 0.3)
+const lazyData = computed(() => {
   if (!meta.value?.realtime_quotes) return null
   const rq = meta.value.realtime_quotes
   const bd = meta.value.base_data || {}
@@ -750,12 +766,12 @@ const fetchSimStatus = async () => {
       simData.value = res.data.data
       simRunning.value = res.data.data.running
       simForcedSignal.value = res.data.data.forced_signal
-      // Push sim ticks to ghostLogs
+      // Push sim ticks to lazyLogs
       if (res.data.data.current) {
         const c = res.data.data.current
         const sigMark = c.signal_safe || c.signal_peg ? ' --> SIGNAL!' : ''
         const msg = `162411=${c.lof.bid.toFixed(4)} XOP=${c.us.bid.toFixed(2)} fx=${c.fx.toFixed(4)} prem=${c.premium_safe.toFixed(3)}% net=${c.net_profit_safe.toFixed(3)}%${sigMark}`
-        addGhostLog(`[SIM] ${msg}`)
+        addLazyLog(`[SIM] ${msg}`)
       }
     }
   } catch (e) { /* simulator not loaded */ }
@@ -810,46 +826,81 @@ const clearBpOverride = async () => {
 }
 
 watch(targetNetProfit, (newVal) => {
-  localStorage.setItem('ghostNetProfit', newVal.toString())
+  localStorage.setItem('lazyNetProfit', newVal.toString())
 })
 
-const ghostProfit = (mode: 'safe' | 'peg') => {
-  if (!ghostData.value) return null
-  const premium = mode === 'safe' ? ghostData.value.premium_safe : ghostData.value.premium_peg
-  const fee = ghostData.value.redemption_fee || 0.5
+const lazyProfit = (mode: 'safe' | 'peg') => {
+  if (!lazyData.value) return null
+  const premium = mode === 'safe' ? lazyData.value.premium_safe : lazyData.value.premium_peg
+  const fee = lazyData.value.redemption_fee || 0.5
   return Math.abs(premium) - fee
 }
 
-const isGhostProfitable = (mode: 'safe' | 'peg') => {
-  const profit = ghostProfit(mode)
+const isLazyProfitable = (mode: 'safe' | 'peg') => {
+  const profit = lazyProfit(mode)
   return profit !== null && profit >= targetNetProfit.value
 }
 
-const addGhostLog = (msg: string) => {
+const addLazyLog = (msg: string) => {
   const now = new Date()
   const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
-  ghostLogs.value.unshift({ time, msg })
-  if (ghostLogs.value.length > 50) ghostLogs.value.pop()
+  lazyLogs.value.unshift({ time, msg })
+  if (lazyLogs.value.length > 50) lazyLogs.value.pop()
 }
 
-const handleGhostPlace = async (mode: 'safe' | 'peg') => {
-  if (!isGhostProfitable(mode)) {
+const handleLazyPlace = async (mode: 'safe' | 'peg') => {
+  if (!isLazyProfitable(mode)) {
     message.warning('利润未达标，无法下单')
     return
   }
-  try {
-    const res = await postGhostPlaceOrder(mode, fundCode.value)
-    if (res.data.status === 'ok') {
-      addGhostLog(`✅ ${mode === 'safe' ? '保守砸单' : '内卷挂单'} 下单成功`)
-      message.success(`${mode === 'safe' ? '保守砸单' : '内卷挂单'} 已触发`)
-    } else {
-      addGhostLog(`❌ 下单失败: ${res.data.message || '未知错误'}`)
-      message.error('下单失败')
-    }
-  } catch (e: any) {
-    addGhostLog(`❌ 下单异常: ${e.message}`)
-    message.error('下单异常')
+  if (!lofQtyEtf.value) {
+    message.warning('请先输入投入金额或股数')
+    return
   }
+  
+  const tradeEtf = meta.value?.fund_config?.trade_etf || ''
+  const lofPrice = simLofPrice.value
+  const etfQty = lofQtyEtf.value.etfQty
+  const lofQty = lofQtyEtf.value.lofQty
+  
+  // 价格：safe 用买一，peg 用卖一
+  const rq = realtimeQuotes.value || {}
+  const usQ = rq[tradeEtf]
+  const usBid = parseFloat(usQ?.bid || usQ?.price) || 0
+  const usAsk = parseFloat(usQ?.ask || usQ?.price) || 0
+  const price = mode === 'safe' ? usBid : usAsk - 0.01
+  
+  const priceDesc = mode === 'safe' 
+    ? `吃买一 $${usBid.toFixed(2)}` 
+    : `卖一 $${usAsk.toFixed(2)} 减$0.01 = $${(usAsk - 0.01).toFixed(2)}`
+  
+  const modeName = mode === 'safe' ? '🛡️ 立即吃买一' : '🤺 减一分排队'
+  
+  dialog.warning({
+    title: `${modeName} - 确认下单`,
+    content: `请确认以下实盘委托：\n\n` +
+      `📌 标的: IB ${tradeEtf} SELL (卖空)\n` +
+      `📌 价格: ${priceDesc}\n` +
+      `📌 数量: ${etfQty} 股\n\n` +
+      `⚠️ 下单后无法自动撤单，请确认！`,
+    positiveText: '确认发送',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      // 共用 sendIbOrder
+      await sendIbOrder('SELL', tradeEtf, price, etfQty)
+      addLazyLog(`✅ ${modeName} IB卖空 ${tradeEtf} ${etfQty}股 @ $${price.toFixed(2)}`)
+    }
+  })
+}
+
+// 买入LOF便捷操作 - 共用 sendLofOrder
+const handleLofBuy = async () => {
+  if (!lofBuyPrice.value || !targetLofQty.value) {
+    message.warning('请先输入价格和股数')
+    return
+  }
+  
+  await sendLofOrder('BUY', fundCode.value, fundName.value, lofBuyPrice.value, targetLofQty.value, lofBroker.value)
 }
 
 // 分类映射：前端显示名称 → 数据库category值
@@ -1022,7 +1073,8 @@ const latestExchangeRateInput = ref(0) // 初始0，加载完成后才显示
 const testEtfPrices = reactive<Record<string, number>>({})
 const testFutPrice = ref(0)
 const testFutCalib = ref(1.0)
-const targetCapitalEtf = ref(100000)
+const targetLofQty = ref(125000)  // LOF 股数输入
+const lofBuyPrice = ref(0)  // LOF 买入价格
 const targetLotsFuture = ref(1)
 const targetLotsPureFuture = ref(1)
 
@@ -1384,7 +1436,9 @@ const equivEtfPrice = computed(() => {
 
 // ETF对冲数量计算
 const lofQtyEtf = computed(() => {
-  if (targetCapitalEtf.value <= 0 || etfVal.value <= 0 || simLofPrice.value <= 0) return null
+  const etfValNum = etfVal.value
+  const lofPriceNum = simLofPrice.value
+  if (etfValNum <= 0 || lofPriceNum <= 0) return null
   const bd = meta.value?.base_data
   if (!bd) return null
   const cfg = meta.value.fund_config
@@ -1393,24 +1447,17 @@ const lofQtyEtf = computed(() => {
   const etfHedge = parseFloat(bd.hedge) || 0
   if (etfHedge <= 0) return null
   
-  let finalEtfQty = 0
-  let finalLofQty = 0
+  if (targetLofQty.value <= 0) return null
   
-  if (cfg.category === '纯ETF' || cfg.category === '指数') {
-    const tempLofQty = targetCapitalEtf.value / simLofPrice.value
-    finalEtfQty = Math.max(1, Math.round(tempLofQty / etfHedge))
-    finalLofQty = Math.round((finalEtfQty * etfHedge) / 100) * 100
-  } else {
-    finalLofQty = Math.round((targetCapitalEtf.value / simLofPrice.value) / 100) * 100
-    finalEtfQty = Math.max(1, Math.round(finalLofQty / etfHedge))
-  }
+  const finalLofQty = targetLofQty.value
+  const finalEtfQty = Math.max(1, Math.round(finalLofQty / etfHedge))
+  const finalCapital = finalLofQty * lofPriceNum
   
-  // 更加牛逼的一篮子拆解逻辑 (按照权重切分各ETF的数量)
+  // 一篮子拆解逻辑
   let portfolioBreakdown = []
   const portfolio = cfg.valuation_portfolio || cfg.hedging_portfolio || []
   if (portfolio.length > 1) {
-    // 实际建仓的 LOF 对应的目标 RMB 敞口
-    const targetExposureRMB = finalLofQty * simLofPrice.value * pos
+    const targetExposureRMB = finalLofQty * lofPriceNum * pos
     const currentFx = parseFloat(latestExchangeRateInput.value) || 0
     if (currentFx > 0) {
       const targetExposureUSD = targetExposureRMB / currentFx
@@ -1430,7 +1477,7 @@ const lofQtyEtf = computed(() => {
     }
   }
   
-  return { lofQty: finalLofQty, etfQty: finalEtfQty, exposure: targetCapitalEtf.value * pos, breakdown: portfolioBreakdown }
+  return { lofQty: finalLofQty, etfQty: finalEtfQty, exposure: finalCapital * pos, breakdown: portfolioBreakdown }
 })
 
 // 期货校准对冲数量计算
@@ -1500,9 +1547,22 @@ watch(() => route.query.code, (newCode) => {
   fundCode.value = (newCode as string) || ''; fundName.value = (route.query.name as string) || ''
   isLofPriceInitialized.value = false
   simLofPrice.value = 0
-  ghostLogs.value = []
+  lazyLogs.value = []
   // orderVol 保持用户设置，不做自动覆盖
   if (fundCode.value) fetchAll(); else fetchDashboard()
+})
+
+// LOF价格变化时，自动更新买入价格
+watch(simLofPrice, (newVal) => {
+  if (newVal > 0 && lofBuyPrice.value <= 0) {
+    lofBuyPrice.value = newVal
+  }
+})
+
+// 投入金额（从 LOF 股数反算）
+const syncedCapital = computed(() => {
+  if (!lofQtyEtf.value) return 0
+  return Math.round(lofQtyEtf.value.exposure / positionRatio.value)
 })
 
 const formatDate = (ts: number) => {
@@ -1690,56 +1750,6 @@ const fetchValuationMeta = async () => {
 }
 
 const fetchAll = () => { fetchIntraday(); fetchBasket(); fetchHistoryMeta(); fetchRealtimeDepth(); fetchValuationMeta(); }
-
-const sendOrder = async (action: string, brokerType: 'lof' | 'ib' | 'ib_future') => {
-  let p = 0, v = 0, sym = '', broker = ''
-  let brokerName = ''
-  if (brokerType === 'lof') {
-    p = simLofPrice.value; v = orderVol.value; sym = fundCode.value; broker = lofBroker.value
-    brokerName = broker === 'yinhe_qmt' ? '银河QMT' : (broker === 'tdx' ? '通达信' : '国金QMT')
-  } else if (brokerType === 'ib') {
-    p = hedgePrice.value; v = hedgeVol.value; sym = meta.value?.fund_config?.trade_etf?.split(',')?.[0]?.trim() || ''; broker = 'ib'
-    brokerName = 'IB (盈透证券)'
-  } else if (brokerType === 'ib_future') {
-    p = testFutPrice.value; v = targetLotsFuture.value; sym = meta.value?.fund_config?.trade_future || ''; broker = 'ib'
-    brokerName = 'IB 期货'
-  }
-  
-  const actionName = action === 'BUY' ? '买入' : '卖出'
-  
-  dialog.warning({
-    title: '确认下单',
-    content: `您将向 [${brokerName}] 发起实盘委托，请确认参数：\n\n・ 标的代码: ${sym}\n・ 委托方向: ${actionName}\n・ 委托价格: ${p}\n・ 委托数量: ${v}`,
-    positiveText: '确认发送',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      message.loading('正在发送委托指令，请稍候...')
-      try {
-        console.log(`[Order] Sending request: action=${action}, code=${sym}, volume=${v}, price=${p}, broker=${broker}`)
-        const res = await placeOrder({ action, code: sym, volume: v, price: p, broker })
-        console.log(`[Order] Response received:`, res.data)
-        if (res.data.status === 'ok') {
-          message.success(`下单结果: ${res.data.message}`)
-          if (autoLog.value) {
-            await addTrade({
-              fund_code: fundCode.value, fund_name: fundName.value, action, volume: orderVol.value, price: simLofPrice.value,
-              hedge_symbol: sym, hedge_price: p, hedge_vol: v
-            })
-          }
-        } else {
-          message.error(`下单失败: ${res.data.message}`)
-          dialog.error({
-            title: '下单失败',
-            content: `券商/通道接口返回错误: ${res.data.message}`
-          })
-        }
-      } catch (e: any) {
-        console.error('[Order] Error:', e)
-        message.error(`接口调用异常: ${e.message || e}`)
-      }
-    }
-  })
-}
 
 const radarColumns = [
   {

@@ -74,9 +74,14 @@ class WoodyAPIService:
             try: api_data = json.loads(api_data)
             except: pass
                 
-        raw_json_str = json.dumps(api_data, ensure_ascii=False, indent=2) if isinstance(api_data, dict) else str(api_data)
+        # 3. 校验 API 返回数据质量：必须是 dict 且包含基金代码键
+        if not isinstance(api_data, dict) or not api_data:
+            logger.error(f"❌ [woody_lof] API 返回数据无效（非字典或为空），不入库。原始内容: {str(api_data)[:200]}")
+            return None
+
+        raw_json_str = json.dumps(api_data, ensure_ascii=False, indent=2)
         
-        # 3. 存入原始数据湖
+        # 4. 存入原始数据湖
         db.save_raw_api_data(date=today_str, source=source_id, raw_content=raw_json_str)
 
         # 4. 智能生成 JSON / 动态宽表 CSV 备份

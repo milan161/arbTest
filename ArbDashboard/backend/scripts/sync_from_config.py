@@ -2,13 +2,13 @@ import yaml
 import os
 import sys
 
-# Add backend directory to path
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(backend_dir)
-from core.arbcore.database.db_manager import DatabaseManager
+sys.path.append(os.path.abspath(os.path.join(backend_dir, '..', '..', 'arbcore')))
+from database.db_manager import DatabaseManager
 
 def sync_config_to_jsl_list():
-    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'LOFarb', 'lof_config.yaml'))
+    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'scripts', 'lof_config.yaml'))
     if not os.path.exists(config_path):
         print(f"Error: Config not found at {config_path}")
         return

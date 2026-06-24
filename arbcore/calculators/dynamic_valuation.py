@@ -53,6 +53,22 @@ class DynamicValuationCalculator:
             base_row = df.iloc[0].to_dict()
             base_date = base_row['date']
             
+            # [FIX] 当最新日期缺少 hedge/position 时，向前查找最近的有效数据
+            if pd.isna(base_row.get('hedge')) or float(base_row.get('hedge', 0)) <= 0:
+                try:
+                    hedge_query = """
+                        SELECT hedge, position 
+                        FROM fund_daily_factors 
+                        WHERE fund_code = ? AND hedge IS NOT NULL AND hedge > 0
+                        ORDER BY date DESC LIMIT 1
+                    """
+                    hedge_df = pd.read_sql(hedge_query, conn, params=(fund_code,))
+                    if not hedge_df.empty:
+                        base_row['hedge'] = hedge_df.iloc[0]['hedge']
+                        base_row['position'] = hedge_df.iloc[0]['position']
+                except Exception as e:
+                    logger.warning(f"获取 hedge 兜底数据失败 ({fund_code}): {e}")
+            
             # 补充底层 ETF 基准价格（精确日期优先，取不到则往前找最近一日）
             etf_df = pd.read_sql(
                 "SELECT symbol, COALESCE(NULLIF(netvalue, 0), price) as price, date "

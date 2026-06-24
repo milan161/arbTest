@@ -635,7 +635,8 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote, placeOrder, addTrade } from '../api'
+import { getDashboard, getFundIntraday, getFundBasket, getFundHistory, getFundValuationMeta, getRealtimeQuote } from '../api'
+import { useOrderLogic } from '../composables/useOrderLogic'
 
 use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent])
 
@@ -1505,54 +1506,18 @@ const fetchValuationMeta = async () => {
 
 const fetchAll = () => { fetchIntraday(); fetchBasket(); fetchHistoryMeta(); fetchRealtimeDepth(); fetchValuationMeta(); }
 
+const { sendLofOrder, sendIbOrder } = useOrderLogic()
+
 const sendOrder = async (action: string, brokerType: 'lof' | 'ib' | 'ib_future') => {
-  let p = 0, v = 0, sym = '', broker = ''
-  let brokerName = ''
   if (brokerType === 'lof') {
-    p = simLofPrice.value; v = orderVol.value; sym = fundCode.value; broker = lofBroker.value
-    brokerName = broker === 'yinhe_qmt' ? '银河QMT' : (broker === 'tdx' ? '通达信' : '国金QMT')
+    await sendLofOrder(action, fundCode.value, fundName.value, simLofPrice.value, orderVol.value, lofBroker.value)
   } else if (brokerType === 'ib') {
-    p = hedgePrice.value; v = hedgeVol.value; sym = meta.value?.fund_config?.trade_etf?.split(',')?.[0]?.trim() || ''; broker = 'ib'
-    brokerName = 'IB (盈透证券)'
+    const tradeEtf = meta.value?.fund_config?.trade_etf?.split(',')?.[0]?.trim() || ''
+    await sendIbOrder(action, tradeEtf, hedgePrice.value, hedgeVol.value)
   } else if (brokerType === 'ib_future') {
-    p = testFutPrice.value; v = targetLotsFuture.value; sym = meta.value?.fund_config?.trade_future || ''; broker = 'ib'
-    brokerName = 'IB 期货'
+    const tradeFuture = meta.value?.fund_config?.trade_future || ''
+    await sendIbOrder(action, tradeFuture, testFutPrice.value, targetLotsFuture.value)
   }
-  
-  const actionName = action === 'BUY' ? '买入' : '卖出'
-  
-  dialog.warning({
-    title: '确认下单',
-    content: `您将向 [${brokerName}] 发起实盘委托，请确认参数：\n\n・ 标的代码: ${sym}\n・ 委托方向: ${actionName}\n・ 委托价格: ${p}\n・ 委托数量: ${v}`,
-    positiveText: '确认发送',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      message.loading('正在发送委托指令，请稍候...')
-      try {
-        console.log(`[Order] Sending request: action=${action}, code=${sym}, volume=${v}, price=${p}, broker=${broker}`)
-        const res = await placeOrder({ action, code: sym, volume: v, price: p, broker })
-        console.log(`[Order] Response received:`, res.data)
-        if (res.data.status === 'ok') {
-          message.success(`下单结果: ${res.data.message}`)
-          if (autoLog.value) {
-            await addTrade({
-              fund_code: fundCode.value, fund_name: fundName.value, action, volume: orderVol.value, price: simLofPrice.value,
-              hedge_symbol: sym, hedge_price: p, hedge_vol: v
-            })
-          }
-        } else {
-          message.error(`下单失败: ${res.data.message}`)
-          dialog.error({
-            title: '下单失败',
-            content: `券商/通道接口返回错误: ${res.data.message}`
-          })
-        }
-      } catch (e: any) {
-        console.error('[Order] Error:', e)
-        message.error(`接口调用异常: ${e.message || e}`)
-      }
-    }
-  })
 }
 
 const radarColumns = [

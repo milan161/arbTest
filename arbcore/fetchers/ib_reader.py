@@ -563,7 +563,7 @@ class IBReader(EWrapper, EClient):
             for oid in list(self.placed_order_ids):
                 if 'orderCancel' in sig.parameters:
                     try:
-                        from ibapi.order import OrderCancel
+                        from ibapi.order_cancel import OrderCancel
                         self.cancelOrder(oid, OrderCancel())
                     except ImportError:
                         self.cancelOrder(oid, None)

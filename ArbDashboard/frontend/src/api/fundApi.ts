@@ -57,8 +57,14 @@ export function getGhostCalc(fundCode: string) {
 }
 
 /** 幽灵做市商下单 */
-export function postGhostPlaceOrder(mode: string, fundCode: string) {
-  return client.post('/api/private/ghost_place_order', { mode, fund_code: fundCode })
+export function postGhostPlaceOrder(mode: string, fundCode: string, params?: {
+  price?: number,
+  lof_price?: number,
+  quantity?: number,
+  etf_quantity?: number,
+  underlying_symbol?: string,
+}) {
+  return client.post('/api/private/ghost_place_order', { mode, fund_code: fundCode, ...params })
 }
 
 /** 幽灵模拟器 - 获取状态 */

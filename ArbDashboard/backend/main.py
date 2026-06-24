@@ -1124,14 +1124,8 @@ async def ghost_place_order(request: Request):
                 us_ask1=price,
             )
         elif direction == "close":
-            results = ghost_trader_instance.place_close_order(
-                fund_code=fund_code,
-                underlying_symbol=underlying_symbol,
-                lof_price=lof_price,
-                us_ask1=price,
-                lof_quantity=lof_quantity,
-                etf_quantity=etf_quantity,
-            )
+            # ⚠️ 平仓功能暂时禁用，用户手动平仓
+            results = [{"driver": "IB", "success": False, "msg": "平仓功能暂时禁用，请手动操作"}]
         else:
             results = ghost_trader_instance.place_open_order(
                 fund_code=fund_code,

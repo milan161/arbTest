@@ -71,7 +71,7 @@ _TAB_CATEGORY_MAP = {
     '黄金原油': ['黄金原油'],
     'QDII欧美': ['QDII欧美', '混合跨境'],
     'QDII亚洲': ['QDII亚洲'],
-    '国内LOF': ['国内指数', '指数LOF'],
+    '国内LOF': ['国内LOF'],
     '白银': ['白银'],
     '现金管理': ['债券/货币'],
 }
@@ -283,6 +283,9 @@ def _clean_index_symbol(sym: str) -> str:
     # 映射表
     if clean in _INDEX_CODE_MAP:
         return _INDEX_CODE_MAP[clean] or ''
+    # ^ 前缀（如 ^HSI）
+    if clean.startswith('^'):
+        clean = clean[1:]
     # .CSI 后缀
     if clean.endswith('.CSI'):
         clean = clean[:-4]
@@ -301,7 +304,13 @@ def _is_hk_index_symbol(clean_sym: str) -> bool:
     if not clean_sym:
         return False
     hk_prefixes = ('HSI', 'HSTECH', 'HSCEI', 'HSCI', 'HSCCI', 'HSSCNE',
-                   'HSSI', 'HSMI', 'HSSFML25', 'HSSCBBAI')
+                   'HSSI', 'HSMI', 'HSSFML25', 'HSSCBBAI',
+                   'HSHK', 'HSCIC', 'HSI50', 'HSML25', 'HSCC',
+                   'HSCE', 'HSH', 'HSI100', 'HSI200', 'HSI500',
+                   'HSCON', 'HSFIN', 'HSIND', 'HSENER', 'HSUTIL',
+                   'HSPROP', 'HSINFO', 'HSIT', 'HSMT', 'HSCONS',
+                   'HSMED', 'HSHEAL', 'HSRE', 'HSCOM', 'HSFIN25',
+                   'HSHK50', 'HSCN', 'HSINT', 'HSREIT', 'HSUTIL')
     return any(clean_sym.upper().startswith(p) for p in hk_prefixes)
 
 def _is_a_share_index_symbol(clean_sym: str) -> bool:
@@ -312,7 +321,7 @@ def _is_a_share_index_symbol(clean_sym: str) -> bool:
 
 def _classify_index_symbol(sym: str) -> str:
     """
-    对单个 symbol 做清洗 + 分类，返回 ('a_share'|'hk'|'other', clean_sym)
+    对单个 symbol 做清洗 + 分类，返回 ('a_share'|'hk'|'other', original_sym)
     """
     if not sym or sym == '-':
         return ('skip', '')
@@ -387,6 +396,43 @@ def _build_index_daily_fallback(symbols: List[str], conn, now) -> Dict[str, Dict
             else:
                 pct = 0.0  # 只有一条记录或价格平盘
             db_data[symbol] = {"price": latest_price, "pct": round(pct, 4)}
+
+    # 3.5 [FIX] 当清洗后的符号在数据库中没有数据时，尝试用原始符号查询
+    # 例如: 930713.CSI -> 映射到 399006，但399006没有数据，而930713.CSI有数据
+    missing_clean = clean_set - set(db_data.keys())
+    if missing_clean:
+        clean_to_orig = {}
+        for orig_sym, clean_sym in orig_to_clean.items():
+            if clean_sym in missing_clean:
+                clean_to_orig[clean_sym] = orig_sym
+        
+        orig_symbols_to_query = list(clean_to_orig.values())
+        if orig_symbols_to_query:
+            placeholders2 = ','.join(['?' for _ in orig_symbols_to_query])
+            rows2 = conn.execute(f"""
+                SELECT symbol,
+                    MAX(CASE WHEN rn = 1 THEN close END) as latest_close,
+                    MAX(CASE WHEN rn = 2 THEN close END) as prev_close
+                FROM (
+                    SELECT symbol, close,
+                        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) as rn
+                    FROM index_history
+                    WHERE symbol IN ({placeholders2})
+                )
+                WHERE rn IN (1, 2)
+                GROUP BY symbol
+            """, orig_symbols_to_query).fetchall()
+            
+            for symbol, latest_price, prev_price in rows2:
+                if latest_price and latest_price > 0:
+                    if prev_price and prev_price > 0 and prev_price != latest_price:
+                        pct = (latest_price - prev_price) / prev_price * 100
+                    else:
+                        pct = 0.0
+                    for clean_sym, orig_sym in clean_to_orig.items():
+                        if orig_sym == symbol:
+                            db_data[clean_sym] = {"price": latest_price, "pct": round(pct, 4)}
+                            break
 
     # 4. 映射回原始 symbols
     res = {}
@@ -1015,9 +1061,12 @@ class FundService:
                                 metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
 
 
-                    # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子的基金使用简化指数估值
-                    if not metrics.get('rt_val') and code not in funds_with_basket:
-                        rel_idx = fund.get('related_index')
+                    # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子且无trade_etf的基金使用简化指数估值
+                    # [FIX] 只有美股ETF（如162411→XOP）才跳过简化指数估值，港股/A股指数应正常走此路径
+                    rel_idx = fund.get('related_index', '')
+                    idx_category, _ = _classify_index_symbol(rel_idx)
+                    is_us_etf = (idx_category == 'skip')  # 美股ETF在_classify_index_symbol中返回'skip'
+                    if not metrics.get('rt_val') and code not in funds_with_basket and not is_us_etf:
                         nav_home = float(metrics.get('nav', 0))
                         if rel_idx and rel_idx != '-' and nav_home > 0:
                             idx_data = index_changes_map.get(rel_idx)

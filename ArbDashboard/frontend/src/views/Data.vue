@@ -116,13 +116,16 @@
 
       <!-- 右侧：基金配置（保持不变） -->
       <n-gi :span="10">
-        <n-card title="核心基金配置 (YAML)" class="shadow-soft">
+        <n-card title="核心基金配置" class="shadow-soft">
           <template #header-extra>
             <n-button size="tiny" secondary @click="fetchFundConfigs">刷新列表</n-button>
           </template>
-          <div style="height: 300px; overflow-y: auto;">
-            <n-list small hoverable clickable v-if="fundConfigs.length > 0">
-              <n-list-item v-for="f in fundConfigs" :key="f.code" @click="editFund(f)">
+          <div class="mb-3">
+            <n-select v-model:value="selectedTab" :options="tabOptions" placeholder="选择基金分类" clearable style="width: 100%;" />
+          </div>
+          <div style="height: 260px; overflow-y: auto;">
+            <n-list small hoverable clickable v-if="filteredFunds.length > 0">
+              <n-list-item v-for="f in filteredFunds" :key="f.code" @click="editFund(f)">
                 <div class="flex-between">
                   <div>
                     <n-text strong>{{ f.code }}</n-text>
@@ -132,10 +135,10 @@
                 </div>
               </n-list-item>
             </n-list>
-            <n-empty v-else description="暂无基金配置" />
+            <n-empty v-else description="该分类下暂无基金配置" />
           </div>
-          <n-button block type="primary" dashed style="margin-top: 12px;" @click="addNewFund">
-             新增 QDII/LOF 基金配置
+          <n-button block type="primary" style="margin-top: 12px;" @click="addNewFund">
+             新增基金
           </n-button>
         </n-card>
 
@@ -155,10 +158,15 @@
             </n-text>
             <n-form-item label="选择导出基金">
                <n-input v-model:value="exportCode" placeholder="输入 6 位代码" />
+               <div class="flex gap-2 mt-2">
+                  <n-button v-for="code in quickCodes" :key="code" size="small" secondary @click="exportCode = code">
+                     {{ code }}
+                  </n-button>
+               </div>
             </n-form-item>
             <n-button type="primary" block style="margin-top: 10px;" @click="handleExport" :disabled="!exportCode">
               <template #icon><n-icon><FileDown /></n-icon></template>
-              生成并下载 (CSV)
+              导出
             </n-button>
           </div>
         </n-card>
@@ -227,13 +235,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import {
   NCard, NGrid, NGi, NButton, NIcon, NTag, NDivider, NFormItem, NInput, useMessage, NSpace, NText,
   NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NCollapse, NCollapseItem
 } from 'naive-ui'
 import { Play, FileDown, Database, Trash2, HelpCircle, RefreshCw, CheckCircle, Clock, Activity, AlertTriangle } from 'lucide-vue-next'
 import { triggerTask as triggerSystemTask, getFundConfigs, upsertFundConfig, deleteFundConfig } from '../api'
+import { TAB_CATEGORIES } from '../store/fundStore'
 import { getDataStatus, getNavStatus, getSystemHealthCheck } from '../api/systemApi'
 import client from '../api/client'
 
@@ -241,6 +250,25 @@ const message = useMessage()
 const taskLogs = ref<string[]>([])
 const exportCode = ref('')
 const isPrivateVisible = ref(false)
+const quickCodes = ['162411', '164701', '164824']
+
+const tabOptions = [
+  { label: '我的自选', value: '自选' },
+  { label: '黄金原油', value: '黄金原油' },
+  { label: 'QDII欧美', value: 'QDII欧美' },
+  { label: 'QDII亚洲', value: 'QDII亚洲' },
+  { label: '国内LOF', value: '国内LOF' },
+  { label: '白银', value: '白银' },
+  { label: '现金管理', value: '现金管理' }
+]
+const selectedTab = ref('')
+
+const filteredFunds = computed(() => {
+  if (!selectedTab.value) return fundConfigs.value
+  const categories = TAB_CATEGORIES[selectedTab.value] || []
+  if (categories.length === 0) return fundConfigs.value
+  return fundConfigs.value.filter(f => categories.includes(f.category))
+})
 
 // 数据同步状态
 const dataSources = ref<any[]>([])
