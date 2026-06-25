@@ -52,29 +52,29 @@ export function getHistoricalPrice(code: string, startDate?: string) {
 }
 
 /** 幽灵做市商实时计算 */
-export function getGhostCalc(fundCode: string) {
-  return client.get('/api/private/ghost_calc', { params: { fund_code: fundCode } })
+export function getLazyCalc(fundCode: string) {
+  return client.get('/api/private/lazy_calc', { params: { fund_code: fundCode } })
 }
 
 /** 幽灵做市商下单 */
-export function postGhostPlaceOrder(mode: string, fundCode: string, params?: {
+export function postLazyPlaceOrder(mode: string, fundCode: string, params?: {
   price?: number,
   lof_price?: number,
   quantity?: number,
   etf_quantity?: number,
   underlying_symbol?: string,
 }) {
-  return client.post('/api/private/ghost_place_order', { mode, fund_code: fundCode, ...params })
+  return client.post('/api/private/lazy_place_order', { mode, fund_code: fundCode, ...params })
 }
 
 /** 幽灵模拟器 - 获取状态 */
-export function getGhostSimStatus() {
-  return client.get('/api/private/ghost_simulate/status')
+export function getLazySimStatus() {
+  return client.get('/api/private/lazy_simulate/status')
 }
 
 /** 幽灵模拟器 - 控制(start/stop/reset/force_signal) */
-export function postGhostSimControl(action: string, extras?: Record<string, any>) {
-  return client.post('/api/private/ghost_simulate/control', { action, ...extras })
+export function postLazySimControl(action: string, extras?: Record<string, any>) {
+  return client.post('/api/private/lazy_simulate/control', { action, ...extras })
 }
 
 /** 债券ETF - 设置手动BP覆盖 */

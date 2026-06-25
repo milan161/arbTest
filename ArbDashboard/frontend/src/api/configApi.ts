@@ -38,3 +38,17 @@ export function upsertFundConfig(data: Record<string, any>) {
 export function deleteFundConfig(code: string) {
   return client.delete(`/api/config/funds/${code}`)
 }
+
+/** 导出基金配置为 YAML 文件 */
+export function exportFundConfig() {
+  return client.get('/api/config/funds/export', { responseType: 'blob' })
+}
+
+/** 导入基金配置 YAML 文件 */
+export function importFundConfig(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return client.post('/api/config/funds/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}

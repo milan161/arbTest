@@ -5,7 +5,7 @@ import pandas as pd
 import logging
 from logging.handlers import RotatingFileHandler
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -249,7 +249,7 @@ except (ImportError, NameError) as e:
     logger.info(f"Private export plugins not found or initialization failed: {e}")
 
 try:
-    from private.ghost_trader import ghost_trader_instance
+    from private.lazy_trader import lazy_trader_instance
     # 注入实盘驱动
     ib_reader = getattr(market_data_service, 'ib_reader', None)
     galaxy_qmt = None
@@ -258,19 +258,19 @@ try:
         rt = market_data_service.realtime_manager
         galaxy_qmt = rt.active_fetchers.get('galaxy')
         guojin_qmt = rt.active_fetchers.get('guojin')
-    ghost_trader_instance.inject_drivers(ib_reader=ib_reader, galaxy_qmt=galaxy_qmt, guojin_qmt=guojin_qmt)
-    logger.info("✅ Ghost Trader plugin loaded.")
+    lazy_trader_instance.inject_drivers(ib_reader=ib_reader, galaxy_qmt=galaxy_qmt, guojin_qmt=guojin_qmt)
+    logger.info("✅ Lazy Trader plugin loaded.")
 except (ImportError, NameError) as e:
-    ghost_trader_instance = None
-    logger.info(f"Ghost Trader plugin not found: {e}")
+    lazy_trader_instance = None
+    logger.info(f"Lazy Trader plugin not found: {e}")
 
-# Ghost Simulator (weekend mock data)
+# Lazy Simulator (weekend mock data)
 try:
-    from private.ghost_simulator import ghost_simulator_instance
-    logger.info("Ghost Simulator loaded.")
+    from private.lazy_simulator import lazy_simulator_instance
+    logger.info("Lazy Simulator loaded.")
 except (ImportError, NameError) as e:
-    ghost_simulator_instance = None
-    logger.info(f"Ghost Simulator not found: {e}")
+    lazy_simulator_instance = None
+    logger.info(f"Lazy Simulator not found: {e}")
 
 try:
     from private.signal_detector import signal_detector
@@ -887,6 +887,36 @@ async def delete_fund_config(code: str):
     success = config_manager_service.delete_fund_config(code)
     return {"status": "ok" if success else "error"}
 
+@app.get("/api/config/funds/export")
+async def export_fund_config():
+    """导出 lof_config.yaml 为文件下载（带时间戳文件名）"""
+    from fastapi.responses import Response
+    from datetime import datetime
+    try:
+        yaml_content = config_manager_service.export_config()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"lof_config_{ts}.yaml"
+        return Response(
+            content=yaml_content,
+            media_type="application/x-yaml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except Exception as e:
+        logger.error(f"导出 YAML 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/config/funds/import")
+async def import_fund_config(file: UploadFile = File(...)):
+    """从上传的 YAML 文件导入基金配置"""
+    try:
+        content = await file.read()
+        yaml_text = content.decode('utf-8')
+        config_manager_service.import_config(yaml_text)
+        return {"status": "ok", "message": "导入成功，旧配置已备份为 .bak"}
+    except Exception as e:
+        logger.error(f"导入 YAML 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
 # --- Private / Custom Export APIs ---
 @app.get("/api/private/status")
 async def get_private_status():
@@ -913,14 +943,14 @@ async def export_fund_data(code: str):
         }
     )
 
-@app.get("/api/private/ghost_calc")
-async def ghost_calc(fund_code: str = "162411"):
+@app.get("/api/private/lazy_calc")
+async def lazy_calc(fund_code: str = "162411"):
     """
     幽灵做市商实时计算 — 复用 fund_service.get_valuation_meta() 获取完整估值数据。
-    额外计算 Ghost 特有模式（safe/peg）的折溢价。
+    额外计算 Lazy 特有模式（safe/peg）的折溢价。
     """
-    if not ghost_trader_instance:
-        return JSONResponse(status_code=403, content={"status": "error", "message": "Ghost Trader not loaded"})
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
 
     try:
         # 1. 复用现有估值元数据（含 hedge、汇率、实时报价、T-1 基准等）
@@ -995,13 +1025,13 @@ async def ghost_calc(fund_code: str = "162411"):
                     if us_ask <= 0:
                         us_ask = float(q.get("price", 0) or 0)
             except Exception as e:
-                logger.error(f"[GhostCalc] failed to get quote for {underlying_clean}: {e}")
+                logger.error(f"[LazyCalc] failed to get quote for {underlying_clean}: {e}")
 
         # 4. hedge 值（复用 get_valuation_meta 返回的）
         hedge = float(base_data.get("hedge", 0)) if base_data else 0
         position = float(fund_cfg.get("position", 95.0)) / 100.0 if fund_cfg else 0.95
 
-        # 5. Ghost 特有溢价计算（safe 砸单 / peg 内卷）
+        # 5. Lazy 特有溢价计算（safe 砸单 / peg 内卷）
         # 正确公式: val = base_nav * (1 - pos) + (us_price * fx) / hedge  (注意: 第二项不乘pos)
         base_nav = float(base_data.get("nav", 0)) if base_data else 0
         if base_nav > 0 and hedge > 0:
@@ -1041,18 +1071,18 @@ async def ghost_calc(fund_code: str = "162411"):
         return {"status": "ok", "data": result}
 
     except Exception as e:
-        logger.error(f"[GhostCalc] Error: {e}", exc_info=True)
+        logger.error(f"[LazyCalc] Error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-@app.post("/api/private/ghost_place_order")
-async def ghost_place_order(request: Request):
+@app.post("/api/private/lazy_place_order")
+async def lazy_place_order(request: Request):
     """
     幽灵做市商下单接口
     - quantity: LOF 份额数（如 59500），系统自动用 hedge 系数换算出 ETF 对冲股数
     - etf_quantity: 可选，如果前端已算好 ETF 股数，直接使用（绕开换算）
     """
-    if not ghost_trader_instance:
-        return JSONResponse(status_code=403, content={"status": "error", "message": "Ghost Trader not loaded"})
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
     try:
         body = await request.json()
         mode = body.get("mode", "safe")          # "safe"/"peg" 向后兼容
@@ -1118,7 +1148,7 @@ async def ghost_place_order(request: Request):
             etf_quantity = max(1, int(round(lof_quantity / hedge)))
 
         if mode == "peg":
-            results = ghost_trader_instance.place_peg_order(
+            results = lazy_trader_instance.place_peg_order(
                 underlying_symbol=underlying_symbol,
                 quantity=etf_quantity,
                 us_ask1=price,
@@ -1127,7 +1157,7 @@ async def ghost_place_order(request: Request):
             # ⚠️ 平仓功能暂时禁用，用户手动平仓
             results = [{"driver": "IB", "success": False, "msg": "平仓功能暂时禁用，请手动操作"}]
         else:
-            results = ghost_trader_instance.place_open_order(
+            results = lazy_trader_instance.place_open_order(
                 fund_code=fund_code,
                 underlying_symbol=underlying_symbol,
                 lof_price=lof_price,
@@ -1138,39 +1168,39 @@ async def ghost_place_order(request: Request):
         any_ok = any(r.get("success") for r in results)
         return {"status": "ok" if any_ok else "error", "data": results}
     except Exception as e:
-        logger.error(f"[GhostOrder] Error: {e}", exc_info=True)
+        logger.error(f"[LazyOrder] Error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-# --- Ghost Simulator API (weekend mock data) ---
-@app.get("/api/private/ghost_simulate/status")
-async def ghost_simulate_status():
+# --- Lazy Simulator API (weekend mock data) ---
+@app.get("/api/private/lazy_simulate/status")
+async def lazy_simulate_status():
     """Get current simulation state and history"""
-    if not ghost_simulator_instance:
-        return JSONResponse(status_code=403, content={"status": "error", "message": "Ghost Simulator not loaded"})
-    return {"status": "ok", "data": ghost_simulator_instance.get_status()}
+    if not lazy_simulator_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Simulator not loaded"})
+    return {"status": "ok", "data": lazy_simulator_instance.get_status()}
 
-@app.post("/api/private/ghost_simulate/control")
-async def ghost_simulate_control(request: Request):
+@app.post("/api/private/lazy_simulate/control")
+async def lazy_simulate_control(request: Request):
     """Start/stop/reset simulation, or toggle forced signal"""
-    if not ghost_simulator_instance:
-        return JSONResponse(status_code=403, content={"status": "error", "message": "Ghost Simulator not loaded"})
+    if not lazy_simulator_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Simulator not loaded"})
     try:
         body = await request.json()
         action = body.get("action", "status")
         if action == "start":
-            result = ghost_simulator_instance.start()
+            result = lazy_simulator_instance.start()
         elif action == "stop":
-            result = ghost_simulator_instance.stop()
+            result = lazy_simulator_instance.stop()
         elif action == "reset":
-            result = ghost_simulator_instance.reset()
+            result = lazy_simulator_instance.reset()
         elif action == "force_signal":
             enabled = body.get("enabled", True)
-            result = ghost_simulator_instance.set_forced_signal(enabled)
+            result = lazy_simulator_instance.set_forced_signal(enabled)
         else:
             return JSONResponse(status_code=400, content={"status": "error", "message": f"Unknown action: {action}"})
         return {"status": "ok", "data": result}
     except Exception as e:
-        logger.error("[GhostSim] Control error: %s", e)
+        logger.error("[LazySim] Control error: %s", e)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 # --- Bond ETF BP Override API ---
@@ -1919,7 +1949,7 @@ async def toggle_auto_trade_engine(request: Request):
 async def get_auto_trade_logs():
     return {"status": "ok", "logs": auto_trade_runner.get_recent_logs()}
 
-# --- AutoExecutor (Ghost Trader 自动执行) APIs ---
+# --- AutoExecutor (Lazy Trader 自动执行) APIs ---
 @app.get("/api/signal_detector/status")
 async def get_signal_detector_status():
     running = signal_detector.running if signal_detector else False

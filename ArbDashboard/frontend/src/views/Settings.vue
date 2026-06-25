@@ -87,6 +87,97 @@
       </div>
     </div>
     
+    <!-- IB 核心套利标的配置 -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8">
+      <div class="flex items-center mb-6">
+        <div class="w-2 h-6 bg-orange-500 rounded mr-3"></div>
+        <h2 class="text-xl font-bold text-gray-700">IB 核心套利标的 (Real-time Priority)</h2>
+        <span class="ml-4 text-sm text-gray-400 font-normal">IB 只订阅这些标的，其余 ETF 走富途或放弃</span>
+      </div>
+      
+      <!-- 当前标的列表 -->
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 13px; color: #64748b;">当前标的（点击标签添加/移除）：</span>
+        </div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 36px;">
+          <span v-for="(sym, idx) in ibCoreSymbols" :key="sym"
+                @click="toggleIbSymbol(sym)"
+                :style="{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '4px 10px',
+                  fontSize: '13px',
+                  borderRadius: '16px',
+                  cursor: 'pointer',
+                  backgroundColor: '#fee2e2',
+                  color: '#dc2626',
+                  border: '1px solid #fca5a5',
+                  fontWeight: 'bold',
+                  userSelect: 'none'
+                }"
+                :title="点击移除">
+            {{ sym }}
+            <span style="font-size: 10px;">✕</span>
+          </span>
+          <span v-if="ibCoreSymbols.length === 0" style="font-size: 13px; color: #94a3b8;">加载中...</span>
+        </div>
+        
+        <!-- 富途标的可选 -->
+        <div style="border-top: 1px dashed #e2e8f0; padding-top: 12px;">
+          <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;">
+            ➕ 从下方选择添加到 IB（将富途标的提升为 IB 核心）：
+          </div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <span v-for="sym in futuCandidates" :key="sym"
+                  @click="addIbSymbol(sym)"
+                  :style="{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '4px 10px',
+                    fontSize: '13px',
+                    borderRadius: '16px',
+                    cursor: 'pointer',
+                    backgroundColor: ibCoreSymbols.includes(sym) ? '#fee2e2' : '#f0fdf4',
+                    color: ibCoreSymbols.includes(sym) ? '#dc2626' : '#16a34a',
+                    border: ibCoreSymbols.includes(sym) ? '1px solid #fca5a5' : '1px solid #86efac',
+                    textDecoration: ibCoreSymbols.includes(sym) ? 'line-through' : 'none',
+                    fontWeight: ibCoreSymbols.includes(sym) ? 'bold' : 'normal',
+                    userSelect: 'none',
+                    opacity: ibCoreSymbols.includes(sym) ? 0.6 : 1
+                  }"
+                  :title="ibCoreSymbols.includes(sym) ? '已在 IB 核心中' : '点击添加到 IB'">
+              {{ sym }}
+              <span v-if="!ibCoreSymbols.includes(sym)" style="font-size: 10px;">+</span>
+            </span>
+          </div>
+        </div>
+        
+        <!-- 操作按钮 -->
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button @click="saveIbCoreSymbols"
+                  style="padding: 6px 20px; font-size: 13px; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; font-weight: bold;">
+            保存
+          </button>
+          <button @click="loadIbCoreSymbols"
+                  style="padding: 6px 16px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #64748b; cursor: pointer;">
+            刷新
+          </button>
+          <button @click="setDefaultIbSymbols"
+                  style="padding: 6px 16px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #64748b; cursor: pointer;">
+            恢复默认
+          </button>
+        </div>
+        
+        <div style="font-size: 12px; color: #94a3b8; line-height: 1.6;">
+          <div>📌 默认 7 只：XOP, GLD, USO, SLV, INDA, QQQ, SPY</div>
+          <div>⚠️ 修改后立即生效，IB 会重新订阅</div>
+          <div>ℹ️ 这些是套利必需的标的，其他 ETF（XLK、ARKK、EWA 等）走富途数据源</div>
+        </div>
+      </div>
+    </div>
 
   </div>
 </template>
@@ -94,9 +185,73 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { getDataSources, updateDataSource, updateDataSourcesPriority } from '../api';
+import { getIbCoreSymbols, postIbCoreSymbols } from '../api';
+import { useMessage, NInput, NButton, NTag, NSpace } from 'naive-ui';
+
+const message = useMessage();
+const ibCoreSymbols = ref([]);
+const ibCoreSymbolsText = ref('');
+
+// 富途可用标的列表（非 IB 核心美股 ETF）
+const futuCandidates = ref([
+  'ARKK', 'ARKG', 'ARKQ', 'BOTZ', 'FINX', 'IAU',
+  'GDX', 'GDXJ', 'EWA', 'EWC', 'EWJ', 'EWZ', 'EWY',
+  'EWH', 'EWI', 'EWG', 'EWU', 'FXI', 'KWEB', 'MCHI',
+  'VIX', 'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLP',
+  'XLY', 'XLU', 'XLRE', 'XLB', 'SOXX', 'SMH', 'AIQ',
+  'DIA', 'IWM', 'CPER', 'DBC', 'PDBC', 'BNO', 'OIL',
+]);
 
 const realtimeSources = ref([]);
 const historicalSources = ref([]);
+
+const loadIbCoreSymbols = async () => {
+  try {
+    const res = await getIbCoreSymbols()
+    if (res.data.status === 'ok') {
+      ibCoreSymbols.value = res.data.data
+      ibCoreSymbolsText.value = res.data.data.join(', ')
+    }
+  } catch (e) {
+    console.error('加载 IB 核心标的失败:', e)
+  }
+}
+
+const saveIbCoreSymbols = async () => {
+  try {
+    const symbols = ibCoreSymbols.value
+    if (symbols.length === 0) {
+      message.warning('标的列表不能为空')
+      return
+    }
+    const res = await postIbCoreSymbols(symbols)
+    if (res.data.status === 'ok') {
+      message.success(res.data.message || 'IB 核心标的已更新')
+    } else {
+      message.error(res.data.message || '更新失败')
+    }
+  } catch (e) {
+    message.error('更新失败: ' + (e.message || e))
+  }
+}
+
+const toggleIbSymbol = (sym) => {
+  const idx = ibCoreSymbols.value.indexOf(sym)
+  if (idx > -1) {
+    ibCoreSymbols.value.splice(idx, 1)
+  }
+}
+
+const addIbSymbol = (sym) => {
+  if (!ibCoreSymbols.value.includes(sym)) {
+    ibCoreSymbols.value.push(sym)
+  }
+}
+
+const setDefaultIbSymbols = () => {
+  ibCoreSymbols.value = ['XOP', 'GLD', 'USO', 'SLV', 'INDA', 'QQQ', 'SPY']
+  message.info('已恢复默认 7 只标的')
+}
 
 
 const sourceNames = {
@@ -169,7 +324,7 @@ const saveAll = async () => {
     }
 };
 
-onMounted(fetchConfigs);
+onMounted(() => { fetchConfigs(); loadIbCoreSymbols() });
 </script>
 
 <style scoped>

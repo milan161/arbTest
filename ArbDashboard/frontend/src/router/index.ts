@@ -46,17 +46,17 @@ const router = createRouter({
           component: () => import('../views/ETFRotation.vue')
         },
         {
-          path: 'godmode',
-          name: 'GodMode',
-          component: () => import('../private/GodMode.vue').catch(() => {
+          path: 'lazymode',
+          name: 'LazyMode',
+          component: () => import('../private/LazyMode.vue').catch(() => {
             console.warn('Private module missing. Loading public placeholder.');
             return import('../views/DongGeSecret.vue');
           })
         },
         {
-          path: 'ghost',
-          name: 'Ghost',
-          component: () => import('../views/Ghost.vue')
+          path: 'lazy',
+          name: 'LazyTerminal',
+          component: () => import('../views/LazyTerminal.vue')
         },
         {
           path: 'developing',

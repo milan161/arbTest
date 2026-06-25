@@ -53,7 +53,7 @@ class ConfigService:
         import os
         # 这里的 backend_dir 是 ArbDashboard/backend
         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        # lof_config.yaml 在 D:/Study/arbTest/arbcore/scripts/lof_config.yaml
+        # lof_config.yaml 在 D:/Study/arbTest/arbcore/config/lof_config.yaml
         # project_root 需要指向 D:/Study/arbTest
         project_root = os.path.abspath(os.path.join(backend_dir, "..", ".."))
         cms = ConfigManagerService(project_root)

@@ -158,7 +158,7 @@ HK_STOCK_MAP = {
 }
 
 # [V7.2] 混合基金成分股（美股）强制走富途分流
-# 减轻 IB 负担，IB 仅处理核心套利标的 (GLD, USO, XOP等)
+# 减轻 IB 负担，IB 仅处理核心套利标的 (GLD, USO, XOP, SLV, INDA, QQQ, SPY)
 US_STOCK_FUTU_MAP = {
     'TSM': 'FUTU',    # 台积电
     'NVDA': 'FUTU',   # 英伟达
@@ -173,6 +173,13 @@ US_STOCK_FUTU_MAP = {
     'META': 'FUTU',   # Meta
     'TSLA': 'FUTU',   # 特斯拉
 }
+
+# ============================================================
+# IB 核心套利标的白名单（默认 7 只）
+# ============================================================
+# 只有在这个列表中的美股 ETF 才会走 IB 数据源
+# 其余美股 ETF 自动走 FUTU（富途）或放弃
+IB_CORE_ARBITRAGE_SYMBOLS = ['XOP', 'GLD', 'USO', 'SLV', 'INDA', 'QQQ', 'SPY']
 
 # 期货映射表（从通达信获取）
 FUTURES_MAP = {
@@ -281,6 +288,7 @@ SYMBOL_SOURCE_MAP.update(WOODY_MAP)  # 添加 Woody 映射表
 # 反向映射：数据源 → 标的列表
 SOURCE_SYMBOL_MAP = {
     'IB': [],
+    'IB_CORE_ONLY': list(IB_CORE_ARBITRAGE_SYMBOLS),  # 核心套利标的白名单
     'FUTU': [],
     'TDX': [],
     'QMT_YH': [],  # 银河QMT（A股备用）
@@ -289,13 +297,19 @@ SOURCE_SYMBOL_MAP = {
     'WOODY': [],
 }
 
+# IB 只包含核心套利标的白名单，其余美股 ETF 走 FUTU
+SOURCE_SYMBOL_MAP['IB'] = list(IB_CORE_ARBITRAGE_SYMBOLS)
+
 for symbol, source in SYMBOL_SOURCE_MAP.items():
-    if source in SOURCE_SYMBOL_MAP:
+    if source in SOURCE_SYMBOL_MAP and source != 'IB':
         SOURCE_SYMBOL_MAP[source].append(symbol)
+    elif source == 'IB' and symbol not in IB_CORE_ARBITRAGE_SYMBOLS:
+        # 非核心套利标的从 IB 分流到 FUTU
+        SOURCE_SYMBOL_MAP['FUTU'].append(symbol)
 
 # 按数据源排序
 for source in SOURCE_SYMBOL_MAP:
-    SOURCE_SYMBOL_MAP[source].sort()
+    SOURCE_SYMBOL_MAP[source] = sorted(set(SOURCE_SYMBOL_MAP[source]))
 
 
 # ============================================================

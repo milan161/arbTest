@@ -232,8 +232,8 @@ const menuOptions = [
     icon: renderIcon(Settings)
   },
   {
-    label: () => h(RouterLink, { to: '/godmode' }, { default: () => '我的交易' }),
-    key: 'godmode',
+    label: () => h(RouterLink, { to: '/lazymode' }, { default: () => '我的交易' }),
+    key: 'lazymode',
     icon: renderIcon(Bot)
   }
 ]

@@ -1745,7 +1745,7 @@ class FundService:
                         pass  # 指数符号不加入实时行情查询
                     else:
                         etf_symbols.append(trade_etf)
-            # [V10.9] 加入基金自身行情（供 Ghost 保守/内卷模式使用 lof_bid/lof_ask）
+            # [V10.9] 加入基金自身行情（供 Lazy 保守/内卷模式使用 lof_bid/lof_ask）
             if code not in etf_symbols:
                 etf_symbols.append(code)
 

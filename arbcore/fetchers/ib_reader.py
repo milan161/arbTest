@@ -208,23 +208,14 @@ class IBReader(EWrapper, EClient):
         while self.running:
             # 兼容原有的 YAML 动态读取，并且优先支持从数据库加载白名单
             try:
-                # [V7.2] 废除白名单机制，改为自动拉取所有分配给 IB 的美股 ETF
-                from arbcore.config.symbol_source_map import SYMBOL_SOURCE_MAP
-                syms = set()
-                for sym, source in SYMBOL_SOURCE_MAP.items():
-                    if source == 'IB':
-                        # 过滤A股和港股代码
-                        is_a_share = bool(re.match(r'^[0-9]{5,6}$|^(sh|sz)[0-9]{6}$', sym, re.IGNORECASE))
-                        if not is_a_share:
-                            syms.add(sym)
-                
-                if syms:
-                    self.symbols = list(syms)
-                else:
-                    # 极端情况回退
-                    self.symbols = ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
+                # [V7.3] IB 只订阅核心套利标的，不拉取全量 SYMBOL_SOURCE_MAP
+                # 核心标的列表从配置读取，支持用户自定义
+                from arbcore.config.symbol_source_map import IB_CORE_ARBITRAGE_SYMBOLS
+                self.symbols = list(IB_CORE_ARBITRAGE_SYMBOLS)
+                print(f"[IBReader] 核心套利标的: {self.symbols} ({len(self.symbols)} 只)")
             except Exception as e:
-                print(f"[IBReader] 加载订阅代码列表异常: {e}")
+                print(f"[IBReader] 加载核心套利标的异常: {e}，使用默认列表")
+                self.symbols = ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
             
             if not self.connected:
                 print(f"[IBReader] 未连接，等待 {self.retry_delay:.1f}s 后重试...")

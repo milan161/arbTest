@@ -8,7 +8,7 @@ sys.path.append(os.path.abspath(os.path.join(backend_dir, '..', '..', 'arbcore')
 from database.db_manager import DatabaseManager
 
 def sync_config_to_jsl_list():
-    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'scripts', 'lof_config.yaml'))
+    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'config', 'lof_config.yaml'))
     if not os.path.exists(config_path):
         print(f"Error: Config not found at {config_path}")
         return

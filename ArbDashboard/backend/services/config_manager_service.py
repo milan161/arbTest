@@ -12,9 +12,9 @@ class ConfigManagerService:
     """
     def __init__(self, project_root):
         # 兼容 project_root 为 D:\Study\arbTest\ArbDashboard 或 D:\Study\arbTest
-        # 彻底废弃 LOFarb，统一从 arbcore/scripts/lof_config.yaml 加载配置
+        # 统一从 arbcore/config/lof_config.yaml 加载配置
         base_dir = project_root if os.path.exists(os.path.join(project_root, "arbcore")) else os.path.dirname(project_root)
-        self.config_path = os.path.normpath(os.path.join(base_dir, "arbcore", "scripts", "lof_config.yaml"))
+        self.config_path = os.path.normpath(os.path.join(base_dir, "arbcore", "config", "lof_config.yaml"))
 
     def load_config(self) -> Dict[str, Any]:
         if not os.path.exists(self.config_path):
@@ -68,3 +68,27 @@ class ConfigManagerService:
             return False
         cfg['funds'] = new_funds
         return self.save_config(cfg)
+
+    def export_config(self) -> str:
+        """导出完整 YAML 配置内容为字符串"""
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def import_config(self, yaml_content: str) -> bool:
+        """导入 YAML 配置：先验证结构，再备份旧文件，最后写入新配置"""
+        try:
+            new_cfg = yaml.safe_load(yaml_content)
+            if not isinstance(new_cfg, dict):
+                raise ValueError("YAML 根节点必须是字典")
+            if 'funds' not in new_cfg:
+                raise ValueError("YAML 缺少 'funds' 字段")
+            # 备份旧配置
+            backup_path = self.config_path + '.bak'
+            if os.path.exists(self.config_path):
+                import shutil
+                shutil.copy2(self.config_path, backup_path)
+            # 写入新配置
+            return self.save_config(new_cfg)
+        except Exception as e:
+            logger.error(f"导入 YAML 失败: {e}")
+            raise

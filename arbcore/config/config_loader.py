@@ -12,17 +12,15 @@ def load_config(config_path=None):
     加载配置文件，优先读取私密配置
     
     Args:
-        config_path: 配置文件路径（可选）。如果不提供，默认在调用者目录下查找 lof_config.yaml
+        config_path: 配置文件路径（可选）。如果不提供，默认在 arbcore/config/ 下查找 lof_config.yaml
     
     Returns:
         dict: 配置数据，如果加载失败返回空字典
     """
     if config_path is None:
-        # 自动检测调用者目录
-        import inspect
-        caller_frame = inspect.stack()[1]
-        caller_dir = os.path.dirname(os.path.abspath(caller_frame.filename))
-        config_path = os.path.join(caller_dir, DEFAULT_CONFIG_NAME)
+        # 默认在 arbcore/config/ 目录查找
+        config_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(config_dir, DEFAULT_CONFIG_NAME)
     
     base_dir = os.path.dirname(config_path)
     private_config_path = os.path.join(base_dir, PRIVATE_CONFIG_NAME)
@@ -66,13 +64,11 @@ def get_config_path():
     获取当前使用的配置文件路径
     
     Returns:
-        str: 当前配置文件路径
+        str: lof_config.yaml 完整路径（始终在 arbcore/config/ 下）
     """
-    import inspect
-    caller_frame = inspect.stack()[1]
-    caller_dir = os.path.dirname(os.path.abspath(caller_frame.filename))
-    config_path = os.path.join(caller_dir, DEFAULT_CONFIG_NAME)
-    private_config_path = os.path.join(caller_dir, PRIVATE_CONFIG_NAME)
+    config_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(config_dir, DEFAULT_CONFIG_NAME)
+    private_config_path = os.path.join(config_dir, PRIVATE_CONFIG_NAME)
     
     if os.path.exists(private_config_path):
         return private_config_path

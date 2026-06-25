@@ -118,7 +118,10 @@
       <n-gi :span="10">
         <n-card title="核心基金配置" class="shadow-soft">
           <template #header-extra>
-            <n-button size="tiny" secondary @click="fetchFundConfigs">刷新列表</n-button>
+            <n-space>
+              <n-button size="tiny" @click="handleImportClick">导入</n-button>
+              <n-button size="tiny" @click="handleExportClick">导出</n-button>
+            </n-space>
           </template>
           <div class="mb-3">
             <n-select v-model:value="selectedTab" :options="tabOptions" placeholder="选择基金分类" clearable style="width: 100%;" />
@@ -231,6 +234,29 @@
          </div>
       </n-form>
     </n-modal>
+
+    <!-- 导入 YAML 弹窗 -->
+    <n-modal v-model:show="showImportModal" preset="card" title="导入基金配置" style="width: 500px;">
+      <n-alert type="warning" :bordered="false" style="margin-bottom: 16px;">
+        导入将<strong>覆盖</strong>当前所有基金配置，旧配置会自动备份为 .bak 文件。
+      </n-alert>
+      <n-upload
+        :default-upload="false"
+        accept=".yaml,.yml"
+        :max="1"
+        @change="handleFileChange"
+      >
+        <n-button>选择 YAML 文件</n-button>
+      </n-upload>
+      <div v-if="importFile" style="margin-top: 12px; padding: 8px 12px; background: #f0f9ff; border-radius: 6px;">
+        <n-text>{{ importFile.name }}</n-text>
+        <n-text depth="3" style="margin-left: 8px;">({{ (importFile.size / 1024).toFixed(1) }} KB)</n-text>
+      </div>
+      <div class="flex-end gap-2 mt-6">
+        <n-button @click="showImportModal = false">取消</n-button>
+        <n-button type="primary" @click="handleImportConfirm" :loading="importLoading" :disabled="!importFile">确认导入</n-button>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -238,10 +264,10 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import {
   NCard, NGrid, NGi, NButton, NIcon, NTag, NDivider, NFormItem, NInput, useMessage, NSpace, NText,
-  NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NCollapse, NCollapseItem
+  NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NCollapse, NCollapseItem, NUpload
 } from 'naive-ui'
 import { Play, FileDown, Database, Trash2, HelpCircle, RefreshCw, CheckCircle, Clock, Activity, AlertTriangle } from 'lucide-vue-next'
-import { triggerTask as triggerSystemTask, getFundConfigs, upsertFundConfig, deleteFundConfig } from '../api'
+import { triggerTask as triggerSystemTask, getFundConfigs, upsertFundConfig, deleteFundConfig, exportFundConfig, importFundConfig } from '../api'
 import { TAB_CATEGORIES } from '../store/fundStore'
 import { getDataStatus, getNavStatus, getSystemHealthCheck } from '../api/systemApi'
 import client from '../api/client'
@@ -252,8 +278,57 @@ const exportCode = ref('')
 const isPrivateVisible = ref(false)
 const quickCodes = ['162411', '164701', '164824']
 
+// 导入导出状态
+const showImportModal = ref(false)
+const importFile = ref<File | null>(null)
+const importLoading = ref(false)
+
+const handleImportClick = () => {
+  importFile.value = null
+  showImportModal.value = true
+}
+
+const handleFileChange = (data: { file: any; fileList: any[] }) => {
+  importFile.value = data.file.file || null
+}
+
+const handleExportClick = async () => {
+  try {
+    const res = await exportFundConfig()
+    const blob = new Blob([res.data], { type: 'application/x-yaml' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+    link.setAttribute('download', `lof_config_${ts}.yaml`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    message.success('配置已导出')
+  } catch (e: any) {
+    message.error('导出失败: ' + (e.message || '未知错误'))
+  }
+}
+
+const handleImportConfirm = async () => {
+  if (!importFile.value) return
+  importLoading.value = true
+  try {
+    await importFundConfig(importFile.value)
+    message.success('导入成功，配置已更新')
+    showImportModal.value = false
+    importFile.value = null
+    fetchFundConfigs()
+  } catch (e: any) {
+    const errMsg = e?.response?.data?.message || e.message || '未知错误'
+    message.error('导入失败: ' + errMsg)
+  } finally {
+    importLoading.value = false
+  }
+}
+
 const tabOptions = [
-  { label: '我的自选', value: '自选' },
   { label: '黄金原油', value: '黄金原油' },
   { label: 'QDII欧美', value: 'QDII欧美' },
   { label: 'QDII亚洲', value: 'QDII亚洲' },

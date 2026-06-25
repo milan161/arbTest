@@ -2,11 +2,13 @@
 # 核心白名单：只上传跟 "程序3(ArbDashboard)" 与 "基座(arbcore)" 运行必须的代码
 # =================================================================
 
-# === ArbDashboard 专用私密文件夹 (绝对禁止上传) ===
-ArbDashboard/backend/private/
-ArbDashboard/frontend/src/private/
-ArbDashboard/backend/core/private/
+# === 所有 private 目录 (绝对禁止上传) ===
+**/private/
 ArbDashboard/backend/core/auto_trade/
+
+# === Lazy 交易系统 (绝对禁止上传) ===
+**/Lazy.vue
+**/*lazy*
 
 # === 账号与私密配置 (绝对禁止上传) ===
 arbcore/config/account_private.py
@@ -32,17 +34,12 @@ ArbDashboard/backend/core/database/
 /jsl/
 /ArbCoreProject/
 /ArbDashboard_Next/
+/lofarb_data/
 
 # === 外部数据与废弃目录 (全部屏蔽) ===
-/data/
-/woodyAPI/
-/woodykey轮动demo/
-/scripts/
-/scratch/
-/test_read_data/
-/arbcore/scripts/data/
 ArbDashboard/data/
-.gemini/
+ArbDashboard/scripts/
+ArbDashboard/logs/
 
 # === 文档、日志、自媒体内容与测试代码 (绝对禁止上传) ===
 /docs/
@@ -52,7 +49,8 @@ ArbDashboard/data/
 /公众号文章/
 *.md
 !/README.md
-!/指数数据源梳理报告.md
+# **/AGENTS.md
+
 
 # === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
 *.xlsx
@@ -66,8 +64,6 @@ ArbDashboard/data/
 !/ArbDashboard/start_dashboard.bat
 GEMINI.md
 Proxy.bat
-push_to_vercel.py
-deploy_vps.py
 *.txt
 !readme.txt
 !requirements.txt
