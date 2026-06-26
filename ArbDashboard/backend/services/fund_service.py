@@ -568,6 +568,22 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                        'ARKK', 'ARKG', 'EEM', 'VWO', 'INDA', 'EWJ', 'KWEB', 'RSPH',
                        'LQD', 'HYG', 'TLT', 'IEF', 'SHY', 'AGG', 'BND'}
 
+    # [V10.19] HK非标指数→标准指数别名映射
+    # 腾讯/新浪只支持 HSI/HSCEI/HSTECH 三个标准HK指数
+    # 其他HK指数（HSCI/HSCCI/HSSCNE/HSSI/HSMI）通过此表映射到最接近的标准指数
+    _HK_INDEX_ALIAS_MAP = {
+        'HSCI': 'HSI',       # 恒生综合指数 → 恒生指数
+        'HSCCI': 'HSI',      # 恒生中国内地100 → 恒生指数
+        'HSSCNE': 'HSCEI',   # 恒生新经济 → 国企指数
+        'HSSI': 'HSCEI',     # 恒生小型股 → 国企指数
+        'HSMI': 'HSCEI',     # 恒生中型股 → 国企指数
+    }
+
+    # [V10.19] CSI代码(930xxx/931xxx等)不应走腾讯sh/sz查询，应直接走东财
+    def _is_csi_index_code(code: str) -> bool:
+        """判断是否为中证指数代码（如930914, 931234等）"""
+        return code.isdigit() and len(code) == 6 and (code.startswith('930') or code.startswith('931') or code.startswith('932'))
+
     import requests
     headers_tencent = {'Referer': 'https://finance.qq.com/', 'User-Agent': 'Mozilla/5.0'}
     headers_sina = {'Referer': 'https://finance.sina.com.cn/', 'Accept': 'text/event-stream'}
@@ -599,7 +615,12 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         sina_req = ""
         ret_code = ""
         
-        if clean_sym.isdigit() and len(clean_sym) == 6:
+        # [V10.19] CSI代码(如930914)跳过腾讯/新浪，直接走东财
+        if _is_csi_index_code(clean_sym):
+            # CSI代码腾讯sh/sz查询返回无意义数据(如sh930914→v_pv_none_match)
+            # 跳过腾讯/新浪，让东财兜底处理
+            continue
+        elif clean_sym.isdigit() and len(clean_sym) == 6:
             if clean_sym.startswith('399') or clean_sym.startswith('159') or clean_sym.startswith('3999'):
                 tc_req = f"sz{clean_sym}"
                 sina_req = f"s_sz{clean_sym}"
@@ -607,12 +628,27 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                 tc_req = f"sh{clean_sym}"
                 sina_req = f"s_sh{clean_sym}"
             ret_code = clean_sym
-        elif 'HSTECH' in clean_sym:
+        # [V10.19] 港股指数→精确匹配，并在res中同时写入原始sym和别名对应关系
+        elif clean_sym == 'HSTECH':
             tc_req, sina_req, ret_code = "hkHSTECH", "rt_hkHSTECH", "HSTECH"
-        elif 'HSCEI' in clean_sym:
+        elif clean_sym == 'HSCEI':
             tc_req, sina_req, ret_code = "hkHSCEI", "rt_hkHSCEI", "HSCEI"
-        elif 'HSI' in clean_sym:
+        elif clean_sym == 'HSI':
             tc_req, sina_req, ret_code = "hkHSI", "rt_hkHSI", "HSI"
+        elif clean_sym in _HK_INDEX_ALIAS_MAP:
+            # 非标HK指数→映射到标准指数，同时记录映射关系
+            # 例如 HSCI→HSI, HSCCI→HSI, HSSI→HSCEI 等
+            mapped = _HK_INDEX_ALIAS_MAP[clean_sym]
+            if mapped == 'HSI':
+                tc_req, sina_req, ret_code = "hkHSI", "rt_hkHSI", "HSI"
+            elif mapped == 'HSCEI':
+                tc_req, sina_req, ret_code = "hkHSCEI", "rt_hkHSCEI", "HSCEI"
+            elif mapped == 'HSTECH':
+                tc_req, sina_req, ret_code = "hkHSTECH", "rt_hkHSTECH", "HSTECH"
+            else:
+                continue
+            # 在tc_to_syms/sina_to_syms中同时注册原始sym和ret_code的映射
+            # 这样API返回ret_code时，能将数据写入res[original_sym]
         elif clean_sym.startswith('.') and len(clean_sym) <= 10:
             # [V10.13] 美股指数（.INX, .NDX, .SP500-45 等）走新浪获取
             sina_req = f"s_sh{clean_sym}"
@@ -826,9 +862,9 @@ class FundService:
                 _dashboard_cache.set(cache_key, [])
                 return []
 
-            # ── 2. 批量获取 fund_info 状态费率 ──
+            # ── 2. 批量获取 fund_purchase_status 状态费率（AKShare 日更）──
             status_df = pd.read_sql_query(
-                "SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee FROM fund_info",
+                "SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee, purchase_limit FROM fund_purchase_status",
                 conn
             )
             status_dict = status_df.set_index('fund_code').to_dict('index')
@@ -1230,6 +1266,7 @@ class FundService:
                 fund_dict['redemption_status'] = st.get('redemption_status', '未知')
                 fund_dict['purchase_fee'] = st.get('purchase_fee', '-')
                 fund_dict['redemption_fee'] = st.get('redemption_fee', '-')
+                fund_dict['purchase_limit'] = st.get('purchase_limit', None)
                 
                 # 指数信息
                 fund_dict['idx_code'] = fund.get('idx_code', '-')

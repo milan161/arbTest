@@ -52,3 +52,13 @@ export function importFundConfig(file: File) {
     headers: { 'Content-Type': 'multipart/form-data' }
   })
 }
+
+/** 获取 IB 核心套利标的列表 */
+export function getIbCoreSymbols() {
+  return client.get('/api/config/ib_core_symbols')
+}
+
+/** 更新 IB 核心套利标的列表 */
+export function postIbCoreSymbols(symbols: string[]) {
+  return client.post('/api/config/ib_core_symbols', { symbols })
+}

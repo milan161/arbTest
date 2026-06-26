@@ -360,11 +360,15 @@ def get_symbol_source(symbol: str, use_ib: bool = True) -> str:
     if symbol in SYMBOL_SOURCE_MAP:
         base_source = SYMBOL_SOURCE_MAP[symbol]
         
-        # 美股 ETF 特殊处理：根据 use_ib 参数切换数据源
-        if base_source == 'IB' and not use_ib:
-            # 检查是否为美股 ETF（在 US_ETF_MAP 中）
-            if symbol in US_ETF_MAP:
-                return 'FUTU'  # 美股 ETF 从 IB 切换到富途
+        # [AI-2026-06-26] IB核心套利白名单过滤：非核心标的→富途
+        if base_source == 'IB':
+            if not use_ib:
+                # 检查是否为美股 ETF（在 US_ETF_MAP 中）
+                if symbol in US_ETF_MAP:
+                    return 'FUTU'  # 美股 ETF 从 IB 切换到富途
+            # 非核心套利标的不走IB，分流到富途
+            if base_symbol not in IB_CORE_ARBITRAGE_SYMBOLS and symbol not in IB_CORE_ARBITRAGE_SYMBOLS:
+                return 'FUTU'
         
         return base_source
     
@@ -374,9 +378,12 @@ def get_symbol_source(symbol: str, use_ib: bool = True) -> str:
         if base in SYMBOL_SOURCE_MAP:
             base_source = SYMBOL_SOURCE_MAP[base]
             
-            # 美股 ETF 特殊处理
-            if base_source == 'IB' and not use_ib:
-                if base in US_ETF_MAP:
+            # [AI-2026-06-26] IB核心套利白名单过滤：非核心标的→富途
+            if base_source == 'IB':
+                if not use_ib:
+                    if base in US_ETF_MAP:
+                        return 'FUTU'
+                if base not in IB_CORE_ARBITRAGE_SYMBOLS:
                     return 'FUTU'
             
             return base_source
@@ -385,9 +392,12 @@ def get_symbol_source(symbol: str, use_ib: bool = True) -> str:
     if base_symbol in SYMBOL_SOURCE_MAP:
         base_source = SYMBOL_SOURCE_MAP[base_symbol]
         
-        # 美股 ETF 特殊处理
-        if base_source == 'IB' and not use_ib:
-            if base_symbol in US_ETF_MAP:
+        # [AI-2026-06-26] IB核心套利白名单过滤：非核心标的→富途
+        if base_source == 'IB':
+            if not use_ib:
+                if base_symbol in US_ETF_MAP:
+                    return 'FUTU'
+            if base_symbol not in IB_CORE_ARBITRAGE_SYMBOLS:
                 return 'FUTU'
         
         return base_source
@@ -395,10 +405,13 @@ def get_symbol_source(symbol: str, use_ib: bool = True) -> str:
     # 自动分类（兜底逻辑）
     classified = auto_classify_symbol(symbol)
     
-    # 美股 ETF 特殊处理
-    if classified == 'IB' and not use_ib:
-        import re
-        if re.match(r'^[A-Z]{2,6}$', symbol):
+    # [AI-2026-06-26] IB核心套利白名单过滤：非核心标的→富途
+    if classified == 'IB':
+        if not use_ib:
+            import re
+            if re.match(r'^[A-Z]{2,6}$', symbol):
+                return 'FUTU'
+        if base_symbol not in IB_CORE_ARBITRAGE_SYMBOLS:
             return 'FUTU'
     
     return classified

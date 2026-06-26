@@ -42,14 +42,11 @@ ArbDashboard/scripts/
 ArbDashboard/logs/
 
 # === 文档、日志、自媒体内容与测试代码 (绝对禁止上传) ===
-/docs/
+/docs_unfinished/
 /logs/
-/test/
-/tests/
-/公众号文章/
+**/scripts/
 *.md
 !/README.md
-# **/AGENTS.md
 
 
 # === 数据文件（Excel/CSV 等，禁止上传个人数据） ===

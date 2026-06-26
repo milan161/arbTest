@@ -124,7 +124,7 @@
             </n-space>
           </template>
           <div class="mb-3">
-            <n-select v-model:value="selectedTab" :options="tabOptions" placeholder="选择基金分类" clearable style="width: 100%;" />
+            <n-select v-model:value="selectedTab" :options="tabOptions" placeholder="点击基金分类" clearable style="width: 100%;" />
           </div>
           <div style="height: 260px; overflow-y: auto;">
             <n-list small hoverable clickable v-if="filteredFunds.length > 0">

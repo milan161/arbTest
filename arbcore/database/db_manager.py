@@ -73,7 +73,12 @@ class DatabaseManager:
 
             conn.execute('''CREATE TABLE IF NOT EXISTS etf_raw_api_data (date TEXT NOT NULL, source TEXT NOT NULL, raw_content TEXT, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (date, source))''')
             conn.execute('''CREATE TABLE IF NOT EXISTS etf_rotation_list (group_id INTEGER, lof_code TEXT, lof_name TEXT, etf_code TEXT, etf_name TEXT, track_index TEXT, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (lof_code, etf_code))''')
-            conn.execute('''CREATE TABLE IF NOT EXISTS fund_purchase_status (fund_code TEXT PRIMARY KEY, purchase_status TEXT, redemption_status TEXT, purchase_fee TEXT, redemption_fee TEXT, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS fund_purchase_status (fund_code TEXT PRIMARY KEY, purchase_status TEXT, redemption_status TEXT, purchase_fee TEXT, redemption_fee TEXT, purchase_limit REAL, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')))''')
+            # 兼容旧表：如果 purchase_limit 列不存在则添加
+            try:
+                conn.execute("ALTER TABLE fund_purchase_status ADD COLUMN purchase_limit REAL")
+            except:
+                pass
             
             # 数据源配置中心 (VUE 控制台的核心)
             conn.execute('''

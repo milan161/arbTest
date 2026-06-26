@@ -12,3 +12,4 @@ pyyaml
 paramiko
 chinese-calendar
 openpyxl
+python-multipart

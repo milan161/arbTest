@@ -391,24 +391,32 @@ const allColumns: DataTableColumns<any> = [
       return h('span', { class: 'num-cell compact', style: { color: priceColor(Number(row.index_pct)) } }, formatPercent(Number(row.index_pct), 2))
     }
   },
+  {
+    title: '指数名称', key: 'index_name', width: 60, align: 'center',
+    render(row: any) {
+      const name = row.idx_name || row.related_index || '-'
+      return h('span', { class: 'num-cell muted', style: 'font-size: 11px;' }, name)
+    }
+  },
 
   {
-    title: '申购', key: 'purchase_status', width: 46, align: 'center',
+    title: '申购', key: 'purchase_status', width: 56, align: 'center',
     render(row: any) {
       const status = row.purchase_status || '未知'
+      const limit = row.purchase_limit  // 日累计限定金额（元）
       let shortText = status
       let type = 'warning'
-      if (status.includes('开放')) {
-        if (status.includes('限大额')) {
-          shortText = '限大额'
-          type = 'warning'
-        } else {
-          shortText = '开放'
-          type = 'success'
-        }
-      } else {
-        shortText = '暂停'
+      // [AI-2026-06-26] 修复"限大额"不显示具体金额：原逻辑status.includes('开放')优先判断但"限大额"不包含"开放"
+      if (status.includes('限大额') || status.includes('限制')) {
+        // 限购 → 显示具体金额（如限50万），不再显示模糊的"限大额"
+        shortText = formatPurchaseLimit(limit)
         type = 'warning'
+      } else if (status.includes('开放')) {
+        shortText = '开放'
+        type = 'success'
+      } else if (status.includes('暂停')) {
+        shortText = '暂停'
+        type = 'default'
       }
       return h(NTag, { type, size: 'small', round: true, class: 'status-pill' }, { default: () => shortText })
     }
@@ -455,6 +463,15 @@ const renderValWithChg = (val: number, chg: number, precision: number = 4) => {
     ])
 }
 
+// [AI-2026-06-26] 新增：格式化申购限额，解决"限大额"无具体数量问题
+const formatPurchaseLimit = (limit: number | null | undefined): string => {
+  if (limit == null || limit === 0) return '限大额'
+  if (limit >= 1e8 && limit % 1e8 === 0) return `限${limit / 1e8}亿`
+  if (limit >= 1e4 && limit % 1e4 === 0) return `限${limit / 1e4}万`
+  if (limit >= 1000) return `限${Math.round(limit / 100) / 10}千`
+  return `限${limit}`
+}
+
 const historyColumns = computed<DataTableColumns<any>>(() => {
     const isCash = isCashManagementFund.value
     const is511360 = computed(() => selectedFund.value?.fund_code === '511360')
@@ -495,11 +512,11 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
             }
             return d
         }},
-        // 现金管理不显示汇率，其他TAB汇率紧挨日期
-        ...(isCash ? [] : [
-            { title: '汇率', key: 'usd_cny_mid', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.usd_cny_mid, row.usd_cny_mid_chg) } },
+        // 现金管理及国内LOF不显示汇率（国内LOF为纯A股，无汇率影响）
+        ...(isCash || selectedFund.value?.category === '国内LOF' ? [] : [
+            { title: '汇率', key: 'usd_cny_mid', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.usd_cny_mid, row.usd_cny_mid_chg) } },
         ]),
-        { title: '净值', key: 'nav', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.nav, row.nav_chg) } },
+        { title: '净值', key: 'nav', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.nav, row.nav_chg) } },
         // [现金管理] 在净值后插入"每日增加"列
         ...(isCash ? [{
             title: '每日增加', key: 'daily_inc', width: 78, align: 'center',
@@ -510,7 +527,7 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 return h('span', { class: 'num-cell compact', style: { color } }, (inc >= 0 ? '+' : '') + inc.toFixed(4))
             }
         }] : []),
-        { title: '收盘价', key: 'price', width: 85, align: 'center', render(row: any) { return renderValWithChg(row.price, row.price_chg, 3) } },
+        { title: '收盘价', key: 'price', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.price, row.price_chg, 3) } },
         // 现金管理：折价几根毛/溢价在静态估值左侧；否则放静态估值右侧
         ...isCash
             ? [
@@ -526,12 +543,12 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                     { title: '期货', key: 'futures_close', width: 78, align: 'center', render(row: any) { return row.futures_close ? h('span', { class: 'num-cell' }, row.futures_close.toFixed(3)) : '-' } },
                     { title: '期货涨幅', key: 'futures_pct', width: 78, align: 'center', render(row: any) { if (row.futures_pct == null) return '-'; return h('span', { style: { color: priceColor(row.futures_pct), fontWeight: '500' } }, row.futures_pct.toFixed(3) + '%') } },
                 ] : []),
-                { title: '静态估值', key: 'static_val', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
+                { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
                 { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { const v = (row.static_val || 0) - (row.nav || 0); if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
                 { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { const nav = row.nav || 0; if (nav === 0) return '-'; const v = ((row.static_val || 0) - nav) / nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
               ]
             : [
-                { title: '静态估值', key: 'static_val', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
+                { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
                 { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { const v = row.val_error_pct || 0; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, formatPercent(v, 4)) } },
                 { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { const nav = row.nav || 0; if (nav === 0) return '-'; const v = ((row.static_val || 0) - nav) / nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
                 { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium || 0; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
@@ -607,14 +624,14 @@ const columns = computed<DataTableColumns<any>>(() => {
 
   const hideIndexTabs = ['黄金原油', 'QDII欧美', '白银']
   if (hideIndexTabs.includes(currentTab.value)) {
-    return cols.filter(c => c.key !== 'related_index' && c.key !== 'index_close' && c.key !== 'index_pct')
+    return cols.filter(c => c.key !== 'related_index' && c.key !== 'index_close' && c.key !== 'index_pct' && c.key !== 'index_name')
   }
 
   // 现金管理TAB：隐藏份额/新增/换手率/指数价/指数涨跌幅/申购/赎回/测试价/溢价率
   // 并重命名列 + 添加债券ETF专属列
   if (currentTab.value === '现金管理') {
     // 过滤掉不需要的列
-    cols = cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'purchase_status', 'redemption_status', 'static_val_display', 'static_premium', 'rt_premium'].includes(c.key))
+    cols = cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'index_name', 'purchase_status', 'redemption_status', 'static_val_display', 'static_premium', 'rt_premium'].includes(c.key))
     
     // 重命名列
     cols.forEach(col => {

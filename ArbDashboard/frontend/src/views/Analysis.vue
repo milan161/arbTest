@@ -1513,10 +1513,10 @@ const sendOrder = async (action: string, brokerType: 'lof' | 'ib' | 'ib_future')
     await sendLofOrder(action, fundCode.value, fundName.value, simLofPrice.value, orderVol.value, lofBroker.value)
   } else if (brokerType === 'ib') {
     const tradeEtf = meta.value?.fund_config?.trade_etf?.split(',')?.[0]?.trim() || ''
-    await sendIbOrder(action, tradeEtf, hedgePrice.value, hedgeVol.value)
+    await sendIbOrder(action, tradeEtf, hedgePrice.value, hedgeVol.value, fundCode.value)
   } else if (brokerType === 'ib_future') {
     const tradeFuture = meta.value?.fund_config?.trade_future || ''
-    await sendIbOrder(action, tradeFuture, testFutPrice.value, targetLotsFuture.value)
+    await sendIbOrder(action, tradeFuture, testFutPrice.value, targetLotsFuture.value, fundCode.value)
   }
 }
 

@@ -166,8 +166,8 @@ class FundManager(BaseManager):
                 records = df.to_records(index=False)
                 conn.executemany('''
                     INSERT OR REPLACE INTO fund_purchase_status 
-                    (fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee, updated_at)
-                    VALUES (?, ?, ?, ?, ?, (datetime('now', 'localtime')))
+                    (fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee, purchase_limit, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')))
                 ''', records)
                 conn.commit()
                 logger.info(f"Successfully cached {len(df)} fund purchase status items!")

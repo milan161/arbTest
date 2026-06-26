@@ -917,6 +917,52 @@ async def import_fund_config(file: UploadFile = File(...)):
         logger.error(f"导入 YAML 失败: {e}")
         return {"status": "error", "message": str(e)}
 
+# --- IB 核心套利标的配置 APIs ---
+@app.get("/api/config/ib_core_symbols")
+async def get_ib_core_symbols():
+    """获取 IB 核心套利标的白名单"""
+    from arbcore.config.symbol_source_map import IB_CORE_ARBITRAGE_SYMBOLS
+    return {"status": "ok", "data": IB_CORE_ARBITRAGE_SYMBOLS}
+
+@app.post("/api/config/ib_core_symbols")
+async def update_ib_core_symbols(request: Request):
+    """更新 IB 核心套利标的白名单（运行时生效，不持久化到文件）"""
+    from arbcore.config.symbol_source_map import IB_CORE_ARBITRAGE_SYMBOLS, SOURCE_SYMBOL_MAP, US_ETF_MAP
+    try:
+        data = await request.json()
+        symbols = data.get('symbols', [])
+        
+        if not symbols:
+            return {"status": "error", "message": "标的列表不能为空"}
+        
+        # 验证：所有标的必须在 US_ETF_MAP 中
+        for sym in symbols:
+            if sym not in US_ETF_MAP:
+                return {"status": "error", "message": f"标的 {sym} 不在美股 ETF 映射表中"}
+        
+        # 更新全局变量
+        IB_CORE_ARBITRAGE_SYMBOLS.clear()
+        IB_CORE_ARBITRAGE_SYMBOLS.extend(symbols)
+        
+        # 重建 SOURCE_SYMBOL_MAP
+        SOURCE_SYMBOL_MAP['IB'] = list(symbols)
+        SOURCE_SYMBOL_MAP['IB_CORE_ONLY'] = list(symbols)
+        
+        # 重新分流：非核心标的归入 FUTU
+        for symbol, source in {**US_ETF_MAP}.items():
+            if source == 'IB' and symbol not in symbols:
+                if symbol not in SOURCE_SYMBOL_MAP['FUTU']:
+                    SOURCE_SYMBOL_MAP['FUTU'].append(symbol)
+        
+        # 去重排序
+        for source in SOURCE_SYMBOL_MAP:
+            SOURCE_SYMBOL_MAP[source] = sorted(set(SOURCE_SYMBOL_MAP[source]))
+        
+        return {"status": "ok", "message": f"IB 核心标的已更新为 {len(symbols)} 只", "data": symbols}
+    except Exception as e:
+        logger.error(f"更新 IB 核心标的失败: {e}")
+        return {"status": "error", "message": str(e)}
+
 # --- Private / Custom Export APIs ---
 @app.get("/api/private/status")
 async def get_private_status():
@@ -1082,6 +1128,7 @@ async def lazy_place_order(request: Request):
     - etf_quantity: 可选，如果前端已算好 ETF 股数，直接使用（绕开换算）
     """
     if not lazy_trader_instance:
+        logger.warning("[LazyOrder] lazy_trader_instance is None - orders will be rejected")
         return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
     try:
         body = await request.json()
@@ -1093,6 +1140,7 @@ async def lazy_place_order(request: Request):
         lof_price = float(body.get("lof_price", 0))  # LOF 限价
         lof_quantity = int(body.get("quantity", 0))
         etf_quantity = int(body.get("etf_quantity", 0))
+        logger.info(f"[LazyOrder] mode={mode} dir={direction} fund={fund_code} etf={underlying_symbol} etf_qty={etf_quantity} price={price}")
 
         # 从 fund_daily_factors 获取 hedge 值（与 Analysis.vue 实时沙盘一致）
         if etf_quantity <= 0 and lof_quantity > 0:
@@ -1166,10 +1214,26 @@ async def lazy_place_order(request: Request):
                 etf_quantity=etf_quantity,
             )
         any_ok = any(r.get("success") for r in results)
+        logger.info(f"[LazyOrder] mode={mode} dir={direction} → any_ok={any_ok} results={results}")
         return {"status": "ok" if any_ok else "error", "data": results}
     except Exception as e:
         logger.error(f"[LazyOrder] Error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+@app.get("/api/private/lazy_status")
+async def lazy_status():
+    """Diagnostic: check LazyTrader driver status"""
+    if not lazy_trader_instance:
+        return {"status": "error", "message": "Lazy Trader not loaded"}
+    return {
+        "status": "ok",
+        "data": {
+            "ib_connected": bool(getattr(lazy_trader_instance, 'ib_reader', None) and getattr(lazy_trader_instance.ib_reader, 'connected', False)),
+            "ib_reader_exists": lazy_trader_instance.ib_reader is not None,
+            "galaxy_qmt_exists": lazy_trader_instance.galaxy_qmt is not None,
+            "guojin_qmt_exists": lazy_trader_instance.guojin_qmt is not None,
+        }
+    }
 
 # --- Lazy Simulator API (weekend mock data) ---
 @app.get("/api/private/lazy_simulate/status")
@@ -2061,9 +2125,10 @@ from fastapi.responses import FileResponse
 frontend_dist_path = os.path.join(workspace_root, "frontend", "dist")
 
 if os.path.exists(frontend_dist_path):
-    logger.info(f"Detected frontend dist at {frontend_dist_path}, mounting static files.")
-    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")
-
+    assets_dir = os.path.join(frontend_dist_path, "assets")
+    if os.path.exists(assets_dir):
+        logger.info(f"Detected frontend dist at {frontend_dist_path}, mounting static files.")
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
     # SPA Fallback: 用 middleware 代替 catch-all 路由，避免拦截 /api/* 请求
     from starlette.middleware.base import BaseHTTPMiddleware
     class SPAMiddleware(BaseHTTPMiddleware):

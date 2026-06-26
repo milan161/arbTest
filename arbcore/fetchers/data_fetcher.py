@@ -82,12 +82,20 @@ class DataFetcher:
                         else:
                             redemption_fee = '0.50%'
                             
+                    # 日累计限定金额：东财返回的具体限额（元），如3000=限3千
+                    limit_val = row.get('日累计限定金额')
+                    try:
+                        purchase_limit = float(limit_val) if limit_val is not None and str(limit_val) != 'nan' else None
+                    except (ValueError, TypeError):
+                        purchase_limit = None
+
                     records.append({
                         'fund_code': str(row.get('基金代码')),
                         'purchase_status': str(row.get('申购状态', '未知')),
                         'redemption_status': str(row.get('赎回状态', '未知')),
                         'purchase_fee': purchase_fee if purchase_fee != 'nan' else '0%',
-                        'redemption_fee': redemption_fee if redemption_fee != 'nan' else '0.50%'
+                        'redemption_fee': redemption_fee if redemption_fee != 'nan' else '0.50%',
+                        'purchase_limit': purchase_limit
                     })
                 
                 df_records = pd.DataFrame(records)

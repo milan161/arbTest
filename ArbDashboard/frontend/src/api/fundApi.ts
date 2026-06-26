@@ -67,6 +67,11 @@ export function postLazyPlaceOrder(mode: string, fundCode: string, params?: {
   return client.post('/api/private/lazy_place_order', { mode, fund_code: fundCode, ...params })
 }
 
+/** 幽灵做市商 - 诊断状态 */
+export function getLazyStatus() {
+  return client.get('/api/private/lazy_status')
+}
+
 /** 幽灵模拟器 - 获取状态 */
 export function getLazySimStatus() {
   return client.get('/api/private/lazy_simulate/status')
