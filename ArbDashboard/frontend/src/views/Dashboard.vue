@@ -1,56 +1,29 @@
 <template>
   <div class="dashboard">
     <n-grid :cols="24" :x-gap="10" :y-gap="10">
-      <!-- 引擎状态 -->
-      <n-gi :span="8">
+      <!-- 时钟+汇率（引擎状态已移到侧边栏） -->
+      <n-gi :span="6">
         <n-card size="small" :bordered="false" class="stat-card">
-          <div style="text-align: center; width: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; height: 100%;">
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 100%;">
-                <n-tag :type="engineRunning ? 'info' : 'warning'" size="small" round style="font-weight: bold; cursor: pointer; justify-content: center;" @click="router.push('/auto-trade')">
-                  <template #icon><n-icon><Bot /></n-icon></template>
-                  {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
-                </n-tag>
-                <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round
-                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasTdx ? 'default' : 'pointer' }"
-                    @click="reconnectWithGuard(hasTdx, '通达信', reconnectTdx)">
-                    <template #icon><n-icon><Zap /></n-icon></template>
-                    通达信
-                </n-tag>
-                <div style="display: flex; gap: 4px; justify-content: center;">
-                    <n-tag :type="hasIb ? 'success' : 'warning'" size="small" round
-                        :style="{ fontWeight: 'bold', flex: 1, justifyContent: 'center', cursor: hasIb ? 'default' : 'pointer' }"
-                        @click="reconnectWithGuard(hasIb, 'IB', reconnectIB)">
-                        <template #icon><n-icon><Zap /></n-icon></template>
-                        IB
-                    </n-tag>
-                </div>
-                
-                <n-tag :type="hasGalaxy ? 'success' : 'warning'" size="small" round
-                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasGalaxy ? 'default' : 'pointer' }"
-                    @click="reconnectWithGuard(hasGalaxy, '银河QMT', reconnectGalaxy)">
-                    <template #icon><n-icon><Zap /></n-icon></template>
-                    银河QMT
-                </n-tag>
-                <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
-                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasGuojin ? 'default' : 'pointer' }"
-                    @click="reconnectWithGuard(hasGuojin, '国金QMT', reconnectGuojin)">
-                    <template #icon><n-icon><Zap /></n-icon></template>
-                    国金QMT
-                </n-tag>
-                <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round
-                    :style="{ fontWeight: 'bold', justifyContent: 'center', cursor: hasFutu ? 'default' : 'pointer' }"
-                    @click="reconnectWithGuard(hasFutu, '富途', reconnectFutu)">
-                    <template #icon><n-icon><Zap /></n-icon></template>
-                    富途
-                </n-tag>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+            <div><span class="date">{{ currentDate }}</span> <span class="time">{{ currentTime }}</span></div>
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 2px; font-size: 13px;">
+              <div style="white-space: nowrap;">
+                <span style="color: #64748b;">USD/CNY </span>
+                <span style="font-weight: bold; margin-right: 6px;">{{ rates.usd_cny_mid || '-' }}</span>
+                <span :class="['rate-change', rates.usd_change >= 0 ? 'up' : 'down']" style="font-size: 11px;">{{ formatChange(rates.usd_change) }}</span>
+              </div>
+              <div style="white-space: nowrap;">
+                <span style="color: #64748b;">HKD/CNY </span>
+                <span style="font-weight: bold; margin-right: 6px;">{{ rates.hkd_cny_mid || '-' }}</span>
+                <span :class="['rate-change', rates.hkd_change >= 0 ? 'up' : 'down']" style="font-size: 11px;">{{ formatChange(rates.hkd_change) }}</span>
+              </div>
             </div>
-            <n-text style="font-size: 11px; font-weight: bold; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; white-space: nowrap; margin-top: 2px; color: #555; letter-spacing: 0.5px;">点击切换启动/停止</n-text>
           </div>
         </n-card>
       </n-gi>
 
-      <!-- 系统里程碑日志 - 占据2/3宽度 -->
-      <n-gi :span="16">
+      <!-- 系统里程碑日志 -->
+      <n-gi :span="18">
         <n-card size="small" :bordered="false" class="stat-card log-card" content-style="padding: 0; position: relative;">
           <n-button quaternary circle size="tiny" @click="fetchData" style="position: absolute; right: 4px; top: 4px; z-index: 10;">
             <template #icon><n-icon><Zap /></n-icon></template>
@@ -111,7 +84,10 @@
     <!-- 历史对账详情弹窗 -->
     <n-modal v-model:show="showHistoryModal" preset="card" :title="`[历史记录] ${selectedFund?.fund_code} - ${selectedFund?.fund_name}`" style="width: 95%; max-width: 1500px;">
       <div v-if="selectedFund && !isCashManagementFund" style="margin-bottom: 16px; display: flex; gap: 24px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px;">
-        <div><strong>跟踪标的：</strong> {{ selectedFund.idx_name || selectedFund.related_index || '-' }} ({{ selectedFund.idx_code || selectedFund.related_index || '-' }})</div>
+        <div>
+          <strong>跟踪标的：</strong> 
+          {{ getIdxDisplayName(selectedFund) }}
+        </div>
         <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
         <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
       </div>
@@ -136,10 +112,10 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   NGrid, NGi, NCard, NIcon, NText, NInput,
-  NButton, NDataTable, NTag, useMessage, NTabs, NTabPane, NModal
+  NButton, NDataTable, NTag, NTabs, NTabPane, NModal
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
-import { Zap, Bot, Star, StarOff, History } from 'lucide-vue-next'
+import { Zap, Star, StarOff, History } from 'lucide-vue-next'
 
 // --- 新架构导入 ---
 import { useFundStore, useMarketStore, useAppStore } from '../store'
@@ -149,7 +125,6 @@ import { formatPrice, formatValuation, formatPercent, formatPremium,
 import { getFundHistory } from '../api'
 
 const router = useRouter()
-const message = useMessage()
 
 // ===== Stores =====
 const fundStore = useFundStore()
@@ -159,9 +134,7 @@ const appStore = useAppStore()
 // ===== 从 Store 解构响应式状态（保持与模板同名的变量，避免改模板） =====
 const { tableData, loading, currentTab, searchKeyword, watchlist,
         filteredTableData, fundHistory, dashboardMeta } = storeToRefs(fundStore)
-const { engineRunning, milestones } = storeToRefs(appStore)
-const { overview: marketOverview, hasTdx, hasIb, hasIbNotRunning,
-        hasGalaxy, hasGuojin, hasFutu } = storeToRefs(marketStore)
+const { milestones } = storeToRefs(appStore)
 
 // ===== 本地状态（无需进 Store） =====
 const showHistoryModal = ref(false)
@@ -177,55 +150,26 @@ watch(watchlist, (newVal) => {
 }, { deep: true })
 
 // ===== 方法 =====
-const reconnectIB = async () => {
-  appStore.reconnectingIB = true
-  try {
-    const data = await appStore.reconnectIB()
-    if (data.status === 'ok') {
-      message.success('IB 重连成功！')
-      fetchData()
-    } else {
-      message.error('IB 重连失败，请确保 TWS 已运行。')
-    }
-  } catch (e: any) {
-    message.error('重连请求失败: ' + e.message)
-  } finally {
-    appStore.reconnectingIB = false
-  }
-}
-
-const reconnectEngine = async (sourceLabel: string, reconnectFn: () => Promise<any>) => {
-  try {
-    const data = await reconnectFn()
-    if (data.status === 'ok') {
-      message.success(`${sourceLabel} 重连成功！`)
-      setTimeout(fetchData, 500)
-    } else {
-      message.warning(`${sourceLabel} 重连未就绪: ${data.message}`)
-    }
-  } catch (e: any) {
-    message.error(`${sourceLabel} 重连异常: ${e.message}`)
-  }
-}
-
-/**
- * 带"已连接→跳过"守卫的 reconnect 包装。
- * 已连接的源：不执行重连、不弹消息、不改光标（cursor: default）。
- */
-const reconnectWithGuard = (isConnected: boolean, label: string, fn: () => void) => {
-  if (isConnected) return
-  fn()
-}
-
-const reconnectTdx = () => reconnectEngine('通达信', () => marketStore.reconnectTdx())
-const reconnectGalaxy = () => reconnectEngine('银河QMT', () => marketStore.reconnectGalaxy())
-const reconnectGuojin = () => reconnectEngine('国金QMT', () => marketStore.reconnectGuojin())
-const reconnectFutu = () => reconnectEngine('富途', () => marketStore.reconnectFutu())
-
 const openHistory = async (fund: any) => {
   selectedFund.value = fund
   showHistoryModal.value = true
   await fundStore.fetchFundHistory(fund.fund_code)
+}
+
+/**
+ * 获取指数显示名称（中文名 + 代码）
+ * 例如："中证新能源汽车指数 (399417)"
+ */
+const getIdxDisplayName = (fund: any) => {
+  const idxName = fund.idx_name || ''
+  const idxCode = fund.idx_code || fund.related_index || ''
+  
+  // 如果有中文名，显示"中文名 (代码)"
+  if (idxName && idxName !== idxCode) {
+    return `${idxName} (${idxCode})`
+  }
+  // 否则只显示代码
+  return idxCode || '-'
 }
 
 const pagination = { pageSize: 100 }
@@ -259,13 +203,58 @@ watch(currentTab, () => {
   setupRefreshTimer()
 })
 
+// [交换位置] 时钟 + 汇率：从侧边栏移入 Dashboard
+const currentDate = ref('')
+const currentTime = ref('')
+const rates = ref({
+  usd_cny_mid: '',
+  hkd_cny_mid: '',
+  usd_change: 0,
+  hkd_change: 0
+})
+let clockTimer: any = null
+
+const updateTime = () => {
+  const now = new Date()
+  currentDate.value = now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+  currentTime.value = now.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+const formatChange = (val: number) => {
+  if (val === undefined || val === null) return '-'
+  const sign = val >= 0 ? '+' : ''
+  return `${sign}${val.toFixed(2)}%`
+}
+
+const fetchRates = async () => {
+  try {
+    const res = await fetch('/api/market/overview')
+    const data = await res.json()
+    if (data.status === 'ok') {
+      rates.value.usd_cny_mid = data.data?.rates?.usd_cny_mid || '-'
+      rates.value.hkd_cny_mid = data.data?.rates?.hkd_cny_mid || '-'
+      rates.value.usd_change = data.data?.usd_change || 0
+      rates.value.hkd_change = data.data?.hkd_change || 0
+    }
+  } catch (e) {
+    console.error('获取汇率失败', e)
+  }
+}
+
 onMounted(() => {
   // 每次进 Dashboard 都默认显示 我的自选（从其他页面返回时重置）
   currentTab.value = '自选'
   fetchData()
   setupRefreshTimer()
+  // [交换位置] 时钟 + 汇率
+  updateTime()
+  fetchRates()
+  clockTimer = setInterval(updateTime, 1000)
 })
-onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+  if (clockTimer) clearInterval(clockTimer)
+})
 
 const allColumns: DataTableColumns<any> = [
   {
@@ -881,4 +870,16 @@ const tableScrollX = computed(() => {
 :deep(.n-data-table-th.col-static-val) {
   background-color: #ffedd5 !important;
 }
+
+/* [交换位置] 时钟 + 汇率样式 */
+.date { font-size: 11px; color: #7b8a9b; }
+.time { font-size: 14px; font-weight: bold; color: #2563eb; font-family: monospace; }
+.exchange-rates { margin-top: 15px; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
+.rate-group { display: flex; flex-direction: column; }
+.rate-label { font-size: 11px; color: #64748b; margin-bottom: 4px; white-space: nowrap; font-weight: 500; }
+.rate-row { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; }
+.rate-value { font-size: 16px; font-weight: 800; color: #1e293b; font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.rate-change { font-size: 12px; font-weight: 700; }
+.rate-change.up { color: #ef4444; }
+.rate-change.down { color: #22c55e; }
 </style>

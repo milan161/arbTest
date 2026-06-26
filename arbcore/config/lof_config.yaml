@@ -1130,7 +1130,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '162711'
   name: 广发沪深300
   category: 国内LOF
@@ -1146,7 +1147,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '163113'
   name: 申万菱信沪深300
   category: 国内LOF
@@ -1162,7 +1164,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '161604'
   name: 融通深证100
   category: 国内LOF
@@ -1178,7 +1181,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399330'
+  idx_name: 深证100指数
 - code: '165523'
   name: 信诚沪深300
   category: 国内LOF
@@ -1194,7 +1198,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '161811'
   name: 银华沪深300
   category: 国内LOF
@@ -1210,7 +1215,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '160615'
   name: 鹏华沪深300
   category: 国内LOF
@@ -1226,7 +1232,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '162509'
   name: 国联安沪深300
   category: 国内LOF
@@ -1242,7 +1249,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: localindex
-  related_index: ''
+  related_index: '399300'
+  idx_name: 沪深300指数
 - code: '511880'
   name: 银华日利
   category: 债券/货币
@@ -1277,6 +1285,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中小100指数
 - code: '161025'
   name: 互联网LOF
   category: 国内LOF
@@ -1287,6 +1296,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证移动互联网指数
 - code: '501048'
   name: 证券公司LOFC
   category: 国内LOF
@@ -1297,6 +1307,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证全证券指数
 - code: '165522'
   name: TMTLOF
   category: 国内LOF
@@ -1307,16 +1318,18 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证TMT产业指数
 - code: '161029'
   name: 银行龙头LOF
   category: 国内LOF
-  related_index: 中证银行
+  related_index: '399986'
   pos_ratio: 0.95
   data_source: localindex
   holdings:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证银行指数
 - code: '165511'
   name: 中信保诚500LOF
   category: 国内LOF
@@ -1327,6 +1340,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证500指数
 - code: '502056'
   name: 医疗基金LOF
   category: 国内LOF
@@ -1337,6 +1351,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证医疗指数
 - code: '161716'
   name: 招商双债LOF
   category: 国内LOF
@@ -1357,6 +1372,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证煤炭指数
 - code: '501089'
   name: 消费红利增强LOF
   category: 国内LOF
@@ -1367,6 +1383,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证消费红利指数
 - code: '501050'
   name: 50AHLOF
   category: 国内LOF
@@ -1377,6 +1394,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证AH高股息指数
 - code: '161812'
   name: 深证100LOF
   category: 国内LOF
@@ -1387,6 +1405,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 深证100指数
 - code: '501227'
   name: 泓德红利优选LOF
   category: 国内LOF
@@ -1397,6 +1416,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证红利指数
 - code: '161227'
   name: 国投深证100LOF
   category: 国内LOF
@@ -1407,6 +1427,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 深证100指数
 - code: '163109'
   name: 申万深成LOF
   category: 国内LOF
@@ -1417,6 +1438,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 深证成指
 - code: '161032'
   name: 煤炭龙头LOF
   category: 国内LOF
@@ -1427,6 +1449,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证煤炭指数
 - code: '501043'
   name: 沪深300LOF
   category: 国内LOF
@@ -1437,6 +1460,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 沪深300指数
 - code: '161715'
   name: 大宗商品LOF
   category: 国内LOF
@@ -1447,6 +1471,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证商品指数
 - code: '161631'
   name: 人工智能LOF
   category: 国内LOF
@@ -1457,6 +1482,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证人工智能主题指数
 - code: '160225'
   name: 新能源汽车LOF
   category: 国内LOF
@@ -1467,6 +1493,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证新能源汽车指数
 - code: '160643'
   name: 空天军工LOF
   category: 国内LOF
@@ -1477,6 +1504,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证空天军工指数
 - code: '501007'
   name: 互联网医疗LOF
   category: 国内LOF
@@ -1487,6 +1515,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证互联网医疗指数
 - code: '501058'
   name: 新能源车LOFC
   category: 国内LOF
@@ -1497,6 +1526,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证新能源汽车产业指数
 - code: '160925'
   name: 沪深300LOF
   category: 国内LOF
@@ -1507,6 +1537,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 沪深300等权指数
 - code: '163407'
   name: 兴全沪深300LOF
   category: 国内LOF
@@ -1517,6 +1548,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 沪深300指数
 - code: '162412'
   name: 医疗基金LOF
   category: 国内LOF
@@ -1527,6 +1559,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证医疗指数
 - code: '501057'
   name: 新能源车LOF
   category: 国内LOF
@@ -1537,6 +1570,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证新能源汽车产业指数
 - code: '160639'
   name: 高铁LOF
   category: 国内LOF
@@ -1547,6 +1581,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证高铁产业指数
 - code: '161217'
   name: 国投资源LOF
   category: 国内LOF
@@ -1557,6 +1592,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证全指公用事业指数
 - code: '502000'
   name: 500增强LOF
   category: 国内LOF
@@ -1567,6 +1603,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证500指数
 - code: '160632'
   name: 酒LOF
   category: 国内LOF
@@ -1577,6 +1614,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证酒指数
 - code: '161726'
   name: 生物医药LOF
   category: 国内LOF
@@ -1587,6 +1625,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证生物医药指数
 - code: '167301'
   name: 保险主题LOF
   category: 国内LOF
@@ -1597,6 +1636,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证保险产业指数
 - code: '161725'
   name: 白酒基金LOF
   category: 国内LOF
@@ -1607,6 +1647,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证白酒指数
 - code: '161031'
   name: 工业4.0LOF
   category: 国内LOF
@@ -1617,6 +1658,7 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  idx_name: 中证工业4.0指数
 - code: '160140'
   name: 美国REIT精选LOF
   category: QDII欧美

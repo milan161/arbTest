@@ -201,9 +201,18 @@ class FundManager(BaseManager):
                 for item in fund_list:
                     conn.execute('''
                         INSERT OR REPLACE INTO unified_fund_list
-                        (category, fund_code, fund_name, related_index, pos_ratio, target_type)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (item['category'], item['code'], item['name'], item.get('related_index', '-'), item.get('pos_ratio', 0.95), item.get('target_type', 'ETF')))
+                        (category, fund_code, fund_name, related_index, idx_code, idx_name, pos_ratio, target_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        item['category'],
+                        item['code'],
+                        item['name'],
+                        item.get('related_index', '-'),
+                        item.get('idx_code', item.get('related_index', '-')),
+                        item.get('idx_name', '-'),
+                        item.get('pos_ratio', 0.95),
+                        item.get('target_type', 'ETF')
+                    ))
                 conn.commit()
                 logger.info(f"Successfully synced {len(fund_list)} unified items to database.")
             except Exception as e:

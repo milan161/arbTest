@@ -34,32 +34,47 @@
         />
       </div>
 
-      <!-- 时钟移到左下角 -->
-      <div v-if="!collapsed" class="sidebar-footer">
-        <div class="time-box-sidebar">
-          <div class="date">{{ currentDate }}</div>
-          <div class="time">{{ currentTime }}</div>
+      <!-- [互换位置] 引擎状态：从主页移到侧边栏底部 -->
+      <div class="sidebar-footer">
+        <n-tag :type="engineRunning ? 'info' : 'warning'" size="small" round
+          style="font-weight: bold; cursor: pointer; width: 100%; justify-content: center; margin-bottom: 6px;"
+          @click="router.push('/auto-trade')">
+          <template #icon><n-icon><Bot /></n-icon></template>
+          {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
+        </n-tag>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+          <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round
+            :style="{ fontWeight: 'bold', cursor: hasTdx ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+            @click="reconnectWithGuard(hasTdx, '通达信', reconnectTdx)">
+            <template #icon><n-icon><Zap /></n-icon></template>
+            通达信
+          </n-tag>
+          <n-tag :type="hasIb ? 'success' : 'warning'" size="small" round
+            :style="{ fontWeight: 'bold', cursor: hasIb ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+            @click="reconnectWithGuard(hasIb, 'IB', reconnectIB)">
+            <template #icon><n-icon><Zap /></n-icon></template>
+            IB
+          </n-tag>
+          <n-tag :type="hasGalaxy ? 'success' : 'warning'" size="small" round
+            :style="{ fontWeight: 'bold', cursor: hasGalaxy ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+            @click="reconnectWithGuard(hasGalaxy, '银河QMT', reconnectGalaxy)">
+            <template #icon><n-icon><Zap /></n-icon></template>
+            银河QMT
+          </n-tag>
+          <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round
+            :style="{ fontWeight: 'bold', cursor: hasFutu ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+            @click="reconnectWithGuard(hasFutu, '富途', reconnectFutu)">
+            <template #icon><n-icon><Zap /></n-icon></template>
+            富途
+          </n-tag>
+          <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
+            :style="{ fontWeight: 'bold', cursor: hasGuojin ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+            @click="reconnectWithGuard(hasGuojin, '国金QMT', reconnectGuojin)">
+            <template #icon><n-icon><Zap /></n-icon></template>
+            国金QMT
+          </n-tag>
         </div>
-        <div class="exchange-rates">
-          <div class="rate-group">
-            <div class="rate-label">美元/人民币 (中间价)</div>
-            <div class="rate-row">
-              <span class="rate-value">{{ rates.usd_cny_mid || '-' }}</span>
-              <span :class="['rate-change', rates.usd_change >= 0 ? 'up' : 'down']">
-                {{ formatChange(rates.usd_change) }}
-              </span>
-            </div>
-          </div>
-          <div class="rate-group" style="margin-top: 10px;">
-            <div class="rate-label">港币/人民币 (中间价)</div>
-            <div class="rate-row">
-              <span class="rate-value">{{ rates.hkd_cny_mid || '-' }}</span>
-              <span :class="['rate-change', rates.hkd_change >= 0 ? 'up' : 'down']">
-                {{ formatChange(rates.hkd_change) }}
-              </span>
-            </div>
-          </div>
-        </div>
+        <n-text style="font-size: 10px; font-weight: bold; color: #888; display: block; text-align: center; margin-top: 4px;">点击切换启动/停止</n-text>
       </div>
     </n-layout-sider>
     <n-layout>
@@ -83,7 +98,8 @@
 
 <script setup lang="ts">
 import { ref, h, onMounted, onUnmounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { useRouter, RouterLink } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { 
   NLayout, 
   NLayoutSider, 
@@ -93,7 +109,8 @@ import {
   NAvatar, 
   NIcon,
   NText,
-  NDivider
+  NTag,
+  useMessage
 } from 'naive-ui'
 import { 
   LayoutDashboard, 
@@ -105,51 +122,67 @@ import {
   BookOpen,
   AlertTriangle,
   Repeat,
-  Cpu,
+  Zap,
 } from 'lucide-vue-next'
+import { useAppStore, useMarketStore } from '../store'
 
 const collapsed = ref(false)
 const activeKey = ref('dashboard')
 
-const currentDate = ref('')
-const currentTime = ref('')
 const showDataAlert = ref(false)
 const navAlertText = ref('')
-const rates = ref({
-  usd_cny_mid: '',
-  hkd_cny_mid: '',
-  usd_change: 0,
-  hkd_change: 0
-})
-let timer: any = null
 
-const updateTime = () => {
-  const now = new Date()
-  currentDate.value = now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-  currentTime.value = now.toLocaleTimeString('zh-CN', { hour12: false })
-}
+const router = useRouter()
+const message = useMessage()
+const appStore = useAppStore()
+const marketStore = useMarketStore()
 
-const formatChange = (val: number) => {
-  if (val === undefined || val === null) return '-'
-  const sign = val >= 0 ? '+' : ''
-  return `${sign}${val.toFixed(2)}%`
-}
+const { engineRunning } = storeToRefs(appStore)
+const { hasTdx, hasIb, hasGalaxy, hasGuojin, hasFutu } = storeToRefs(marketStore)
 
-const fetchRates = async () => {
+// ===== Reconnect 引擎状态 =====
+const refreshStatus = () => marketStore.fetchOverview()
+
+const reconnectIB = async () => {
+  appStore.reconnectingIB = true
   try {
-    const res = await fetch('/api/market/overview')
-    const data = await res.json()
+    const data = await appStore.reconnectIB()
     if (data.status === 'ok') {
-      rates.value.usd_cny_mid = data.data?.rates?.usd_cny_mid || '-'
-      rates.value.hkd_cny_mid = data.data?.rates?.hkd_cny_mid || '-'
-      rates.value.usd_change = data.data?.usd_change || 0
-      rates.value.hkd_change = data.data?.hkd_change || 0
-      console.log('汇率数据:', rates.value)
+      message.success('IB 重连成功！')
+      refreshStatus()
+    } else {
+      message.error('IB 重连失败，请确保 TWS 已运行。')
     }
-  } catch (e) {
-    console.error('获取汇率失败', e)
+  } catch (e: any) {
+    message.error('重连请求失败: ' + e.message)
+  } finally {
+    appStore.reconnectingIB = false
   }
 }
+
+const reconnectEngine = async (sourceLabel: string, reconnectFn: () => Promise<any>) => {
+  try {
+    const data = await reconnectFn()
+    if (data.status === 'ok') {
+      message.success(`${sourceLabel} 重连成功！`)
+      refreshStatus()
+    } else {
+      message.warning(`${sourceLabel} 重连未就绪: ${data.message}`)
+    }
+  } catch (e: any) {
+    message.error(`${sourceLabel} 重连异常: ${e.message}`)
+  }
+}
+
+const reconnectWithGuard = (isConnected: boolean, label: string, fn: () => void) => {
+  if (isConnected) return
+  fn()
+}
+
+const reconnectTdx = () => reconnectEngine('通达信', () => marketStore.reconnectTdx())
+const reconnectGalaxy = () => reconnectEngine('银河QMT', () => marketStore.reconnectGalaxy())
+const reconnectGuojin = () => reconnectEngine('国金QMT', () => marketStore.reconnectGuojin())
+const reconnectFutu = () => reconnectEngine('富途', () => marketStore.reconnectFutu())
 
 const fetchNavAlert = async () => {
   try {
@@ -158,10 +191,8 @@ const fetchNavAlert = async () => {
     if (data.status === 'ok') {
       const todayUpdated = data.data.today_updated
       const lastTime = data.data.last_updated_time
-      // 15:00 之后还没更新过净值 → 显示提醒
       const now = new Date()
       const hour = now.getHours()
-      const minute = now.getMinutes()
       const isWeekend = now.getDay() === 0 || now.getDay() === 6
       if (!isWeekend && hour >= 15 && !todayUpdated) {
         showDataAlert.value = true
@@ -177,18 +208,12 @@ const fetchNavAlert = async () => {
 }
 
 onMounted(() => {
-  updateTime()
-  fetchRates()
   fetchNavAlert()
-  timer = setInterval(() => {
-    updateTime()
-  }, 1000) // 时钟每秒更新
-  // 每 5 分钟刷新净值状态
   setInterval(fetchNavAlert, 300000)
 })
 
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
+  // cleanup handled by interval reference
 })
 
 function renderIcon(icon: any) {
@@ -242,18 +267,7 @@ const menuOptions = [
 <style scoped>
 .logo { height: 58px; display: flex; align-items: center; padding: 0 14px; gap: 10px; }
 .logo-text { font-size: 18px; font-weight: 800; background: linear-gradient(120deg, #1d4ed8, #0891b2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.sidebar-footer { padding: 14px; border-top: 1px solid #edf1f7; background: #fbfdff; }
-.time-box-sidebar { display: flex; flex-direction: column; align-items: center; }
-.time-box-sidebar .date { font-size: 11px; color: #7b8a9b; }
-.time-box-sidebar .time { font-size: 14px; font-weight: bold; color: #2563eb; font-family: monospace; }
-.exchange-rates { margin-top: 15px; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
-.rate-group { display: flex; flex-direction: column; }
-.rate-label { font-size: 11px; color: #64748b; margin-bottom: 4px; white-space: nowrap; font-weight: 500; }
-.rate-row { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; }
-.rate-value { font-size: 16px; font-weight: 800; color: #1e293b; font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-.rate-change { font-size: 12px; font-weight: 700; }
-.rate-change.up { color: #ef4444; }
-.rate-change.down { color: #22c55e; }
+.sidebar-footer { padding: 10px; border-top: 1px solid #edf1f7; background: #fbfdff; }
 :deep(.n-menu-item-content--selected) { background-color: #eff6ff !important; }
 :deep(.n-menu-item-content--selected .n-menu-item-content-header a) { color: #2563eb !important; }
 :deep(.n-menu-item-content) { border-radius: 8px; margin: 2px 8px; color: #526173; font-weight: 650; }

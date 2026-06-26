@@ -6,10 +6,58 @@ import threading
 import functools
 from datetime import datetime
 import pandas as pd
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import logging
+import requests
+import yaml
 
 logger = logging.getLogger(__name__)
+
+# [V11.0] 加载 lof_config.yaml 获取基金配置（rate_type 等字段不在数据库中的）
+_CONFIG_YAML_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'config', 'lof_config.yaml'))
+_FUNDS_WITH_SPOT_RATE: Set[str] = set()
+try:
+    with open(_CONFIG_YAML_PATH, 'r', encoding='utf-8') as f:
+        yaml_cfg = yaml.safe_load(f)
+        fund_list = yaml_cfg.get('funds', []) if isinstance(yaml_cfg, dict) else yaml_cfg or []
+        for item in fund_list:
+            if isinstance(item, dict) and item.get('rate_type') == 'spot':
+                _FUNDS_WITH_SPOT_RATE.add(item['code'])
+    logger.info(f"[FX] 在岸价基金({len(_FUNDS_WITH_SPOT_RATE)}只): {_FUNDS_WITH_SPOT_RATE}")
+except Exception as e:
+    logger.warning(f"[FX] 读取lof_config.yaml获取rate_type失败: {e}")
+
+# [V11.0] 实时在岸价缓存（15秒 TTL）
+_SPOT_FX_CACHE: Dict[str, float] = {'rate': 0.0, 'time': 0.0}
+
+def _get_realtime_spot_fx() -> float:
+    """从新浪获取 USD/CNY 实时在岸价（实盘汇率），15秒缓存"""
+    now = time.time()
+    if now - _SPOT_FX_CACHE['time'] < 15 and _SPOT_FX_CACHE['rate'] > 0:
+        return _SPOT_FX_CACHE['rate']
+    try:
+        resp = requests.get(
+            "http://hq.sinajs.cn/list=fx_susdcny",
+            headers={"Referer": "https://finance.sina.com.cn/"},
+            timeout=3.0,
+            proxies={"http": None, "https": None}
+        )
+        resp.encoding = 'gbk'
+        if resp.text and '="' in resp.text:
+            parts = resp.text.split('"')[1].split(',')
+            if len(parts) >= 2:
+                rate = float(parts[1])
+                if rate > 0:
+                    _SPOT_FX_CACHE['rate'] = rate
+                    _SPOT_FX_CACHE['time'] = now
+                    logger.debug(f"[FX] 新浪在岸价: {rate}")
+                    return rate
+    except Exception as e:
+        logger.warning(f"[FX] 获取新浪在岸价失败: {e}")
+    # 兜底：用缓存旧值
+    if _SPOT_FX_CACHE['rate'] > 0:
+        return _SPOT_FX_CACHE['rate']
+    return 0.0
 
 # [债券ETF] 引入债券ETF估值服务
 from services.bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
@@ -49,11 +97,12 @@ _dashboard_cache = DashboardCache()
 # [V10.1] 日内不变数据 — 启动时加载一次，当天不再查库
 _daily_snapshot = {
     'usd_cny_mid': None,
+    'usd_cny_spot': None,
     'loaded': False,
 }
 
 def _ensure_daily_snapshot(conn):
-    """中间价只加载一次（启动时），当天不变"""
+    """中间价+在岸价只加载一次（启动时），当天不变"""
     if _daily_snapshot['loaded']:
         return
     try:
@@ -62,9 +111,12 @@ def _ensure_daily_snapshot(conn):
         )
         if not fx_df.empty and fx_df.iloc[0]['usd_cny_mid'] > 0:
             _daily_snapshot['usd_cny_mid'] = fx_df.iloc[0]['usd_cny_mid']
+        # 加载实时在岸价（用于 spot rate 基金）
+        _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
         _daily_snapshot['loaded'] = True
-    except Exception:
-        pass
+        logger.info(f"[SNAPSHOT] usd_cny_mid={_daily_snapshot['usd_cny_mid']}, usd_cny_spot={_daily_snapshot['usd_cny_spot']}")
+    except Exception as e:
+        logger.warning(f"[SNAPSHOT] 加载汇率失败: {e}")
 
 # TAB → SQL category 值映射（与 unified_fund_list.category 保持一致）
 _TAB_CATEGORY_MAP = {
@@ -1150,8 +1202,17 @@ class FundService:
                                 # [V10.1] 汇率当天不变，直接读内存
                                 _ensure_daily_snapshot(conn)
                                 current_fx = _daily_snapshot.get('usd_cny_mid')
-                            except:
-                                pass
+                                # [V11.0] 在岸价基金：用快照里的在岸价（启动时已从新浪加载）
+                                if code in _FUNDS_WITH_SPOT_RATE:
+                                    spot_fx = _daily_snapshot.get('usd_cny_spot', 0)
+                                    if spot_fx > 0:
+                                        current_fx = spot_fx
+                                        logger.debug(f"[{code}] 使用快照在岸价: {spot_fx}")
+                                    else:
+                                        current_fx = 0  # 在岸价不可用，禁止用中间价兜底
+                                        logger.warning(f"[{code}] 快照在岸价为空，跳过估值")
+                            except Exception as e:
+                                logger.warning(f"[{code}] 获取快照汇率失败: {e}")
                             
                             if current_fx and current_fx > 0:
                                 # 获取实时 ETF 价格
@@ -1200,8 +1261,13 @@ class FundService:
                                                     b_position = base_data.get('position', None)
                                                     if pd.isna(b_position) or b_position is None:
                                                         b_position = float(fund.get('pos_ratio') or 0.95)
-                                                    # current_fx 可能为空（_daily_snapshot 未加载），从 base_data 兜底
-                                                    fx = current_fx if (current_fx and current_fx > 0) else float(base_data.get('exchange_rate', 0) or 0)
+                                                    # [V11.0] 在岸价基金：用快照在岸价，不降级
+                                                    if code in _FUNDS_WITH_SPOT_RATE:
+                                                        spot_fx = _daily_snapshot.get('usd_cny_spot', 0)
+                                                        fx = spot_fx if spot_fx > 0 else 0
+                                                    else:
+                                                        # current_fx 可能为空，从 base_data 兜底
+                                                        fx = current_fx if (current_fx and current_fx > 0) else float(base_data.get('exchange_rate', 0) or 0)
                                                     if b_nav > 0 and b_hedge > 0 and fx > 0:
                                                         # val = nav * (1 - pos) + (etf_price * fx) / hedge
                                                         val_res = b_nav * (1.0 - b_position) + (etf_price * fx) / b_hedge

@@ -37,14 +37,16 @@ ArbDashboard/backend/core/database/
 /lofarb_data/
 
 # === 外部数据与废弃目录 (全部屏蔽) ===
+/deploy/
 ArbDashboard/data/
 ArbDashboard/scripts/
 ArbDashboard/logs/
+ArbDashboard/backend/scripts/
 
-# === 文档、日志、自媒体内容与测试代码 (绝对禁止上传) ===
+# === 文档、日志与测试代码 (无需上传) ===
 /docs_unfinished/
 /logs/
-**/scripts/
+# ArbDashboard/scripts/ 不上传（本地工具脚本）
 *.md
 !/README.md
 
