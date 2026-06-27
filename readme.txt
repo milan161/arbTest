@@ -11,7 +11,14 @@
 
 --------------------------------------------------------------------------------
 二、 极速启动
-在主目录下，双击运行以下批处理文件即可一键启动：
+
+【首次使用前必读】
+  从 GitHub 下载的 `database/arb_master_share.db` 需要重命名为 `arb_master.db`：
+    >> cd D:\Study\arbTest\database
+    >> ren arb_master_share.db arb_master.db
+
+【启动看板】
+  在主目录下，双击运行以下批处理文件即可一键启动：
   >> start_dashboard.bat  (一键启动后端 8000 端口服务 + 前端 5173 页面监控服务)
 
 * 注：浏览器会自动打开网页看板 (http://localhost:5173/)。
