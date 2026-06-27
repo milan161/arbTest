@@ -9,6 +9,7 @@ ArbDashboard/backend/core/auto_trade/
 # === Lazy 交易系统 (绝对禁止上传) ===
 **/Lazy.vue
 **/*lazy*
+!ArbDashboard/frontend/src/views/LazyTerminal.vue
 
 # === 账号与私密配置 (绝对禁止上传) ===
 arbcore/config/account_private.py
