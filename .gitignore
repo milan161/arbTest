@@ -49,6 +49,7 @@ ArbDashboard/backend/scripts/
 # ArbDashboard/scripts/ 不上传（本地工具脚本）
 *.md
 !/README.md
+!/docs/**/*.md
 
 
 # === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
