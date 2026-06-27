@@ -48,10 +48,7 @@ const router = createRouter({
         {
           path: 'lazymode',
           name: 'LazyMode',
-          component: () => import('../private/LazyMode.vue').catch(() => {
-            console.warn('Private module missing. Loading public placeholder.');
-            return import('../views/DongGeSecret.vue');
-          })
+          component: () => import('../views/DongGeSecret.vue')
         },
         {
           path: 'lazy',

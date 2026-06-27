@@ -125,6 +125,11 @@ class DatabaseManager:
             except sqlite3.OperationalError: pass
             try: conn.execute('ALTER TABLE jsl_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
             except sqlite3.OperationalError: pass
+            # [V11.0] 补齐 idx_code / idx_name 列（兼容旧版分享数据库）
+            try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN idx_code TEXT DEFAULT \'-\''')
+            except sqlite3.OperationalError: pass
+            try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN idx_name TEXT DEFAULT \'-\''')
+            except sqlite3.OperationalError: pass
 
             # JSL Index history and realtime tables
             conn.execute('''CREATE TABLE IF NOT EXISTS index_history (symbol TEXT NOT NULL, date TEXT NOT NULL, close REAL, source TEXT, PRIMARY KEY (symbol, date))''')
