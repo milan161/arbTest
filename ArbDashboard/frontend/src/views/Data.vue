@@ -52,18 +52,8 @@
               立即更新净值
             </n-button>
           </div>
-
-          <n-divider title-placement="left">执行日志终端</n-divider>
-          <div class="terminal-box">
-             <div v-if="taskLogs.length === 0" class="text-gray-500 italic">等待任务启动...</div>
-             <div v-for="(log, i) in taskLogs" :key="i" class="log-line">
-                <span class="text-blue-400">>>></span> {{ log }}
-             </div>
-          </div>
         </n-card>
       </n-gi>
-
-      <!-- 右侧：基金配置（保持不变） -->
       <n-gi :span="10">
         <n-card title="核心基金配置" class="shadow-soft">
           <template #header-extra>
@@ -222,7 +212,6 @@ import { getDataStatus, getNavStatus } from '../api/systemApi'
 import client from '../api/client'
 
 const message = useMessage()
-const taskLogs = ref<string[]>([])
 const exportCode = ref('')
 const isPrivateVisible = ref(false)
 const quickCodes = ['162411', '164701', '164824']
@@ -361,18 +350,15 @@ const fetchNavStatus = async () => {
 
 const triggerNavUpdate = async () => {
   navRunning.value = true
-  taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 净值更新启动...`)
   try {
     const res = await triggerSystemTask('nav')
     if (res.data.status === 'ok') {
       message.success('净值更新已后台运行（通常 10-30 秒完成）')
-      taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 净值更新已后台运行`)
     } else {
       message.error(`启动失败: ${res.data.message}`)
     }
   } catch (e: any) {
     message.error(`启动失败: ${e.message}`)
-    taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 净值更新启动失败: ${e.message}`)
   } finally {
     setTimeout(() => { navRunning.value = false }, 2000)
     setTimeout(() => fetchNavStatus(), 3000)
@@ -507,11 +493,6 @@ onMounted(() => {
 }
 .task-name { font-weight: 600; color: #1e293b; font-size: 13px; }
 .task-desc { font-size: 11px; color: #64748b; }
-.terminal-box {
-  background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 6px;
-  height: 200px; overflow-y: auto; font-family: 'Fira Code', monospace; font-size: 13px;
-}
-.log-line { margin-bottom: 4px; border-bottom: 1px solid #1e293b; padding-bottom: 2px; }
 .shadow-soft { box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); border-radius: 12px; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .flex-center { display: flex; align-items: center; }
