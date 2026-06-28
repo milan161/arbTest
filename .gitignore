@@ -2,16 +2,13 @@
 # 核心白名单：只上传跟 "程序3(ArbDashboard)" 与 "基座(arbcore)" 运行必须的代码
 # =================================================================
 
-# === 所有 private 目录 (绝对禁止上传) ===
+# === 所有 private 目录 (禁止上传) ===
 **/private/
 ArbDashboard/backend/core/auto_trade/
-
-# === Lazy 交易系统 (绝对禁止上传) ===
 **/Lazy.vue
 **/*lazy*
-!ArbDashboard/frontend/src/views/LazyTerminal.vue
 
-# === 账号与私密配置 (绝对禁止上传) ===
+# === 账号与私密配置 (禁止上传) ===
 arbcore/config/account_private.py
 account_private.py
 arb_config.yaml
