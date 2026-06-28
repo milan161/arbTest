@@ -242,8 +242,7 @@ const fetchRates = async () => {
 }
 
 onMounted(() => {
-  // 每次进 Dashboard 都默认显示 我的自选（从其他页面返回时重置）
-  currentTab.value = '自选'
+  // [AI-2026-06-28] 取消重置 TAB，由 fundStore 从 localStorage 恢复上次浏览的 TAB
   fetchData()
   setupRefreshTimer()
   // [交换位置] 时钟 + 汇率
