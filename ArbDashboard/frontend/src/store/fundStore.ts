@@ -66,8 +66,9 @@ export const useFundStore = defineStore('fund', () => {
   let dashboardInFlight = false
   let dashboardController: AbortController | null = null
   let dashboardRequestSeq = 0
-  // 始终默认"我的自选"TAB（用户从其他页面回来时永远看到自选）
-  const currentTab = ref('自选')
+  // 始终默认"我的自选"TAB（持久化到 localStorage，从其他页面回来时恢复上次的 TAB）
+  const savedTab = localStorage.getItem('dashboard_tab')
+  const currentTab = ref(savedTab && savedTab !== 'null' ? savedTab : '自选')
   const searchKeyword = ref('')
   const fundHistory = ref<any[]>([])
   const fundHistoryLoading = ref(false)
