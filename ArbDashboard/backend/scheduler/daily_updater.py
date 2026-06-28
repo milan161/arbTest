@@ -636,8 +636,7 @@ class DailyUpdater(BaseApp):
             else:
                 self.logger.warning(f"⚠️ [{code}] 东财接口未返回任何净值数据。")
 
-        # [AI-2026-06-28] 步骤四收尾：修复假期导致的错误收盘价
-        self._step4_fix_holiday_prices()
+        # [AI-2026-06-28] 假期修复移至 _run_pipeline，nav-only 不修价格
 
     def step4_5_sync_fund_purchase_status(self):
         """步骤4.5：从 AKShare 同步基金申赎状态"""
@@ -1201,6 +1200,8 @@ class DailyUpdater(BaseApp):
         self.step2_5_sync_yaml_with_latest_factors()
         self.step3_fetch_exchange_rate()
         self.step4_fetch_lof_market()
+        # [AI-2026-06-28] 假期价格修复只在完整流水线跑，不干扰 nav-only
+        self._step4_fix_holiday_prices()
         self.step4_5_sync_fund_purchase_status()
         self.step5_fetch_usa_market_data()
         self.step7_fetch_extra_calibrations()
