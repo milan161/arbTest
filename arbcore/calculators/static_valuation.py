@@ -27,13 +27,13 @@ class StaticValuationCalculator:
         # 暂时保留部分 SQL 以保证联表查询效率，但未来应封装进 Manager
         conn = self.db._get_conn()
         try:
-            # 获取核心日期基座
+            # [AI-2026-06-28] 改用 unified_fund_history（废弃 fund_data）
             query = """
                 SELECT 
                     a.date, a.price as close, a.nav, 
                     c.usd_cny_mid as exchange_rate,
                     b.position, b.hedge, b.calibration
-                FROM fund_data a
+                FROM unified_fund_history a
                 LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
                 LEFT JOIN exchange_rate c ON a.date = c.date
                 WHERE a.fund_code = ?
@@ -114,6 +114,18 @@ class StaticValuationCalculator:
             
             if base_row is None: continue
             
+            # [AI-2026-06-28] 检查基准日跨度，超过 5 个自然日说明中间有长假（端午/春节），跳过计算
+            from datetime import datetime as _dt
+            try:
+                base_dt = _dt.strptime(str(base_row['date']), '%Y-%m-%d')
+                curr_dt = _dt.strptime(str(row['date']), '%Y-%m-%d')
+                gap_days = (curr_dt - base_dt).days
+                if gap_days > 5:
+                    logger.info(f"  ⏭️ [{code}] {row['date']} 距基准日 {base_row['date']} 跨越 {gap_days} 天（长假），跳过静态估值")
+                    continue
+            except:
+                pass
+            
             # 计算逻辑
             val = self._deduce_valuation(row, base_row, portfolio, primary_sym, fund_config)
             if val:
@@ -162,18 +174,14 @@ class StaticValuationCalculator:
         try:
             for _, row in df.iterrows():
                 if pd.notna(row['static_val']):
-                    # 更新 fund_data
-                    cursor.execute(
-                        "UPDATE fund_data SET static_val = ?, val_error = ? WHERE date = ? AND fund_code = ?",
-                        (row['static_val'], row['val_error'], row['date'], fund_code)
-                    )
-                    # 同时更新/插入 unified_fund_history (新工业标准)
+                    # [AI-2026-06-28] 直接写入 unified_fund_history（废弃 fund_data）
                     cursor.execute("""
-                        INSERT INTO unified_fund_history (date, fund_code, static_val, calibration)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO unified_fund_history (date, fund_code, static_val, valuation_error, calibration)
+                        VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(date, fund_code) DO UPDATE SET 
-                            static_val = excluded.static_val
-                    """, (row['date'], fund_code, row['static_val'], row.get('calibration')))
+                            static_val = excluded.static_val,
+                            valuation_error = excluded.valuation_error
+                    """, (row['date'], fund_code, row['static_val'], row['val_error'], row.get('calibration')))
             conn.commit()
         finally:
             conn.close()

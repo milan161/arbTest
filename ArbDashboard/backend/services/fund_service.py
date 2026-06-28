@@ -113,6 +113,8 @@ def _ensure_daily_snapshot(conn):
             _daily_snapshot['usd_cny_mid'] = fx_df.iloc[0]['usd_cny_mid']
         # 加载实时在岸价（用于 spot rate 基金）
         _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
+        if _daily_snapshot['usd_cny_spot'] <= 0:
+            logger.warning("[SNAPSHOT] 在岸价获取失败，将用中间价兜底（周末/非交易时段可能如此）")
         _daily_snapshot['loaded'] = True
         logger.info(f"[SNAPSHOT] usd_cny_mid={_daily_snapshot['usd_cny_mid']}, usd_cny_spot={_daily_snapshot['usd_cny_spot']}")
     except Exception as e:
@@ -1192,6 +1194,11 @@ class FundService:
                             basket_df = pd.read_sql("SELECT underlying_symbol as symbol, weight FROM fund_basket_weights WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)", conn, params=(code, code))
                             if not basket_df.empty:
                                 fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
+                            else:
+                                # [AI-2026-06-28] basket为空时，从 YAML 配置回退 valuation_portfolio（如 513350/159518/159502 纯ETF基金）
+                                yaml_portfolio = fund.get('valuation_portfolio') or fund.get('hedging_portfolio')
+                                if yaml_portfolio:
+                                    fund_cfg["valuation_portfolio"] = yaml_portfolio
                         except:
                             pass
                         
@@ -1386,7 +1393,7 @@ class FundService:
             # 判断是否是港币基金。若是，在返回的 usd_cny_mid 字段里使用港币汇率 hkd_cny_mid
             is_hkd_fund = False
             try:
-                fund_info_df = pd.read_sql("SELECT category, idx_name FROM fund_info WHERE fund_code=? LIMIT 1", conn, params=(fund_code,))
+                fund_info_df = pd.read_sql("SELECT category, idx_name FROM unified_fund_list WHERE fund_code=? LIMIT 1", conn, params=(fund_code,))
                 if not fund_info_df.empty:
                     cat = str(fund_info_df.iloc[0]['category'] or '')
                     idx_name = str(fund_info_df.iloc[0]['idx_name'] or '')
@@ -1662,11 +1669,8 @@ class FundService:
                 item['nav_date'] = latest_nav_date
                 item['latest_nav'] = latest_nav
 
-                # 静态溢价 = 收盘价 / 净值
-                nav_val = item.get('nav')
-                price_val = item.get('price')
-                if nav_val and nav_val > 0 and price_val and price_val > 0:
-                    item['static_premium'] = (price_val / nav_val - 1) * 100
+                # [AI-2026-06-28] 静态溢价已由入库时用 T-1 净值算好，直接使用 h.premium
+                # 不再覆盖计算，避免 AI 瞎改
 
                 # [511360] 附加国债指数数据
                 if fund_code == '511360':
@@ -1799,6 +1803,11 @@ class FundService:
             )
             if not basket_df.empty:
                 fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
+            else:
+                # [AI-2026-06-28] basket为空时，从 YAML 配置回退 valuation_portfolio
+                yaml_portfolio = fund.get('valuation_portfolio') or fund.get('hedging_portfolio')
+                if yaml_portfolio:
+                    fund_cfg["valuation_portfolio"] = yaml_portfolio
 
             # 获取底层的 calculator 基准数据
             calculator = self._get_calculator()

@@ -29,6 +29,12 @@ class DailyUpdater(BaseApp):
     def __init__(self):
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
         super().__init__("daily_updater", app_dir=scripts_dir)
+        # [AI-2026-06-28] 修正配置文件路径：指向 arbcore/config/lof_config.yaml
+        correct_config = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "arbcore", "config", "lof_config.yaml")
+        if os.path.exists(correct_config):
+            self.config_path = correct_config
+            self.config = self._load_config()
+            self.logger.info(f"📄 配置文件重定向: {self.config_path}")
         self.woody_crawler = WoodyWebCrawler()
         self.hist_manager = HistoricalDataManager(db_manager=self.db)
         self._woody_logged_in = False  # 延迟登录标记
@@ -428,29 +434,30 @@ class DailyUpdater(BaseApp):
                     self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
-        """安全合并保存 fund 数据，并同步写入大一统历史表"""
+        """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
         conn = self.db._get_conn()
         row = None
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT price, nav FROM fund_data WHERE date=? AND fund_code=?", (date_str, fund_code))
+            cursor.execute("SELECT price, nav FROM unified_fund_history WHERE date=? AND fund_code=?", (date_str, fund_code))
             row = cursor.fetchone()
+            # [AI-2026-06-28] 查 T-1 净值用于溢价计算
+            cursor.execute("SELECT nav FROM unified_fund_history WHERE fund_code=? AND date<? AND nav IS NOT NULL ORDER BY date DESC LIMIT 1", (fund_code, date_str))
+            t1_row = cursor.fetchone()
         finally:
             conn.close()
             
         exist_price = row[0] if row and row[0] is not None else None
         exist_nav = row[1] if row and row[1] is not None else None
+        t1_nav = float(t1_row[0]) if t1_row and t1_row[0] is not None else None
         
         new_price = price if price is not None else exist_price
         new_nav = nav if nav is not None else exist_nav
         
         premium = None
-        if new_price is not None and new_nav is not None and float(new_nav) > 0:
-            premium = (float(new_price) - float(new_nav)) / float(new_nav) * 100
+        if new_price is not None and t1_nav is not None and t1_nav > 0:
+            premium = round((float(new_price) - t1_nav) / t1_nav * 100, 4)
             
-        self.db.save_fund_data(date=date_str, fund_code=fund_code, price=new_price, nav=new_nav, premium=premium)
-        
-        # [核心增强] 同步写入大一统历史表，确保 Vue 看板有数
         self.db.save_unified_history(
             date_str=date_str, 
             fund_code=fund_code, 
@@ -458,6 +465,68 @@ class DailyUpdater(BaseApp):
             nav=new_nav, 
             premium=premium
         )
+
+    def _step4_fix_holiday_prices(self, codes_to_fix=None):
+        """[AI-2026-06-28] 用腾讯历史 K 线修复假期导致的错误收盘价"""
+        from arbcore.fetchers.historical.tencent import TencentHistoricalFetcher
+        self.logger.info("🔧 [假期修复] 开始用腾讯历史 K 线修复错误收盘价...")
+        
+        if codes_to_fix is None:
+            # 修复所有基金（不只是 NULL 的）
+            conn = self.db._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT fund_code FROM unified_fund_list ORDER BY fund_code")
+            codes_to_fix = [str(r[0]) for r in cursor.fetchall()]
+            conn.close()
+        
+        self.logger.info(f"🔧 [假期修复] 共 {len(codes_to_fix)} 只基金待检查...")
+        
+        fetcher = TencentHistoricalFetcher()
+        fixed_count = 0
+        corrected_count = 0
+        
+        for code in codes_to_fix:
+            try:
+                # 腾讯代码格式: sz159518 或 sh513350
+                tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
+                df = fetcher.fetch_prices(tx_code, start_date='2026-06-01')
+                
+                if df.empty:
+                    continue
+                
+                # [AI-2026-06-28] 用 _safe_save_fund_data 直接写入 unified_fund_history
+                need_update = False
+                for _, row in df.iterrows():
+                    date_str = row['date'].strftime('%Y-%m-%d')
+                    price = float(row['close'])
+                    # 检查是否已有数据
+                    conn = self.db._get_conn()
+                    existing = conn.execute("SELECT price FROM unified_fund_history WHERE date=? AND fund_code=?", (date_str, code)).fetchone()
+                    conn.close()
+                    
+                    should_update = False
+                    if existing:
+                        if existing[0] is None:
+                            should_update = True
+                        elif abs(float(existing[0]) - price) > 0.0001:
+                            should_update = True
+                    else:
+                        should_update = True
+                    
+                    if should_update:
+                        # [AI-2026-06-28] 直接写入 unified_fund_history（废弃 fund_data）
+                        self._safe_save_fund_data(date_str=date_str, fund_code=code, price=price)
+                        need_update = True
+                
+                if need_update:
+                    fixed_count += 1
+                    self.logger.info(f"  ✅ [{code}] 修复历史价格")
+                else:
+                    self.logger.info(f"  ⏭️ [{code}] 价格正确，无需修复")
+            except Exception as e:
+                self.logger.error(f"  ❌ [{code}] 修复失败: {e}")
+        
+        self.logger.info(f"🔧 [假期修复] 完成，修复 {fixed_count}/{len(codes_to_fix)} 只基金")
 
     def step4_fetch_lof_market(self):
         """步骤四：抓取各基金的净值和收盘价"""
@@ -480,41 +549,49 @@ class DailyUpdater(BaseApp):
             if not code: continue
                 
             # --- 1. 获取收盘价和成交额 ---
-            # [AI-2026-06-26] 修复收盘价BUG：原代码用Sina fields[3]（当前价）当收盘价，
-            # 盘中运行时拿到的是盘中价非真实收盘价。修正为fields[2]（昨收=已确认收盘价）。
+            # [AI-2026-06-28] 改用腾讯行情 API（qt.gtimg.cn），返回数据自带日期字段，
+            # 不再用 Sina 猜日期（假期返回旧价格导致日期错位）。
             if not self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
                 import requests
-                # 计算上一个交易日日期
-                prev_td = datetime.now() - timedelta(days=1)
-                while prev_td.weekday() >= 5:
-                    prev_td -= timedelta(days=1)
-                prev_td_str = prev_td.strftime('%Y-%m-%d')
-
-                sina_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
-                url = f"https://hq.sinajs.cn/list={sina_code}"
-                headers = {
-                    "Referer": "https://finance.sina.com.cn/",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
+                # 腾讯行情: 字段分隔符 ~，第 30 段是日期 YYYYMMDD，第 3 段是昨收
+                # 例: v_sz159518="...~20260626161433~...~1.030~..."
+                tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
+                url = f"https://qt.gtimg.cn/q={tx_code}"
+                headers = {"Referer": "https://finance.qq.com/"}
                 try:
                     resp = requests.get(url, headers=headers, timeout=10)
                     resp.encoding = "gbk"
-                    if resp.status_code == 200 and 'FAILED' not in resp.text and '=""' not in resp.text:
-                        data_part = resp.text.split('="')[1].split('";')[0]
-                        fields = data_part.split(",")
-                        if len(fields) > 9:
-                            # fields[2]=昨收（已确认收盘价），不用fields[3]（当前价=盘中可能是实时价）
-                            price = float(fields[2])
-                            amount_yuan = float(fields[9])
-                            amount_wan = round(amount_yuan / 10000, 2)
-                            self._safe_save_fund_data(date_str=prev_td_str, fund_code=code, price=price)
-                            self.db.save_unified_history(date_str=prev_td_str, fund_code=code, volume=amount_wan)
-                            self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
-                            self.logger.info(f"✅ [{code}] 收盘价(Sina昨收): 日期={prev_td_str}, 价格={price}, 成交额={amount_wan}万元")
+                    if resp.status_code == 200 and resp.text and '~' in resp.text:
+                        # 解析腾讯返回的 ~ 分隔字段
+                        parts = resp.text.split('=')[1].strip('"~;\n\r ')
+                        fields = parts.split('~')
+                        # fields[30] = YYYYMMDDHHmmss（含时间戳），fields[3] = 昨收
+                        if len(fields) > 30:
+                            ts = fields[30].strip()
+                            if len(ts) >= 8:
+                                price_date_str = ts[:8]  # YYYYMMDD
+                                price_date = price_date_str.replace('-', '').replace('/', '') if '-' in ts else price_date_str
+                                date_str = f"{price_date[:4]}-{price_date[4:6]}-{price_date[6:8]}"
+                                
+                                price = float(fields[3]) if fields[3] else 0
+                                amount_yuan = float(fields[36]) if len(fields) > 36 and fields[36] else 0
+                                amount_wan = round(amount_yuan / 10000, 2)
+                                
+                                if price > 0:
+                                    self._safe_save_fund_data(date_str=date_str, fund_code=code, price=price)
+                                    self.db.save_unified_history(date_str=date_str, fund_code=code, volume=amount_wan)
+                                    self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
+                                    self.logger.info(f"✅ [{code}] 收盘价(腾讯): 日期={date_str}, 价格={price}, 成交额={amount_wan}万元")
+                                else:
+                                    self.logger.warning(f"⚠️ [{code}] 腾讯返回价格为0")
+                            else:
+                                self.logger.warning(f"⚠️ [{code}] 腾讯返回日期字段不足: {ts}")
+                        else:
+                            self.logger.warning(f"⚠️ [{code}] 腾讯返回字段不足: {len(fields)}")
                     else:
-                        self.logger.warning(f"⚠️ [{code}] Sina返回空数据")
+                        self.logger.warning(f"⚠️ [{code}] 腾讯返回空数据")
                 except Exception as e:
-                    self.logger.error(f"❌ [{code}] Sina获取收盘价失败: {e}")
+                    self.logger.error(f"❌ [{code}] 腾讯获取收盘价失败: {e}")
 
             # --- 2. 获取东财净值 ---
             def get_prev_trading_day(dt):
@@ -534,7 +611,7 @@ class DailyUpdater(BaseApp):
             
             conn = self.db._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(date) FROM fund_data WHERE fund_code = ? AND nav IS NOT NULL", (code,))
+            cursor.execute("SELECT MAX(date) FROM unified_fund_history WHERE fund_code = ? AND nav IS NOT NULL", (code,))
             max_nav_row = cursor.fetchone()
             conn.close()
             
@@ -558,6 +635,9 @@ class DailyUpdater(BaseApp):
                     self.db.mark_access_synced(today_str, source=f'lof_nav_{code}')
             else:
                 self.logger.warning(f"⚠️ [{code}] 东财接口未返回任何净值数据。")
+
+        # [AI-2026-06-28] 步骤四收尾：修复假期导致的错误收盘价
+        self._step4_fix_holiday_prices()
 
     def step4_5_sync_fund_purchase_status(self):
         """步骤4.5：从 AKShare 同步基金申赎状态"""

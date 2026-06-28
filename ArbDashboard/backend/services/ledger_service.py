@@ -164,7 +164,7 @@ class LedgerService:
             conn = self.db._get_conn()
             try:
                 cur = conn.execute(
-                    "SELECT price FROM fund_data WHERE fund_code=? AND price IS NOT NULL ORDER BY date DESC LIMIT 1",
+                    "SELECT price FROM unified_fund_history WHERE fund_code=? AND price IS NOT NULL ORDER BY date DESC LIMIT 1",
                     (fund_code,)
                 )
                 row = cur.fetchone()

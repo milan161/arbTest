@@ -90,7 +90,6 @@ class SystemManager(BaseManager):
                 
                 conn.execute('DELETE FROM futures_daily WHERE date < ?', (cutoff_date,))
                 conn.execute('DELETE FROM usa_etf_daily_prices WHERE date < ?', (cutoff_date,))
-                conn.execute('DELETE FROM fund_data WHERE date < ?', (cutoff_date,))
                 conn.execute('DELETE FROM system_health WHERE timestamp < ?', (cutoff_date,))
                 
                 sync_cutoff = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')

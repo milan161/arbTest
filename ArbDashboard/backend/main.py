@@ -300,8 +300,8 @@ async def lifespan(app: FastAPI):
             logger.info("📊 启动时自动运行 011 数据更新任务...")
             system_status.add_milestone("INFO", "启动时自动运行 011 数据更新")
             print("daily_updater 即将启动...")
-            # 调用 011 (指向统一的 daily_updater.py) 更新脚本
-            scripts_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
+            # [AI-2026-06-28] 修复：daily_updater.py 在 scheduler/ 下，不在 arbcore/scripts/
+            scripts_dir = os.path.normpath(os.path.join(backend_dir, "scheduler"))
             script_path = os.path.join(scripts_dir, "daily_updater.py")
             
             # [V4.1] 尝试多种 Python 路径
@@ -376,7 +376,8 @@ async def lifespan(app: FastAPI):
 
         # 5. 定义脚本路径和 Python 查找的公共函数
         def _get_scripts_dir():
-            return os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
+            # [AI-2026-06-28] daily_updater.py 在 scheduler/ 下
+            return os.path.normpath(os.path.join(backend_dir, "scheduler"))
         def _find_python():
             for candidate in [
                 os.path.normpath(os.path.join(backend_dir, "..", "..", ".venv", "Scripts", "python.exe")),
