@@ -1103,16 +1103,15 @@ class DailyUpdater(BaseApp):
 
         if nav_only:
             self.logger.info("🚀 [NAV模式] 仅执行净值更新 (step4)...")
-            if now.weekday() in (5, 6):
-                self.logger.info("📅 周末跳过净值更新。")
-                return
             self.step4_fetch_lof_market()
             self.logger.info("🎉 [NAV模式] 净值更新完毕！")
             return
 
-        # 默认：完整流水线
+        # 默认：完整流水线（周末跳过除净值外的所有步骤）
         if now.weekday() in (5, 6):
-            self.logger.info("📅 [周末免打扰] 跳过每日数据大一统更新流水线。")
+            self.logger.info("📅 [周末] 跳过完整流水线，仅执行净值更新...")
+            self.step4_fetch_lof_market()
+            self.logger.info("🎉 [周末净值] 净值更新完毕！")
             return
         self._run_pipeline()
 

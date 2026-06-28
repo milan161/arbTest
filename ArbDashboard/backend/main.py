@@ -1753,8 +1753,8 @@ async def reconnect_engine():
 @app.post("/api/system/trigger/{task}")
 async def trigger_task(task: str):
     import subprocess
-    # [FIX] 脚本路径计算 - 彻底解耦 LOFarb，指向统一的 arbcore/scripts/daily_updater.py
-    scripts_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "arbcore", "scripts"))
+    # [AI-2026-06-28] 修复净值补采500错误：daily_updater.py 实际在 scheduler/ 下，不在 arbcore/scripts/
+    scripts_dir = os.path.normpath(os.path.join(backend_dir, "scheduler"))
     lofarb_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "LOFarb"))
     task_map = {
         "011": os.path.join(scripts_dir, "daily_updater.py"),
