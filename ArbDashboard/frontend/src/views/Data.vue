@@ -53,57 +53,6 @@
             </n-button>
           </div>
 
-          <n-divider title-placement="left">静态估值 (012)</n-divider>
-          <div class="task-grid">
-            <div v-for="task in manualTasks" :key="task.id" class="task-item">
-              <div class="task-info">
-                <div class="task-name">{{ task.name }}</div>
-                <div class="task-desc">{{ task.desc }}</div>
-              </div>
-              <n-button :type="task.type" size="small" @click="triggerTask('012')" :loading="task.running">
-                <template #icon><n-icon><Play /></n-icon></template>
-                立即执行
-              </n-button>
-            </div>
-          </div>
-
-          <n-divider title-placement="left">系统自检</n-divider>
-          <div class="task-grid">
-            <div class="task-item">
-              <div class="task-info">
-                <div class="task-name">一键自检</div>
-                <div class="task-desc">检查静态估值完整性、同步新鲜度、数据库健康</div>
-              </div>
-              <n-button type="primary" size="small" @click="runHealthCheck" :loading="healthRunning">
-                <template #icon><n-icon><Activity /></n-icon></template>
-                立即自检
-              </n-button>
-            </div>
-            <!-- 自检结果 -->
-            <n-collapse v-if="healthResult" :default-expanded-names="['result']" accordion>
-              <n-collapse-item title="自检报告" name="result">
-                <div class="health-result">
-                  <n-tag :type="healthResult.status === 'healthy' ? 'success' : 'warning'" size="small" round>
-                    {{ healthResult.status === 'healthy' ? '✅ 健康' : '⚠️ 异常' }}
-                  </n-tag>
-                  <div style="margin-top: 8px;">
-                    <div v-if="healthResult.issues.length === 0" class="text-green-600 font-medium">无异常</div>
-                    <div v-for="(issue, i) in healthResult.issues" :key="i" class="health-issue">
-                      <n-icon size="14" color="#d97706" style="margin-right: 4px;"><AlertTriangle /></n-icon>
-                      {{ issue }}
-                    </div>
-                  </div>
-                  <n-divider />
-                  <div class="health-stats">
-                    <div>基金总数: {{ healthResult.stats.fund_count }}</div>
-                    <div>数据总条数: {{ healthResult.stats.total_records }}</div>
-                    <div>检查日期: {{ healthResult.stats.checked_dates?.join(', ') }}</div>
-                  </div>
-                </div>
-              </n-collapse-item>
-            </n-collapse>
-          </div>
-
           <n-divider title-placement="left">执行日志终端</n-divider>
           <div class="terminal-box">
              <div v-if="taskLogs.length === 0" class="text-gray-500 italic">等待任务启动...</div>
@@ -264,12 +213,12 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import {
   NCard, NGrid, NGi, NButton, NIcon, NTag, NDivider, NFormItem, NInput, useMessage, NSpace, NText,
-  NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NCollapse, NCollapseItem, NUpload
+  NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NUpload
 } from 'naive-ui'
-import { Play, FileDown, Database, Trash2, HelpCircle, RefreshCw, CheckCircle, Clock, Activity, AlertTriangle } from 'lucide-vue-next'
+import { Play, FileDown, Database, Trash2, HelpCircle, RefreshCw, CheckCircle, Clock } from 'lucide-vue-next'
 import { triggerTask as triggerSystemTask, getFundConfigs, upsertFundConfig, deleteFundConfig, exportFundConfig, importFundConfig } from '../api'
 import { TAB_CATEGORIES } from '../store/fundStore'
-import { getDataStatus, getNavStatus, getSystemHealthCheck } from '../api/systemApi'
+import { getDataStatus, getNavStatus } from '../api/systemApi'
 import client from '../api/client'
 
 const message = useMessage()
@@ -351,30 +300,6 @@ const morningReady = ref(false)
 const navLastTime = ref('')
 const navRunning = ref(false)
 
-// 自检状态
-const healthRunning = ref(false)
-const healthResult = ref<any>(null)
-
-const runHealthCheck = async () => {
-  healthRunning.value = true
-  taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 系统自检启动...`)
-  try {
-    const res = await getSystemHealthCheck()
-    healthResult.value = res.data
-    taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 自检完成: ${res.data.issues.length} 项异常`)
-    if (res.data.issues.length === 0) {
-      message.success('系统自检通过 ✅')
-    } else {
-      message.warning(`发现 ${res.data.issues.length} 项异常`)
-    }
-  } catch (e: any) {
-    message.error(`自检失败: ${e.message}`)
-    taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 自检失败: ${e.message}`)
-  } finally {
-    healthRunning.value = false
-  }
-}
-
 // 基金配置状态
 const fundConfigs = ref<any[]>([])
 const showFundModal = ref(false)
@@ -394,16 +319,6 @@ const anchorOptions = [
   { label: '日本时刻 (JP)', value: 'JP' },
   { label: '香港时刻 (HK)', value: 'HK' }
 ]
-
-const manualTasks = reactive([
-  {
-    id: '012',
-    name: '静态估值 (012)',
-    desc: '根据历史原材料重算静态估值',
-    type: 'info',
-    running: false
-  }
-])
 
 const getCategoryBadgeStyle = (cat: string) => {
     let textColor = '#4b5563';
@@ -461,29 +376,6 @@ const triggerNavUpdate = async () => {
   } finally {
     setTimeout(() => { navRunning.value = false }, 2000)
     setTimeout(() => fetchNavStatus(), 3000)
-  }
-}
-
-const triggerTask = async (id: string) => {
-  const task = manualTasks.find(t => t.id === id)
-  if (!task) return
-  task.running = true
-  taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 任务 ${id} 启动...`)
-  try {
-    const res = await triggerSystemTask(id)
-    if (res.data.status === 'ok') {
-      message.success(`任务 ${id} 已后台运行`)
-      taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 任务 ${id} 启动成功`)
-    } else {
-      message.error(`任务启动失败: ${res.data.message}`)
-      taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 任务 ${id} 启动失败: ${res.data.message}`)
-    }
-  } catch (e: any) {
-    const errorMsg = e.response?.data?.message || e.message || '未知错误'
-    message.error(`任务启动失败: ${errorMsg}`)
-    taskLogs.value.unshift(`[${new Date().toLocaleTimeString()}] 任务 ${id} 启动失败: ${errorMsg}`)
-  } finally {
-    setTimeout(() => { task.running = false }, 1500)
   }
 }
 
