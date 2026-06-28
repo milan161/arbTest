@@ -528,33 +528,19 @@ class DailyUpdater(BaseApp):
         
         self.logger.info(f"🔧 [假期修复] 完成，修复 {fixed_count}/{len(codes_to_fix)} 只基金")
 
-    def step4_fetch_lof_market(self):
-        """步骤四：抓取各基金的净值和收盘价"""
-        self.logger.info("=== 步骤四：抓取各基金最新净值和收盘价 (标准库模式) ===")
+    def _step4_fetch_prices(self):
+        """[AI-2026-06-28] 从腾讯行情获取收盘价，和净值补采分离"""
+        self.logger.info("=== 步骤4P：获取各基金收盘价 (腾讯API) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
-
-        # 从大一统基金列表获取所有基金代码+分类
         conn_ufl = self.db._get_conn()
-        all_fund_rows = conn_ufl.execute("SELECT fund_code, category FROM unified_fund_list").fetchall()
+        all_codes = [str(r[0]) for r in conn_ufl.execute("SELECT fund_code FROM unified_fund_list").fetchall() if r[0]]
         conn_ufl.close()
-        # 构建 code → category 映射
-        fund_categories = {str(r[0]): (r[1] or '') for r in all_fund_rows if r[0]}
-        all_codes = list(fund_categories.keys())
-        self.logger.info(f"📋 unified_fund_list 共 {len(all_codes)} 只基金，开始遍历净值/价格同步...")
-
-        # 净值预期规则：海外品种（黄金原油/QDII欧美/混合跨境）T-2最新，国内/亚洲 T-1最新
-        T2_CATEGORIES = {'黄金原油', 'QDII欧美', '混合跨境'}
+        self.logger.info(f"📋 共 {len(all_codes)} 只基金，开始获取收盘价...")
 
         for code in all_codes:
             if not code: continue
-                
-            # --- 1. 获取收盘价和成交额 ---
-            # [AI-2026-06-28] 改用腾讯行情 API（qt.gtimg.cn），返回数据自带日期字段，
-            # 不再用 Sina 猜日期（假期返回旧价格导致日期错位）。
             if not self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
                 import requests
-                # 腾讯行情: 字段分隔符 ~，第 30 段是日期 YYYYMMDD，第 3 段是昨收
-                # 例: v_sz159518="...~20260626161433~...~1.030~..."
                 tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
                 url = f"https://qt.gtimg.cn/q={tx_code}"
                 headers = {"Referer": "https://finance.qq.com/"}
@@ -562,38 +548,42 @@ class DailyUpdater(BaseApp):
                     resp = requests.get(url, headers=headers, timeout=10)
                     resp.encoding = "gbk"
                     if resp.status_code == 200 and resp.text and '~' in resp.text:
-                        # 解析腾讯返回的 ~ 分隔字段
                         parts = resp.text.split('=')[1].strip('"~;\n\r ')
                         fields = parts.split('~')
-                        # fields[30] = YYYYMMDDHHmmss（含时间戳），fields[3] = 昨收
                         if len(fields) > 30:
                             ts = fields[30].strip()
                             if len(ts) >= 8:
-                                price_date_str = ts[:8]  # YYYYMMDD
-                                price_date = price_date_str.replace('-', '').replace('/', '') if '-' in ts else price_date_str
-                                date_str = f"{price_date[:4]}-{price_date[4:6]}-{price_date[6:8]}"
-                                
+                                date_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
                                 price = float(fields[3]) if fields[3] else 0
-                                amount_yuan = float(fields[36]) if len(fields) > 36 and fields[36] else 0
-                                amount_wan = round(amount_yuan / 10000, 2)
-                                
+                                amount_wan = round(float(fields[36]) / 10000, 2) if len(fields) > 36 and fields[36] else 0
                                 if price > 0:
                                     self._safe_save_fund_data(date_str=date_str, fund_code=code, price=price)
                                     self.db.save_unified_history(date_str=date_str, fund_code=code, volume=amount_wan)
                                     self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
-                                    self.logger.info(f"✅ [{code}] 收盘价(腾讯): 日期={date_str}, 价格={price}, 成交额={amount_wan}万元")
+                                    self.logger.info(f"✅ [{code}] 收盘价: {date_str} {price}")
                                 else:
                                     self.logger.warning(f"⚠️ [{code}] 腾讯返回价格为0")
-                            else:
-                                self.logger.warning(f"⚠️ [{code}] 腾讯返回日期字段不足: {ts}")
-                        else:
-                            self.logger.warning(f"⚠️ [{code}] 腾讯返回字段不足: {len(fields)}")
                     else:
                         self.logger.warning(f"⚠️ [{code}] 腾讯返回空数据")
                 except Exception as e:
                     self.logger.error(f"❌ [{code}] 腾讯获取收盘价失败: {e}")
 
-            # --- 2. 获取东财净值 ---
+    def step4_fetch_lof_market(self):
+        """[AI-2026-06-28] 步骤四：仅获取净值（收盘价已分离到 _step4_fetch_prices）"""
+        self.logger.info("=== 步骤四：抓取各基金最新净值 (东财API) ===")
+        today_str = datetime.now().strftime('%Y-%m-%d')
+
+        # 从大一统基金列表获取所有基金代码+分类
+        conn_ufl = self.db._get_conn()
+        all_fund_rows = conn_ufl.execute("SELECT fund_code, category FROM unified_fund_list").fetchall()
+        conn_ufl.close()
+        fund_categories = {str(r[0]): (r[1] or '') for r in all_fund_rows if r[0]}
+        all_codes = list(fund_categories.keys())
+        T2_CATEGORIES = {'黄金原油', 'QDII欧美', '混合跨境'}
+
+        for code in all_codes:
+            if not code: continue
+            # 获取东财净值 ---
             def get_prev_trading_day(dt):
                 t = dt - timedelta(days=1)
                 while t.weekday() >= 5: t -= timedelta(days=1)
@@ -1199,6 +1189,8 @@ class DailyUpdater(BaseApp):
         self.step1_and_2_fetch_woody_api()
         self.step2_5_sync_yaml_with_latest_factors()
         self.step3_fetch_exchange_rate()
+        # [AI-2026-06-28] 价格+净值分开，nav-only 只拉净值
+        self._step4_fetch_prices()
         self.step4_fetch_lof_market()
         # [AI-2026-06-28] 假期价格修复只在完整流水线跑，不干扰 nav-only
         self._step4_fix_holiday_prices()
