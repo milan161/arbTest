@@ -1706,6 +1706,9 @@ async def reconnect_galaxy():
                 rm.active_fetchers['galaxy'] = galaxy
                 success, msg = galaxy.reconnect()
             if success:
+                # [AI-2026-06-29] 重连后重新订阅所有已跟踪标的，否则QMT不推送TICK数据
+                if rm.symbols:
+                    galaxy.subscribe(rm.symbols)
                 system_status.add_milestone("SUCCESS", msg)
                 return {"status": "ok", "message": msg}
             else:
@@ -1734,6 +1737,9 @@ async def reconnect_guojin():
                 rm.active_fetchers['guojin'] = guojin
                 success, msg = guojin.reconnect()
             if success:
+                # [AI-2026-06-29] 重连后重新订阅所有已跟踪标的
+                if rm.symbols:
+                    guojin.subscribe(rm.symbols)
                 system_status.add_milestone("SUCCESS", msg)
                 return {"status": "ok", "message": msg}
             else:
