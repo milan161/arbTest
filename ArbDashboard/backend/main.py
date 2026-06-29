@@ -1692,34 +1692,41 @@ async def reconnect_tdx():
 
 @app.post("/api/system/reconnect_galaxy")
 async def reconnect_galaxy():
-    """重连银河QMT - 使用 reconnect() 方法，试连 3 次"""
+    """银河QMT仅用于下单，不参与行情轮询"""
     try:
-        if market_data_service.realtime_manager:
-            rm = market_data_service.realtime_manager
-            galaxy = rm.active_fetchers.get('galaxy')
-            if galaxy:
-                success, msg = galaxy.reconnect()
-            else:
-                # 懒创建：首次点击时创建实例并注册到管理器
-                from arbcore.fetchers.realtime.galaxy import GalaxyQmtFetcher
-                galaxy = GalaxyQmtFetcher()
-                rm.active_fetchers['galaxy'] = galaxy
-                success, msg = galaxy.reconnect()
-            if success:
-                # [AI-2026-06-29] 重连后重新订阅所有已跟踪标的，否则QMT不推送TICK数据
-                if rm.symbols:
-                    galaxy.subscribe(rm.symbols)
-                system_status.add_milestone("SUCCESS", msg)
-                return {"status": "ok", "message": msg}
-            else:
-                system_status.add_milestone("WARNING", msg)
-                return {"status": "error", "message": msg}
-        else:
+        if not market_data_service.realtime_manager:
             system_status.add_milestone("WARNING", "实时行情管理器未启动")
             return {"status": "error", "message": "实时行情管理器未启动"}
+        rm = market_data_service.realtime_manager
+        galaxy = rm.active_fetchers.get('galaxy')
+        if galaxy:
+            # 已有实例，重新连接
+            success, msg = galaxy.reconnect()
+        else:
+            # [AI-2026-06-29] 首次创建：仅注册到active_fetchers供按钮状态和下单使用，不订阅行情
+            from arbcore.fetchers.realtime.galaxy import GalaxyQmtFetcher
+            galaxy = GalaxyQmtFetcher()
+            rm.active_fetchers['galaxy'] = galaxy
+            success, msg = galaxy.reconnect()
+        if success:
+            # 更新 lazy trader 的下单通道引用
+            global lazy_trader_instance
+            if lazy_trader_instance is not None:
+                lazy_trader_instance.inject_drivers(
+                    ib_reader=getattr(market_data_service, 'ib_reader', None),
+                    galaxy_qmt=galaxy,
+                    guojin_qmt=rm.active_fetchers.get('guojin')
+                )
+            logger.info("[银河QMT] 下单通道正常，已注册active_fetchers (不参与行情轮询)")
+            system_status.add_milestone("SUCCESS", "银河QMT下单通道正常 (不参与行情)")
+            return {"status": "ok", "message": "银河QMT下单通道正常"}
+        else:
+            system_status.add_milestone("WARNING", msg)
+            return {"status": "error", "message": msg}
     except Exception as e:
-        system_status.add_milestone("ERROR", f"银河QMT重连异常: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.warning(f"[银河QMT] 连接失败: {e}")
+        system_status.add_milestone("WARNING", f"银河QMT下单通道连接失败: {e}")
+        return {"status": "error", "message": f"银河QMT连接失败: {e}"}
 
 @app.post("/api/system/reconnect_guojin")
 async def reconnect_guojin():
