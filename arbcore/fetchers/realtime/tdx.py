@@ -576,22 +576,22 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
 
-            asks = [float(p) for p in snap.get('Sellp', [0,0,0,0,0])]
+            asks = ([float(p) for p in snap.get('Sellp', [0,0,0,0,0])] + [0]*5)[:5]  # [AI-2026-06-29] padding到5个元素
 
 
 
 
-            ask_vols = [int(v) for v in snap.get('Sellv', [0,0,0,0,0])]
+            ask_vols = ([int(v) for v in snap.get('Sellv', [0,0,0,0,0])] + [0]*5)[:5]
 
 
 
 
-            bids = [float(p) for p in snap.get('Buyp', [0,0,0,0,0])]
+            bids = ([float(p) for p in snap.get('Buyp', [0,0,0,0,0])] + [0]*5)[:5]
 
 
 
 
-            bid_vols = [int(v) for v in snap.get('Buyv', [0,0,0,0,0])]
+            bid_vols = ([int(v) for v in snap.get('Buyv', [0,0,0,0,0])] + [0]*5)[:5]
 
 
 
@@ -727,7 +727,7 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """每次都从通达信拉取最新快照（本地内存直连，延迟极低），确保盘口实时"""
+        """获取通达信实时快照。优先使用push回调缓存的5档数据，缓存miss时主动拉取"""
         clean_symbol = symbol.split('.')[0]
 
         # 过滤非A/港股标的（期货代码如 CL 等会触发 tqcenter 的 "代码格式错误" 刷屏）
@@ -735,12 +735,18 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
         if base.replace('-', '').isalpha() and len(base) >= 2:
             return None  # 纯字母代码（如 CL, USO, GLD）不走TDX
 
-        # 始终尝试主动拉取最新快照，不依赖可能过期的缓存
+        # [AI-2026-06-29] 优先使用push回调缓存的5档盘口数据（5秒内有效）
+        now = time.time()
+        with self._lock:
+            cached = self.quotes.get(clean_symbol)
+            if cached and (now - cached.get("time", 0)) < 5:
+                return cached
+
+        # 缓存过期或缺失时主动拉取最新快照
         if self.is_connected:
             tdx_code = self.normalize_symbol(symbol)
             try:
-                with _suppress_console_output():
-                    snap = self.tq.get_market_snapshot(stock_code=tdx_code)
+                snap = self.tq.get_market_snapshot(stock_code=tdx_code)
                 if snap:
                     quote = self._format_snap(tdx_code, snap)
                     if quote:
@@ -751,12 +757,10 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
             except Exception:
                 pass
 
-        # 通达信拉取失败时，降级使用缓存
+        # 通达信拉取失败时，降级使用缓存（不限时效）
         with self._lock:
             if clean_symbol in self.quotes:
                 return self.quotes[clean_symbol]
-
-        return None
 
 
 

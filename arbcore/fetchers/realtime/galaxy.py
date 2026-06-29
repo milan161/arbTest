@@ -114,15 +114,23 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         while self.running:
             try:
                 data = self.sock.recv(4096).decode('utf-8')
-                if not data: break
-                
+                if not data:
+                    logger.warning("[QMT银河] Socket 收到空数据，连接可能已关闭")
+                    break
                 buffer += data
                 while '\n' in buffer:
                     msg, buffer = buffer.split('\n', 1)
-                    self._process_message(msg.strip())
-            except:
+                    try:
+                        self._process_message(msg.strip())
+                    except Exception as e:
+                        logger.warning(f"[QMT银河] 消息处理异常 (丢弃): {e} | msg={msg[:80]}")
+            except socket.timeout:
+                continue  # 超时正常，继续等
+            except Exception as e:
+                logger.error(f"[QMT银河] 接收循环异常: {e}")
                 break
         self.is_connected = False
+        logger.warning("[QMT银河] 接收循环已退出")
 
     def _process_message(self, msg: str):
         if msg.startswith("TICK,"):
