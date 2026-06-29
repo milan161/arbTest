@@ -281,14 +281,15 @@
                    <div style="width: 160px; flex-shrink: 0;">
                       <span style="font-size:15px; font-weight:bold; color:#0284c7;">ETF实时估值</span>
                    </div>
-                   <div style="width: 140px; flex-shrink: 0; display: flex; align-items: center;">
-                      <div v-for="(item, index) in uniqueValuationSymbols" :key="item.symbol" style="display: flex; align-items: center;">
-                         <span v-if="index === 0" style="color:#1565c0; font-size:14px; font-weight:bold; width: 60px; text-align: right; padding-right: 6px;">{{ item.symbol }}价</span>
-                         <span v-else style="color:#1565c0; font-size:14px; font-weight:bold; padding-right: 6px; padding-left: 12px;">{{ item.symbol }}价</span>
-                         <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center;" :data-sym="item.symbol">
-                      </div>
-                   </div>
-                   <div v-if="isComplexCategory" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;">
+                     <!-- [AI-2026-06-29] 修复多标的ETF价格输入框溢出：去掉固定宽度140px，改为自适应 -->
+                     <div style="flex-shrink: 0; display: flex; align-items: center; gap: 2px;">
+                        <div v-for="(item, index) in uniqueValuationSymbols" :key="item.symbol" style="display: flex; align-items: center; white-space: nowrap;">
+                          <span v-if="index === 0" style="color:#1565c0; font-size:14px; font-weight:bold; width: 60px; text-align: right; padding-right: 6px; flex-shrink: 0;">{{ item.symbol }}价</span>
+                          <span v-else style="color:#1565c0; font-size:14px; font-weight:bold; padding-right: 6px; padding-left: 12px; flex-shrink: 0;">{{ item.symbol }}价</span>
+                          <input type="number" v-model.number="testEtfPrices[item.symbol]" step="0.01" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; color:#1565c0; font-weight:bold; text-align:center; flex-shrink: 0;" :data-sym="item.symbol">
+                       </div>
+                    </div>
+                    <div v-if="isComplexCategory" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;">
                       <span style="font-size:13px; color:#333; white-space: nowrap;">投入</span>
                       <input type="number" v-model.number="targetCapitalEtf" step="1000" style="width: 65px; padding: 2px 4px; font-size: 13px; font-family:monospace; border: 1px solid #ccc; border-radius: 4px; font-weight:bold; text-align:center; color:#d35400;">
                       <span style="font-size:13px; color:#333; white-space: nowrap;">元 买入LOF</span>
