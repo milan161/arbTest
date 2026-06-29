@@ -19,20 +19,28 @@
               </n-checkbox>
               <n-divider vertical />
               <!-- 分类筛选 -->
-              <n-checkbox-group v-model:value="selectedCategories">
-                <n-checkbox value="gold_oil" label="黄金原油" label-style="font-weight: bold; color: #333;" />
-                <n-checkbox value="qdii_us" label="QDII欧美" label-style="font-weight: bold; color: #333;" />
-                <n-checkbox value="qdii_asia" label="QDII亚洲" label-style="font-weight: bold; color: #333;" />
-                <n-checkbox value="domestic_lof" label="国内LOF" label-style="font-weight: bold; color: #333;" />
-                <n-checkbox value="silver" label="白银" label-style="font-weight: bold; color: #333;" />
-              </n-checkbox-group>
+              <n-checkbox :checked="selectedCategories.includes('gold_oil')" @update:checked="toggleCategory('gold_oil')" label-style="font-weight: bold; color: #333;">
+                黄金原油
+              </n-checkbox>
+              <n-checkbox :checked="selectedCategories.includes('qdii_us')" @update:checked="toggleCategory('qdii_us')" label-style="font-weight: bold; color: #333;">
+                QDII欧美
+              </n-checkbox>
+              <n-checkbox :checked="selectedCategories.includes('qdii_asia')" @update:checked="toggleCategory('qdii_asia')" label-style="font-weight: bold; color: #333;">
+                QDII亚洲
+              </n-checkbox>
+              <n-checkbox :checked="selectedCategories.includes('domestic_lof')" @update:checked="toggleCategory('domestic_lof')" label-style="font-weight: bold; color: #333;">
+                国内LOF
+              </n-checkbox>
+              <n-checkbox :checked="selectedCategories.includes('silver')" @update:checked="toggleCategory('silver')" label-style="font-weight: bold; color: #333;">
+                白银
+              </n-checkbox>
             </div>
             <!-- 右侧：折价率阈值 -->
             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
               <span style="font-size: 12px; color: #666;">折价率:</span>
-              <n-input-number v-model:value="premiumThreshold" :min="-10" :max="10" :step="0.1" style="width: 100px;" size="small" /> %
+              <n-input-number v-model:value="premiumThreshold" :min="-10" :max="10" :step="0.1" style="width: 100px;" size="small" @update:value="onThresholdChange" /> %
               <span style="font-size: 12px; color: #666;">~</span>
-              <n-input-number v-model:value="premiumUpperThreshold" :min="-10" :max="10" :step="0.1" style="width: 100px;" size="small" /> %
+              <n-input-number v-model:value="premiumUpperThreshold" :min="-10" :max="10" :step="0.1" style="width: 100px;" size="small" @update:value="onThresholdChange" /> %
               <n-tag type="success" ghost>触发: {{ premiumThreshold }}% ~ {{ premiumUpperThreshold }}%</n-tag>
             </div>
           </div>
@@ -45,7 +53,16 @@
           bordered
           :pagination="{ pageSize: 10 }"
           class="radar-table"
-        />
+        >
+          <template #empty>
+            <div style="padding: 40px 0; text-align: center; color: #999;">
+              <n-icon size="48" color="#ddd"><SearchX /></n-icon>
+              <p style="margin-top: 12px; font-size: 14px;">
+                {{ selectedCategories.length === 0 ? '请在上方选择一个分类' : '该分类下暂无符合条件的基金' }}
+              </p>
+            </div>
+          </template>
+        </n-data-table>
       </n-card>
     </div>
 
@@ -630,7 +647,7 @@ import {
   NCard, NSpace, NButton,
   NText, NDataTable, NTag, NDatePicker, NIcon, NInputNumber, useMessage, NCheckbox, NDivider, NSelect, useDialog
 } from 'naive-ui'
-import { RefreshCw, Zap, ArrowLeft, Star, StarOff } from 'lucide-vue-next'
+import { RefreshCw, Zap, ArrowLeft, Star, StarOff, SearchX } from 'lucide-vue-next'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
@@ -1325,7 +1342,7 @@ const handleBack = () => { window.location.replace('/') }
 const disableFutureDates = (ts: number) => ts > Date.now()
 const handleDateChange = () => { fetchIntraday(); fetchValuationMeta(); }
 
-const fetchDashboard = async () => {
+const fetchDashboard = async (retryCount = 0) => {
   try {
     const res = await getDashboard()
     let data = res.data.data
@@ -1335,7 +1352,7 @@ const fetchDashboard = async () => {
       data = data.filter((f: any) => watchlist.value.includes(f.fund_code))
     }
     
-    // 2. 分类筛选（不选分类时显示全部）
+    // 2. 分类筛选（不选分类时不显示任何基金）
     if (selectedCategories.value && selectedCategories.value.length > 0) {
       // 收集所有选中的分类对应的数据库category值
       const allowedCategories = new Set<string>()
@@ -1346,6 +1363,8 @@ const fetchDashboard = async () => {
         }
       }
       data = data.filter((f: any) => allowedCategories.has(f.category))
+    } else {
+      data = [] // [AI-2026-06-29] 默认不显示任何基金，只有选中分类才显示
     }
     
     // 3. 折价率阈值筛选：显示折价率在阈值范围内的基金
@@ -1354,7 +1373,30 @@ const fetchDashboard = async () => {
     data = data.filter((f: any) => f.rt_premium >= lower && f.rt_premium <= upper)
     
     opportunityData.value = data
-  } catch (e) {}
+  } catch (e) {
+    console.warn(`[雷达] fetchDashboard 失败 (第${retryCount + 1}次):`, e)
+    // 自动重试3次，间隔递增
+    if (retryCount < 3) {
+      const delay = (retryCount + 1) * 2000
+      setTimeout(() => fetchDashboard(retryCount + 1), delay)
+    }
+  }
+}
+
+// [AI-2026-06-29] 手动切换分类（替代n-checkbox-group，避免绑定问题）
+const toggleCategory = (key: string) => {
+  const idx = selectedCategories.value.indexOf(key)
+  if (idx > -1) {
+    selectedCategories.value.splice(idx, 1)
+  } else {
+    selectedCategories.value.push(key)
+  }
+  saveFilterSettings()
+  fetchDashboard()
+}
+const onThresholdChange = () => {
+  saveFilterSettings()
+  fetchDashboard()
 }
 
 const fetchIntraday = async () => {

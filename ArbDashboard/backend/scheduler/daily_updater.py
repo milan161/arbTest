@@ -954,8 +954,9 @@ class DailyUpdater(BaseApp):
         import sqlite3
         self.logger.info("=== 步骤十一：跟踪指数公式静态估值 (QDII亚洲/国内LOF/指数LOF) ===")
 
-        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "database", "arb_master.db")
+        # [AI-2026-06-29] 修复路径: 4层dirname才到项目根目录database/
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))), "database", "arb_master.db")
         conn = sqlite3.connect(db_path, timeout=30)
         conn.execute("PRAGMA busy_timeout = 30000")
         cursor = conn.cursor()
