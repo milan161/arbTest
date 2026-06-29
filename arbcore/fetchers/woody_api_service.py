@@ -210,12 +210,13 @@ class WoodyAPIService:
                     est_price = float(etf_info.get('est_price', 0)) if etf_info.get('est_price') else 0.0
                     ratio = float(etf_info.get('ratio', 0))
                     
-                    # 1. 存入基准日价格
-                    if price > 0 and clean_etf.startswith('^'): 
+                    # [AI-2026-06-29] 修复：移除 clean_etf.startswith('^') 限制，
+                    # 使非^符号（GLD/SLV/USO等）的 price/est_price 也能写入 usa_etf_daily_prices
+                    # 这些是真实的 ETF 市场价格（区别于顶层 netvalue 是 NAV）
+                    if price > 0: 
                         db.upsert_usa_etf_price(date=b_date, symbol=clean_etf, price=price)
                     
-                    # 2. 存入估值日价格 (直接替代爬虫的数据)
-                    if est_price > 0 and e_date and clean_etf.startswith('^'):
+                    if est_price > 0 and e_date:
                         db.upsert_usa_etf_price(date=e_date, symbol=clean_etf, price=est_price)
                         
                     if ratio != 0: db.upsert_fund_basket_weight(date=b_date, fund_code=fund_code, underlying_symbol=clean_etf, weight=ratio)
