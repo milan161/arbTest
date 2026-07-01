@@ -7,7 +7,7 @@
 ArbDashboard/backend/core/auto_trade/
 **/Lazy.vue
 **/*lazy*
-!ArbDashboard/frontend/src/views/LazyTerminal.vue
+# 注意：下面的取反已移除，所有 lazy 相关文件都不上传
 
 # === 账号与私密配置 (禁止上传) ===
 arbcore/config/account_private.py
@@ -35,29 +35,27 @@ ArbDashboard/backend/core/database/
 /ArbDashboard_Next/
 /lofarb_data/
 
-# === 外部数据与废弃目录 (全部屏蔽) ===
+# === 外部数据、废弃目录（放行 backend/scripts，不屏蔽services、新增页面） ===
 /deploy/
 ArbDashboard/data/
 ArbDashboard/scripts/
 ArbDashboard/logs/
-ArbDashboard/backend/scripts/
 
-# === 文档、日志与测试代码 (无需上传) ===
+# === 文档、日志与测试代码 ===
+# 仅屏蔽未完成草稿目录，正式docs目录全部放行
 /docs_unfinished/
 /logs/
-# ArbDashboard/scripts/ 不上传（本地工具脚本）
+# 全局屏蔽md，单独放行根目录README + docs内所有文档
 *.md
 !/README.md
 !/docs/**/*.md
-
 
 # === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
 *.xlsx
 *.xls
 *.csv
 
-# === 杂项文件/脚本 ===
-/*.py
+# === 杂项文件/脚本（移除全局/*.py，避免误伤根目录代码） ===
 *.zip
 *.bat
 !/ArbDashboard/start_dashboard.bat

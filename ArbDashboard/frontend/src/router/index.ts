@@ -3,11 +3,11 @@ import MainLayout from '../layouts/MainLayout.vue'
 import Dashboard from '../views/Dashboard.vue'
 
 /**
- * 懒加载 LazyTerminal.vue，文件不存在时降级为 Developing 页面
- * - 本地开发：LazyTerminal.vue 存在 → 正常加载
- * - 开源用户：LazyTerminal.vue 不存在 → 显示"功能开发中"
+ * 懒加载 LazyMode.vue（private/），文件不存在时降级为 DongGeSecret 占位页
+ * - 本地开发：LazyMode.vue 存在 → 正常加载（内部做角色判断）
+ * - 开源用户：看不到 private/，路由指向 DongGeSecret.vue（锁页）
  */
-const LazyTerminal = () => import('../views/LazyTerminal.vue').catch(() => import('../views/Developing.vue'))
+const LazyMode = () => import('../private/LazyMode.vue').catch(() => import('../views/DongGeSecret.vue'))
 
 const router = createRouter({
   history: createWebHistory(),
@@ -55,12 +55,7 @@ const router = createRouter({
         {
           path: 'lazymode',
           name: 'LazyMode',
-          component: () => import('../views/DongGeSecret.vue')
-        },
-        {
-          path: 'lazy',
-          name: 'LazyTerminal',
-          component: LazyTerminal
+          component: LazyMode
         },
         {
           path: 'developing',
