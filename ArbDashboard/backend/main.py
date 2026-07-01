@@ -272,6 +272,16 @@ except (ImportError, NameError) as e:
     lazy_simulator_instance = None
     logger.info(f"Lazy Simulator not found: {e}")
 
+# [AI-2026-07-01] 导入 DB 驱动规则引擎（LazyMode 自动化规则）
+try:
+    from private.rule_engine import rule_engine
+    # 注入依赖
+    rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, db_path=root_db_path)
+    logger.info("✅ RuleEngine (DB驱动) loaded.")
+except (ImportError, NameError) as e:
+    rule_engine = None
+    logger.info(f"RuleEngine not found: {e}")
+
 try:
     from private.signal_detector import signal_detector
     signal_detector.inject(
@@ -2026,6 +2036,74 @@ async def toggle_auto_trade_engine(request: Request):
 @app.get("/api/auto_trade/logs")
 async def get_auto_trade_logs():
     return {"status": "ok", "logs": auto_trade_runner.get_recent_logs()}
+
+# --- [AI-2026-07-01] RuleEngine API (DB驱动，LazyMode 前端用) ---
+@app.get("/api/rule_engine/status")
+async def get_rule_engine_status():
+    if not rule_engine:
+        return {"status": "error", "message": "RuleEngine not loaded", "running": False, "rules": []}
+    rules = rule_engine.get_all_rules()
+    return {"status": "ok", "running": rule_engine.running, "rules": rules}
+
+@app.post("/api/rule_engine/toggle")
+async def toggle_rule_engine(request: Request):
+    if not rule_engine:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "RuleEngine not loaded"})
+    data = await request.json()
+    action = data.get("action")
+    if action == "start":
+        rule_engine.start()
+        return {"status": "ok", "running": True}
+    elif action == "stop":
+        rule_engine.stop()
+        return {"status": "ok", "running": False}
+    return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid action"})
+
+@app.post("/api/rule_engine/rule_add")
+async def add_rule_engine_rule(request: Request):
+    if not rule_engine:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "RuleEngine not loaded"})
+    data = await request.json()
+    # 自动映射 hedge_symbol
+    fund_code = data.get("fund_code", "")
+    hedge = data.get("hedge_symbol", "")
+    if not hedge:
+        hedge = rule_engine._lookup_hedge(fund_code)
+    result = rule_engine.add_rule({
+        "fund_code": fund_code,
+        "hedge_symbol": hedge,
+        "direction": data.get("direction", "open"),
+        "condition": data.get("condition", "lt"),
+        "threshold": data.get("threshold", -0.5),
+        "pos_constraint": data.get("pos_constraint"),
+        "pos_value": data.get("pos_value"),
+        "cash_constraint": data.get("cash_constraint"),
+        "cash_value": data.get("cash_value"),
+        "enabled": data.get("enabled", True),
+        "note": data.get("note", ""),
+    })
+    return result
+
+@app.post("/api/rule_engine/rule_update/{rule_id}")
+async def update_rule_engine_rule(rule_id: int, request: Request):
+    if not rule_engine:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "RuleEngine not loaded"})
+    data = await request.json()
+    success = rule_engine.update_rule(rule_id, data)
+    return {"status": "ok" if success else "error"}
+
+@app.delete("/api/rule_engine/rule/{rule_id}")
+async def delete_rule_engine_rule(rule_id: int):
+    if not rule_engine:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "RuleEngine not loaded"})
+    rule_engine.delete_rule(rule_id)
+    return {"status": "ok"}
+
+@app.get("/api/rule_engine/logs")
+async def get_rule_engine_logs():
+    if not rule_engine:
+        return {"status": "ok", "logs": []}
+    return {"status": "ok", "logs": rule_engine.get_recent_logs()}
 
 # --- AutoExecutor (Lazy Trader 自动执行) APIs ---
 @app.get("/api/signal_detector/status")
