@@ -6,6 +6,7 @@ from arbcore.fetchers.realtime import RealtimeMarketManager
 from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.ib_reader import IBReader
 from arbcore.fetchers.futu_reader import FutuReader
+from arbcore.fetchers.data_fetcher import DataFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,9 @@ class MarketDataService:
         except Exception as e:
             logger.warning(f"富途 Reader 初始化失败: {e}")
             self.futu_reader = None
+        
+        # [白银] 初始化 DataFetcher（新浪数据源）
+        self.data_fetcher = DataFetcher()
         
         # [V10.1] 富途兜底日志去重：每 symbol 每 300 秒最多记一次 warning
         self._futu_warn_cooldown: Dict[str, float] = {}
@@ -131,6 +135,11 @@ class MarketDataService:
                     bid = price_data.get('bid', 0) if isinstance(price_data, dict) else 0
                     ask = price_data.get('ask', 0) if isinstance(price_data, dict) else 0
                     if bid > 0:
+                        # [AI-2026-07-02] 低流动性时 IB 只推送买一价，ib_reader 用 bid 平替 ask
+                        # bid==ask 说明没有有效价差，返回 None 让前端显示"—"而非错误价格
+                        if bid == ask:
+                            logger.debug(f"[MDS] {symbol} bid=ask={bid}，无有效价差，跳过")
+                            return None
                         self._circuit_record_success('IB')
                         return {
                             'symbol': symbol,
@@ -143,7 +152,14 @@ class MarketDataService:
                 # IB已连接但prices中没有该symbol，启动轮询线程获取数据
                 if not getattr(self.ib_reader, 'running', False):
                     self.ib_reader.start_polling()
-                logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
+                # [AI-2026-07-02] 限频：每个 symbol 每 30 秒只打一次日志，防刷屏
+                now = time.time()
+                if not hasattr(self, '_ib_wait_log_time'):
+                    self._ib_wait_log_time = {}
+                last_log = self._ib_wait_log_time.get(symbol, 0)
+                if now - last_log > 30:
+                    logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
+                    self._ib_wait_log_time[symbol] = now
                 return None
             elif self.ib_reader and not self.ib_reader.connected:
                 # [V10.12] IB 未连接不算失败（用户尚未点击连接按钮），不触发熔断
@@ -284,3 +300,79 @@ class MarketDataService:
             except:
                 pass
         return sources
+    
+    # [AI-2026-07-03] 修复 SI 实时估值公式：对齐 Woody — 将 SI 转 CNY/kg 后与 AG0 昨结算比，而非直接用 SI 百分比涨跌幅
+    def get_si_based_valuation(self, nav_t1: float, calibration_factor: float = 1.0, position: float = 0.95,
+                                ag0_prev_settle: float = 0, ag0_realtime: float = 0) -> Optional[Dict]:
+        """基于 SI 国际银价的实时估值（和 Woody GetRealtimeNetValue 一致）
+        
+        Woody 公式（PHP）：
+            ① _RealtimeCallback():
+               $fPairVal = 1000.0 * hf_SI(美元/盎司) * fx_susdcnh(汇率) / 31.1035
+               将 SI 从美元/盎司转为人民币/千克，和 AG0 同单位
+            ② EstFromPair():
+               $fVal = QdiiGetVal($fPairVal, $fCny, $this->fFactor)
+               用 calibrationhistory 校准因子映射到基金净值
+            ③ FundAdjustPosition():
+               return FundAdjustPosition($position, $fVal, $lastCalibrationVal)
+        
+        本程序实现（无 calibrationhistory 表时）：
+            si_cny_per_kg = SI(USD/oz) × CNH × 1000 / 31.1035   ← 同 Woody ①
+            ratio = si_cny_per_kg / ag0_prev_settle              ← 与 AG0 昨结算比
+            rt_val = nav_t1 × ratio                               ← 同 AG0 参考估值逻辑
+        
+        Args:
+            nav_t1: T-1 日基金净值
+            calibration_factor: 校准因子（暂未使用，保留参数）
+            position: 仓位比率（默认 0.95）
+            ag0_prev_settle: AG0 昨结算价（必需！做比值基准）
+            ag0_realtime: AG0 实时价格（用于参考）
+        
+        Returns:
+            dict { 'nav', 'si_usd_oz', 'si_cny_per_kg', 'cnh_rate', 'ag0_prev_settle', 'position', 'source' } 或 None
+        """
+        try:
+            # 1. 获取 SI 实时价格（美元/盎司）
+            si_data = self.data_fetcher.fetch_si_from_sina()
+            if not si_data or si_data['price'] <= 0:
+                logger.warning("SI 实时价格获取失败")
+                return None
+            
+            si_usd_oz = si_data['price']
+            
+            # 2. 获取 CNH 离岸汇率（和 Woody fx_susdcnh 一致）
+            cnh_data = self.data_fetcher.fetch_cnh_from_sina()
+            if not cnh_data or cnh_data['rate'] <= 0:
+                logger.warning("CNH 汇率获取失败")
+                return None
+            cnh_rate = cnh_data['rate']
+            
+            # 3. 需要 AG0 昨结算价做比值基准
+            if ag0_prev_settle <= 0:
+                logger.warning("AG0 昨结算价为 0，无法计算 SI 实时估值")
+                return None
+            
+            # 4. 把 SI 从美元/盎司转为人民币/千克（同 Woody ①）
+            #    1000 g/kg × CNH ¥/$ ÷ 31.1035 g/oz = 转换因子
+            si_cny_per_kg = si_usd_oz * cnh_rate * 1000.0 / 31.1035
+            
+            # 5. 用 SI 折算人民币价与 AG0 昨结算的比值推算净值（同参考估值逻辑）
+            ratio = si_cny_per_kg / ag0_prev_settle
+            rt_val = nav_t1 * ratio
+            
+            logger.info(f"[SI估值] SI={si_usd_oz}$/oz CNH={cnh_rate} → {si_cny_per_kg:.2f}¥/kg "
+                        f"AG0昨结算={ag0_prev_settle} ratio={ratio:.6f} NAV={nav_t1} → val={rt_val:.4f}")
+            
+            return {
+                'nav': round(rt_val, 4),
+                'si_usd_oz': si_usd_oz,
+                'si_cny_per_kg': round(si_cny_per_kg, 2),
+                'cnh_rate': cnh_rate,
+                'ag0_prev_settle': ag0_prev_settle,
+                'si_ratio': round(ratio, 6),
+                'position': position,
+                'source': '新浪 hf_SI + fx_susdcnh'
+            }
+        except Exception as e:
+            logger.error(f"SI 实时估值计算失败: {e}")
+            return None

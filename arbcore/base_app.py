@@ -51,7 +51,7 @@ class BaseApp:
     """
     工业级应用基类 (Industrial Grade V2.2)
     """
-    def __init__(self, name, config_name="lof_config.yaml", app_dir=None):
+    def __init__(self, name, config_name="lof_config.yaml", app_dir=None, log_dir=None):
         # 如果没有传 app_dir，则尝试自动发现（当前脚本所在的目录）
         if app_dir is None:
             # 找到调用者的目录
@@ -64,7 +64,8 @@ class BaseApp:
                 app_dir = os.getcwd()
 
         self.app_dir = app_dir
-        log_dir = os.path.join(self.app_dir, "logs")
+        if log_dir is None:
+            log_dir = os.path.join(self.app_dir, "logs")
         self.logger = setup_logging(name, log_dir, log_file_prefix=name)
         
         self.db = DatabaseManager()

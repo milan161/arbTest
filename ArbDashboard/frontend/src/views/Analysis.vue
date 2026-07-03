@@ -1060,7 +1060,6 @@ const etfVal = computed(() => {
   if (portfolio.length > 0) {
     const fxChange = currentFx / (baseFx || 1.0)
     let wChange = 0.0
-    let validW = 0.0
     
     for (const p of portfolio) {
       const fullSym = p.symbol || ''
@@ -1071,16 +1070,13 @@ const etfVal = computed(() => {
       const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
       const weight = (parseFloat(p.weight) || 0) / 100.0
       
-      if (cPrice > 0 && bPrice > 0 && weight > 0) {
+      // [AI-2026-07-02] 负权重（空头）不应被忽略，权重总和≠1时不归一化
+      if (cPrice > 0 && bPrice > 0 && weight != 0) {
         wChange += (cPrice / bPrice) * weight
-        validW += weight
       }
     }
     
-    if (validW > 0) {
-      if (Math.abs(validW - 1.0) > 0.001) {
-        wChange = wChange / validW
-      }
+    if (wChange !== 0) {
       const netRatio = pos * (wChange * fxChange - 1.0)
       return baseNav * (1.0 + netRatio)
     }
@@ -1249,11 +1245,12 @@ const lofQtyEtf = computed(() => {
         const cleanSym = fullSym.replace(/^\^/, '').split('-')[0].toUpperCase()
         const cPrice = parseFloat(testEtfPrices[cleanSym]) || 0
         const weight = (parseFloat(p.weight) || 0) / 100.0
-        if (cPrice > 0 && weight > 0) {
+        if (cPrice > 0 && weight != 0) {
           const qty = (targetExposureUSD * weight) / cPrice
           portfolioBreakdown.push({
             symbol: fullSym,
-            qty: qty.toFixed(1)
+            qty: qty.toFixed(1),
+            isShort: qty < 0
           })
         }
       }
@@ -1549,17 +1546,18 @@ const fetchValuationMeta = async () => {
 
 const fetchAll = () => { fetchIntraday(); fetchBasket(); fetchHistoryMeta(); fetchRealtimeDepth(); fetchValuationMeta(); }
 
-const { sendLofOrder, sendIbOrder } = useOrderLogic()
+const { sendLofOrder, sendIbOrder, sendDirectIbOrder } = useOrderLogic()
 
 const sendOrder = async (action: string, brokerType: 'lof' | 'ib' | 'ib_future') => {
   if (brokerType === 'lof') {
     await sendLofOrder(action, fundCode.value, fundName.value, simLofPrice.value, orderVol.value, lofBroker.value)
   } else if (brokerType === 'ib') {
     const tradeEtf = meta.value?.fund_config?.trade_etf?.split(',')?.[0]?.trim() || ''
-    await sendIbOrder(action, tradeEtf, hedgePrice.value, hedgeVol.value, fundCode.value)
+    // [AI-2026-07-02] 实时沙盘使用直接 IB 下单，不走 LazyTrader
+    await sendDirectIbOrder(action, tradeEtf, hedgePrice.value, hedgeVol.value)
   } else if (brokerType === 'ib_future') {
     const tradeFuture = meta.value?.fund_config?.trade_future || ''
-    await sendIbOrder(action, tradeFuture, testFutPrice.value, targetLotsFuture.value, fundCode.value)
+    await sendDirectIbOrder(action, tradeFuture, testFutPrice.value, targetLotsFuture.value)
   }
 }
 

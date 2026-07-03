@@ -12,7 +12,7 @@
       </template>
 
       <p style="font-size: 12px; color: #64748b; margin: 0 0 12px 0;">
-        比价公式: (AG_settle / (USDCNY × 32.15)) / SI_close &nbsp;|&nbsp; 32.15 = 金衡盎司/千克转换系数
+        比价公式: (AG_settle × 1000 / (USDCNH × 31.1035)) / SI_close &nbsp;|&nbsp; 31.1035 = 金衡盎司/克转换系数
       </p>
 
       <div v-if="silverRatioLoading" style="text-align: center; padding: 40px; color: #999;">
@@ -26,11 +26,11 @@
           <thead>
             <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0;">
               <th style="padding: 6px 8px; text-align: left;">日期</th>
-              <th style="padding: 6px 8px; text-align: right;">AG收盘(¥/kg)</th>
-              <th style="padding: 6px 8px; text-align: right;">AG结算(¥/kg)</th>
-              <th style="padding: 6px 8px; text-align: right;">成交量(手)</th>
+              <th style="padding: 6px 8px; text-align: right;">价格(¥/kg)</th>
+              <th style="padding: 6px 8px; text-align: right;">数量(手)</th>
+              <th style="padding: 6px 8px; text-align: right;">结算价(¥/kg)</th>
               <th style="padding: 6px 8px; text-align: right;">SI($/oz)</th>
-              <th style="padding: 6px 8px; text-align: right;">USDCNY</th>
+              <th style="padding: 6px 8px; text-align: right;">USDCNH</th>
               <th style="padding: 6px 8px; text-align: right; color: #d97706; font-weight: bold;">比价</th>
             </tr>
           </thead>
@@ -39,10 +39,10 @@
                 :style="{ background: row.ratio ? '#fffbeb' : '#f9fafb', borderBottom: '1px solid #f1f5f9' }">
               <td style="padding: 4px 8px;">{{ row.date ? row.date.substring(5) : '-' }}</td>
               <td style="padding: 4px 8px; text-align: right;">{{ row.ag_close != null ? row.ag_close.toFixed(2) : '-' }}</td>
-              <td style="padding: 4px 8px; text-align: right;">{{ row.ag_settle != null ? row.ag_settle.toFixed(2) : '-' }}</td>
               <td style="padding: 4px 8px; text-align: right;">{{ row.ag_volume != null ? row.ag_volume.toLocaleString() : '-' }}</td>
+              <td style="padding: 4px 8px; text-align: right;">{{ row.ag_settle != null ? row.ag_settle.toFixed(2) : '-' }}</td>
               <td style="padding: 4px 8px; text-align: right;">{{ row.si_close != null ? row.si_close.toFixed(2) : '-' }}</td>
-              <td style="padding: 4px 8px; text-align: right;">{{ row.usd_cny != null ? row.usd_cny.toFixed(4) : '-' }}</td>
+              <td style="padding: 4px 8px; text-align: right;">{{ row.usd_cnh != null ? row.usd_cnh.toFixed(4) : '-' }}</td>
               <td style="padding: 4px 8px; text-align: right; font-weight: bold; color: #d97706;">
                 {{ row.ratio != null ? row.ratio.toFixed(4) : '-' }}
               </td>

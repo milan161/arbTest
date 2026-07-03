@@ -114,6 +114,7 @@ class IBReader(EWrapper, EClient):
             return False
         target_port = self.target_ports[self.current_port_index]
         print(f"[IBReader] 尝试连接 IB Gateway/TWS (端口: {target_port}, ClientId: {self.client_id})...")
+        self.next_order_id = None  # [AI-2026-07-02] 每次新连接重置订单ID
         try:
             self.connect("127.0.0.1", target_port, clientId=self.client_id)
             api_thread = threading.Thread(target=self.run, daemon=True)
@@ -336,11 +337,14 @@ class IBReader(EWrapper, EClient):
         self.connected = False
         self.last_connect_time = 0
         self.current_port_index = 0
+        self.next_order_id = None  # [AI-2026-07-02] 重连后重置订单ID，确保 reqIds 重新获取
         for attempt in range(1, self.max_retries + 1):
             try:
                 if self.connect_to_ib():
                     logger.info(f"[IB] 手动重连成功 (第 {attempt} 次)")
                     self.disabled = False
+                    # [AI-2026-07-02] 连接成功后立即启动轮询线程，不等前端请求懒加载
+                    self.start_polling()
                     return True, f"IB 连接成功 (第 {attempt} 次尝试)"
             except Exception as e:
                 logger.warning(f"[IB] 重连失败 (第 {attempt}/{self.max_retries} 次): {e}")
@@ -534,6 +538,9 @@ class IBReader(EWrapper, EClient):
         order.lmtPrice = float(price)
         order.tif = "DAY"
         order.outsideRth = True # 与测试脚本保持100%一致，允许盘外交易
+        # [AI-2026-07-02] 显式清零 EtradeOnly，防部分 TWS/Gateway 版本拒单 (Error 10268)
+        order.eTradeOnly = False
+        order.firmQuoteOnly = False
         
         order_id = self.next_order_id
         self.placeOrder(order_id, contract, order)

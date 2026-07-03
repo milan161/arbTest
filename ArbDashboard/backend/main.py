@@ -15,7 +15,7 @@ from datetime import datetime
 # Setup logging
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 workspace_root = os.path.abspath(os.path.join(backend_dir, ".."))
-logs_dir = os.path.join(workspace_root, "logs")
+logs_dir = os.path.join(workspace_root, "logs")  # [AI-2026-07-02] 日志集中到 ArbDashboard/logs/
 
 if not os.path.exists(logs_dir):
     os.makedirs(logs_dir, exist_ok=True)
@@ -108,9 +108,10 @@ try:
     from services.config_manager_service import ConfigManagerService
     from services.ledger_service import LedgerService
     from services.etf_rotation_service import ETFRotationService
-    
+
+    # [AI-2026-07-02] 旧版信号监测引擎 (已从 private/ 移出到 services/，需要上传 GitHub)
     try:
-        from core.auto_trade.engine_runner import auto_trade_runner
+        from services.auto_trade.engine_runner import auto_trade_runner
     except ImportError:
         class DummyRunner:
             running = False
@@ -119,7 +120,7 @@ try:
             def get_recent_logs(self): return []
         auto_trade_runner = DummyRunner()
         auto_trade_runner.engine = type("DummyEngine", (), {"rules": [], "add_rule": lambda *a: "", "update_rule": lambda *a: False, "delete_rule": lambda *a: None, "save_rules": lambda *a: None})()
-    
+
     logger.info("Core modules imported successfully")
 except Exception as e:
     logger.error(f"Failed to import core modules: {e}")
@@ -276,14 +277,14 @@ except (ImportError, NameError) as e:
 try:
     from private.rule_engine import rule_engine
     # 注入依赖
-    rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, db_path=root_db_path)
+    rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, trading_service=trading_service, db_path=root_db_path)
     logger.info("✅ RuleEngine (DB驱动) loaded.")
 except (ImportError, NameError) as e:
     rule_engine = None
     logger.info(f"RuleEngine not found: {e}")
 
 try:
-    from private.signal_detector import signal_detector
+    from services.signal_detector import signal_detector
     signal_detector.inject(
         rule_engine=auto_trade_runner.engine,
         fund_service=fund_service,
@@ -374,15 +375,13 @@ async def lifespan(app: FastAPI):
         
         asyncio.create_task(start_mds_later())
 
-        # 4. SignalDetector（信号检测引擎 — 默认不启动，用户手动开启）
+        # SignalDetector（信号检测引擎 — 默认不启动，用户手动开启）
         if signal_detector:
             logger.info("SignalDetector 已就绪，等待用户手动启动")
             system_status.add_milestone("INFO", "信号检测引擎就绪")
         else:
             logger.info("SignalDetector 未加载")
             system_status.add_milestone("INFO", "信号检测引擎未加载")
-
-        # —— 旧版引擎完全禁用 ——
 
         # 5. 定义脚本路径和 Python 查找的公共函数
         def _get_scripts_dir():
@@ -1560,6 +1559,28 @@ async def place_manual_order(request: Request):
     )
     return res
 
+@app.post("/api/trading/ib_order")
+async def place_ib_order(request: Request):
+    """简单 IB 下单接口（实时沙盘用，不走 LazyTrader）"""
+    try:
+        body = await request.json()
+        action = body.get('action', 'BUY')
+        symbol = body.get('symbol', '')
+        quantity = int(body.get('quantity', 0))
+        price = float(body.get('price', 0))
+        if not symbol or quantity <= 0 or price <= 0:
+            return {"status": "error", "message": "参数不完整: symbol/quantity/price 必填"}
+        ib_reader = getattr(market_data_service, 'ib_reader', None)
+        if not ib_reader or not getattr(ib_reader, 'connected', False):
+            return {"status": "error", "message": "IB 未连接"}
+        # [AI-2026-07-02] 直接调用 ib_reader.place_us_order，不走 LazyTrader
+        success, msg = ib_reader.place_us_order(symbol, action, quantity, price)
+        logger.info(f"[IBOrder] {action} {quantity} {symbol} @ {price} -> {'OK' if success else 'FAIL'}: {msg}")
+        return {"status": "ok" if success else "error", "message": msg}
+    except Exception as e:
+        logger.error(f"[IBOrder] Error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
 @app.get("/api/system/accounts")
 async def get_accounts():
     """从隐私配置获取交易账号列表供前端渲染，不暴露给Git"""
@@ -1984,7 +2005,7 @@ async def runtime_health():
         "database": {"status": db_status},
     }
 
-# --- Auto Trade Engine APIs ---
+# --- Auto Trade Engine APIs (旧版信号监测，重命名文件避免冲突) ---
 @app.get("/api/auto_trade/rules")
 async def get_auto_trade_rules():
     return {"status": "ok", "rules": auto_trade_runner.engine.rules}
@@ -2204,6 +2225,119 @@ async def get_etf_rotation_history(group_id: int):
     """获取某分组的轮动历史数据"""
     data = etf_rotation_service.get_group_history(group_id)
     return {"status": "ok", "data": data}
+
+
+@app.get("/api/silver/ratio")
+async def get_silver_ratio():
+    """白银比价数据: (AG_settle / 1000 × 31.1035 / USDCNH) / SI_close
+    与 Woody stockhistorycn.php 完全一致的公式
+    
+    处理逻辑（对齐 Woody）：
+    - 历史日期：从 futures_daily + exchange_rate 读取（稳定）
+    - 今日日期：SI 和 CNH 从新浪实时抓取（Woody 每个页面访问都覆写 today row）
+    - 比价公式与 Woody stockhistoryparagraph.php 完全一致
+    """
+    conn = fund_service.db._get_conn()
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    now_hour = datetime.now().hour
+    
+    # 21:00 定稿：AG0 夜盘 21:00 开新一天的交易，21:00 后的实时价属于"明天"
+    # 对齐 Woody mystockref.php: $iHourMinute < 2100 才 _updateStockHistory
+    is_finalized = now_hour >= 21  # 21:00+ 今日数据定稿，不再覆写
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                a.date,
+                a.close_price AS ag_close,
+                a.settle_price AS ag_settle,
+                a.volume AS ag_volume,
+                s.close_price AS si_close,
+                COALESCE(e.usd_cnh, e.usd_cny_mid) AS usd_cnh
+            FROM futures_daily a
+            LEFT JOIN futures_daily s ON a.date = s.date AND s.symbol = 'SI'
+            LEFT JOIN exchange_rate e ON a.date = e.date
+            WHERE a.symbol = 'AG0'
+              AND a.close_price IS NOT NULL
+              AND s.close_price IS NOT NULL
+              AND (e.usd_cnh IS NOT NULL OR e.usd_cny_mid IS NOT NULL)
+            ORDER BY a.date DESC
+        """)
+        rows = cursor.fetchall()
+        data = []
+        
+        # 实时抓取今日 SI 和 CNH（对齐 Woody：21:00 前每次页面访问都覆写 today row）
+        today_si = None
+        today_cnh = None
+        if not is_finalized:
+            try:
+                si_raw = market_data_service.data_fetcher.fetch_si_from_sina()
+                if si_raw and si_raw.get('price', 0) > 0:
+                    today_si = si_raw['price']
+                cnh_raw = market_data_service.data_fetcher.fetch_cnh_from_sina()
+                if cnh_raw and cnh_raw.get('rate', 0) > 0:
+                    today_cnh = cnh_raw['rate']
+            except Exception as e:
+                logger.warning(f"[白银比价] 实时获取 SI/CNH 失败: {e}")
+        else:
+            logger.info(f"[白银比价] 今日数据已定稿 (≥21:00)，使用数据库存档值")
+        
+        for row in rows:
+            row_date = row[0]
+            ag_close = float(row[1]) if row[1] is not None else None
+            ag_settle = float(row[2]) if row[2] is not None else ag_close
+            ag_volume = int(row[3]) if row[3] is not None else None
+            
+            # 今日行：用实时 SI 和 CNH 覆盖（对齐 Woody 的 _updateStockHistory 机制）
+            if row_date == today_str:
+                si_close = today_si if today_si else float(row[4])
+                usd_cnh = today_cnh if today_cnh else float(row[5])
+            else:
+                si_close = float(row[4])
+                usd_cnh = float(row[5])
+            
+            ratio = (ag_settle / 1000.0 * 31.1035 / usd_cnh) / si_close if (usd_cnh > 0 and si_close > 0 and ag_settle) else None
+            data.append({
+                "date": row_date,
+                "ag_close": ag_close,
+                "ag_settle": ag_settle,
+                "ag_volume": ag_volume,
+                "si_close": round(si_close, 2),
+                "usd_cnh": round(usd_cnh, 4),
+                "ratio": round(ratio, 4) if ratio else None
+            })
+        
+        # 如果数据库还没有今日行但实时数据可用，拼一个今日行（用 AG0 新浪实时数据）
+        if (not data or data[0]['date'] != today_str) and today_si and today_cnh:
+            try:
+                ag0_raw = market_data_service.data_fetcher.fetch_ag0_from_sina()
+                if ag0_raw:
+                    ag_close = ag0_raw.get('price')
+                    ag_settle = ag0_raw.get('settle') or ag_close  # settle = parts[9] (今日结算价)
+                    ag_volume = ag0_raw.get('volume')
+                    ratio = None
+                    if ag_settle and today_si > 0 and today_cnh > 0:
+                        ratio = (ag_settle / 1000.0 * 31.1035 / today_cnh) / today_si
+                    today_row = {
+                        "date": today_str,
+                        "ag_close": ag_close,
+                        "ag_settle": ag_settle,
+                        "ag_volume": ag_volume,
+                        "si_close": round(today_si, 2),
+                        "usd_cnh": round(today_cnh, 4),
+                        "ratio": round(ratio, 4) if ratio else None
+                    }
+                    data.insert(0, today_row)
+            except Exception as e:
+                logger.warning(f"[白银比价] 实时获取 AG0 失败: {e}")
+        
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"获取白银比价失败: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
 
 
 # ==============================================================

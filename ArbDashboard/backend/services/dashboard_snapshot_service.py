@@ -41,14 +41,23 @@ class DashboardSnapshotService:
         if self._running:
             return
         self._running = True
-        await self.refresh_once("all", None, None)
+        # [AI-2026-07-03] 启动时仅刷新高优先级分类，低优先级延迟120s再启动
+        await self.refresh_once("黄金原油", None, "黄金原油")
+        await self.refresh_once("QDII欧美", None, "QDII欧美")
         self._tasks = [
             asyncio.create_task(self._loop("watchlist", self.high_interval, True, None)),
             asyncio.create_task(self._loop("黄金原油", self.high_interval, False, "黄金原油")),
             asyncio.create_task(self._loop("QDII欧美", self.high_interval, False, "QDII欧美")),
-            asyncio.create_task(self._normal_loop()),
+            asyncio.create_task(self._delayed_start_low_priority()),
         ]
         logger.info("Dashboard snapshot service started")
+
+    async def _delayed_start_low_priority(self, delay: float = 120.0):
+        """延迟启动低优先级分类（QDII亚洲/国内LOF/白银/现金管理）和全量快照，
+        给 daily_updater 留出完成时间，避免网络/CPU竞争。"""
+        await asyncio.sleep(delay)
+        await self.refresh_once("all", None, None)
+        await self._normal_loop()
 
     async def stop(self):
         self._running = False

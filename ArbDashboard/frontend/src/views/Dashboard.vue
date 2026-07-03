@@ -103,6 +103,11 @@
         />
       </div>
     </n-modal>
+
+    <!-- 白银比价弹窗 -->
+    <n-modal v-model:show="showSilverRatioModal" preset="card" title="白银比价监控 (161226)" style="width: 90%; max-width: 1200px;">
+      <SilverRatio />
+    </n-modal>
   </div>
 </template>
 
@@ -123,6 +128,7 @@ import { formatPrice, formatValuation, formatPercent, formatPremium,
          formatVolume, formatShares, formatSharesChange, formatTurnoverRate,
          formatIndexPrice, priceColor, shortDate, cleanFundName } from '../utils'
 import { getFundHistory } from '../api'
+import SilverRatio from './SilverRatio.vue'
 
 const router = useRouter()
 
@@ -138,6 +144,7 @@ const { milestones } = storeToRefs(appStore)
 
 // ===== 本地状态（无需进 Store） =====
 const showHistoryModal = ref(false)
+const showSilverRatioModal = ref(false)
 const selectedFund = ref<any>(null)
 const isCashManagementFund = computed(() => {
   return ['511880', '511360', '511520'].includes(selectedFund.value?.fund_code)
@@ -267,23 +274,25 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '代码', key: 'fund_code', width: 42, fixed: 'left', align: 'center',
+    title: '代码', key: 'fund_code', width: 65, fixed: 'left', align: 'center',
     sorter: (a: any, b: any) => a.fund_code.localeCompare(b.fund_code),
     render(row: any) { return h(NText, { code: true, class: 'code-cell' }, { default: () => row.fund_code || '-' }) }
   },
   {
-    title: '名称', key: 'fund_name', width: 68, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
+    title: '名称', key: 'fund_name', fixed: 'left', align: 'center', ellipsis: { tooltip: true },
     render(row: any) {
-      return h('span', { class: 'fund-name-cell' }, cleanFundName(row.fund_name))
+      return h('span', { class: 'fund-name-cell clickable-cell',
+        onClick: () => { selectedFund.value = row; showHistoryModal.value = true; fundStore.fetchFundHistory(row.fund_code) }
+      }, cleanFundName(row.fund_name))
     }
   },
   {
-    title: '现价', key: 'price', width: 38, align: 'center',
+    title: '现价', key: 'price', align: 'center',
     sorter: (a: any, b: any) => (a.price || 0) - (b.price || 0),
     render(row: any) { return h('span', { class: 'num-cell' }, formatPrice(row.price)) }
   },
   {
-    title: '涨跌幅', key: 'price_change', width: 54, align: 'center',
+    title: '涨跌幅', key: 'price_change', align: 'center',
     sorter: (a: any, b: any) => (a.price_change || 0) - (b.price_change || 0),
     render(row: any) {
       const chg = row.price_change || 0
@@ -296,7 +305,7 @@ const allColumns: DataTableColumns<any> = [
       h('div', { style: 'font-size: 12px; font-weight: bold;' }, '实时估值'),
       h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击进实盘')
     ]),
-    key: 'rt_val_display', width: 58, align: 'center',
+    key: 'rt_val_display', align: 'center',
     className: 'col-rt-val',
     render(row: any) {
       const val = row.rt_val && row.rt_val > 0 ? row.rt_val.toFixed(4) : '-'
@@ -307,7 +316,7 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '实时溢价', key: 'rt_premium', width: 52, align: 'center',
+    title: '实时溢价', key: 'rt_premium', width: 80, align: 'center',
     render(row: any) {
       if (!row.rt_val || !row.price) return h('span', { class: 'num-cell muted' }, '-')
       const p = (row.price / row.rt_val - 1) * 100
@@ -315,11 +324,11 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: 'T-2/1日净值', key: 'nav', width: 52, align: 'center',
+    title: 'T-2/1日净值', key: 'nav', align: 'center',
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.nav)) }
   },
   {
-    title: '净值日期', key: 'nav_date', width: 40, align: 'center',
+    title: '净值日期', key: 'nav_date', align: 'center',
     render(row: any) { return h(NText, { depth: 3, class: 'date-cell' }, { default: () => shortDate(row.nav_date) }) }
   },
   {
@@ -327,7 +336,7 @@ const allColumns: DataTableColumns<any> = [
       h('div', { style: 'font-size: 12px; font-weight: bold;' }, '静态估值'),
       h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击看历史记录')
     ]),
-    key: 'static_val_display', width: 60, align: 'center',
+    key: 'static_val_display', align: 'center',
     className: 'col-static-val',
     render(row: any) {
       const val = formatValuation(row.static_val)
@@ -338,7 +347,7 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '静态溢价', key: 'static_premium', width: 52, align: 'center',
+    title: '静态溢价', key: 'static_premium', width: 80, align: 'center',
     sorter: (a: any, b: any) => (a.static_premium || 0) - (b.static_premium || 0),
     render(row: any) {
       if (!row.static_premium) return '-'
@@ -346,7 +355,7 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '成交额(万)', key: 'volume', width: 56, align: 'right',
+    title: '成交额(万)', key: 'volume', width: 68, align: 'right',
     sorter: (a: any, b: any) => (a.volume || 0) - (b.volume || 0),
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatVolume(row.volume)) }
   },
@@ -605,8 +614,10 @@ const columns = computed<DataTableColumns<any>>(() => {
     
     const staticPremIndex = cols.findIndex(c => c.key === 'static_premium')
     cols.splice(staticPremIndex + 1, 0, 
-      { title: '实时成交价(AG0)', key: 'ag0_price', width: 100, align: 'center', render(row: any) { return h('span', { class: 'num-cell' }, row.ag0_price ? row.ag0_price.toFixed(0) : '-') } },
-      { title: '昨结算价(AG0)', key: 'ag0_settlement', width: 100, align: 'center', render(row: any) { return h('span', { class: 'num-cell muted' }, row.ag0_settlement ? row.ag0_settlement.toFixed(0) : '-') } }
+      { title: () => h('div', { style: 'line-height: 1.3; text-align: center;' }, [h('div', {}, '实时成交价'), h('div', { style: 'font-size: 10px; color: #64748b;' }, '(AG0)')]), key: 'ag0_price', width: 100, align: 'center', render(row: any) { return h('span', { class: 'num-cell' }, row.ag0_price ? row.ag0_price.toFixed(0) : '-') } },
+      { title: () => h('div', { style: 'line-height: 1.3; text-align: center;' }, [h('div', {}, '昨结算价'), h('div', { style: 'font-size: 10px; color: #64748b;' }, '(AG0)')]), key: 'ag0_settlement', width: 100, align: 'center', render(row: any) { return h('span', { class: 'num-cell muted' }, row.ag0_settlement ? row.ag0_settlement.toFixed(0) : '-') } },
+      { title: () => h('div', { style: 'line-height: 1.3; text-align: center;' }, [h('div', {}, '实时估值'), h('div', { style: 'font-size: 10px; color: #64748b;' }, '(SI)')]), key: 'si_val', width: 100, align: 'center', className: 'col-si-val', render(row: any) { return h('span', { class: 'num-cell clickable-cell', style: { cursor: 'pointer', color: '#2563eb' }, onClick: () => { showSilverRatioModal.value = true } }, row.si_val != null ? row.si_val.toFixed(4) : '-') } },
+      { title: () => h('div', { style: 'line-height: 1.3; text-align: center;' }, [h('div', {}, '实时溢价'), h('div', { style: 'font-size: 10px; color: #64748b;' }, '(SI)')]), key: 'si_premium', width: 95, align: 'center', render(row: any) { const v = row.si_premium; if (v == null) return '-'; return h('span', { class: 'num-cell', style: { color: priceColor(v) } }, formatPremium(v)) } }
     )
   }
 
@@ -619,13 +630,22 @@ const columns = computed<DataTableColumns<any>>(() => {
   // 并重命名列 + 添加债券ETF专属列
   if (currentTab.value === '现金管理') {
     // 过滤掉不需要的列
-    cols = cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'index_name', 'purchase_status', 'redemption_status', 'static_val_display', 'static_premium', 'rt_premium'].includes(c.key))
+    cols = cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'index_name', 'purchase_status', 'redemption_status', 'static_premium', 'rt_premium'].includes(c.key))
     
     // 重命名列
     cols.forEach(col => {
       if (col.key === 'nav') col.title = '最新净值'
       if (col.key === 'rt_val_display') col.title = '估值'
     })
+    
+    // [AI-2026-07-03] static_val_display（静态估值）移到净值日期右侧
+    const svIdx = cols.findIndex(c => c.key === 'static_val_display')
+    let staticValCol = null
+    if (svIdx >= 0) {
+      staticValCol = cols.splice(svIdx, 1)[0]
+      staticValCol.title = '静态估值'
+      staticValCol.width = 60
+    }
     
     // 估值列之后插入折价几根毛和溢价（基于估值计算，不用净值）
     const rtValIndex = cols.findIndex(c => c.key === 'rt_val_display')
@@ -640,10 +660,12 @@ const columns = computed<DataTableColumns<any>>(() => {
       )
     }
     
-    // 日均增长放在净值日期之后
+    // 静态估值 + 日均增长 + 国债指数 + 国债期货 放在净值日期之后
     const navDateIndex = cols.findIndex(c => c.key === 'nav_date')
     if (navDateIndex >= 0) {
-      cols.splice(navDateIndex + 1, 0,
+      const insertAfter: any[] = []
+      if (staticValCol) insertAfter.push(staticValCol)
+      insertAfter.push(
         { title: '日均增长', key: 'avg_daily_growth', width: 72, align: 'center',
           render(row: any) {
             const g = row.avg_daily_growth
@@ -666,6 +688,7 @@ const columns = computed<DataTableColumns<any>>(() => {
           }
         }
       )
+      cols.splice(navDateIndex + 1, 0, ...insertAfter)
     }
     return cols
   }
@@ -863,11 +886,18 @@ const tableScrollX = computed(() => {
 :deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-static-val) {
   background-color: #fff7ed !important;
 }
+:deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-si-val),
+:deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-si-val) {
+  background-color: #f0fdf4 !important;
+}
 :deep(.n-data-table-th.col-rt-val) {
   background-color: #e0f2fe !important;
 }
 :deep(.n-data-table-th.col-static-val) {
   background-color: #ffedd5 !important;
+}
+:deep(.n-data-table-th.col-si-val) {
+  background-color: #dcfce7 !important;
 }
 
 /* [交换位置] 时钟 + 汇率样式 */

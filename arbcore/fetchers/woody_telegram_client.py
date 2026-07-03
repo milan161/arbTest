@@ -13,7 +13,7 @@ try:
 except ImportError:
     try:
         # 兜底：从统一的本地私密配置导入
-        from arbcore.config.account_private import BOT_Key as BOT_TOKEN
+        from arbcore.config.account_private import WOODY_BOT_TOKEN as BOT_TOKEN
     except ImportError:
         BOT_TOKEN = ""
 

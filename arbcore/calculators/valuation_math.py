@@ -41,23 +41,18 @@ def calculate_basket_valuation(
         return None
         
     fx_change = current_fx / base_fx
-    w_change, valid_w = 0.0, 0.0
+    w_change = 0.0
     
     for item in portfolio_items:
         c_p = item.get('current_price', 0)
         b_p = item.get('base_price', 0)
-        weight = item.get('weight', 0) # 0-1 之间
+        weight = item.get('weight', 0) # 可能为负（空头/对冲头寸）
         
-        if c_p > 0 and b_p > 0 and weight > 0:
+        if c_p > 0 and b_p > 0 and weight != 0:
             w_change += (c_p / b_p) * weight
-            valid_w += weight
             
-    if valid_w <= 0:
+    if w_change == 0:
         return None
-        
-    # 归一化权重处理
-    if abs(valid_w - 1.0) > 0.001:
-        w_change = w_change / valid_w
         
     net_ratio = position * (w_change * fx_change - 1.0)
     return base_nav * (1.0 + net_ratio)

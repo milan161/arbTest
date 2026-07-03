@@ -8,25 +8,28 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 class MarketManager(BaseManager):
-    def upsert_exchange_rate(self, date: str, usd_cny_mid: float = None, hkd_cny_mid: float = None):
+    def upsert_exchange_rate(self, date: str, usd_cny_mid: float = None, hkd_cny_mid: float = None, usd_cnh: float = None):
         with self.lock:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT usd_cny_mid, hkd_cny_mid FROM exchange_rate WHERE date = ?", (date,))
+            # [AI-2026-07-03] 新增 usd_cnh 列支持
+            cursor.execute("SELECT usd_cny_mid, hkd_cny_mid, usd_cnh FROM exchange_rate WHERE date = ?", (date,))
             row = cursor.fetchone()
             
             exist_usd = row[0] if row else None
             exist_hkd = row[1] if row else None
+            exist_cnh = row[2] if row else None
             
             new_usd = usd_cny_mid if usd_cny_mid is not None else exist_usd
             new_hkd = hkd_cny_mid if hkd_cny_mid is not None else exist_hkd
+            new_cnh = usd_cnh if usd_cnh is not None else exist_cnh
             
-            query = "INSERT OR REPLACE INTO exchange_rate (date, usd_cny_mid, hkd_cny_mid, updated_at) VALUES (?, ?, ?, (datetime('now', 'localtime')))"
-            conn.execute(query, (date, new_usd, new_hkd))
+            query = "INSERT OR REPLACE INTO exchange_rate (date, usd_cny_mid, hkd_cny_mid, usd_cnh, updated_at) VALUES (?, ?, ?, ?, (datetime('now', 'localtime')))"
+            conn.execute(query, (date, new_usd, new_hkd, new_cnh))
             conn.commit()
             conn.close()
 
-    def upsert_futures_daily(self, date: str, symbol: str, settle_price: float = None, calibration: float = None, close_price: float = None):
+    def upsert_futures_daily(self, date: str, symbol: str, settle_price: float = None, calibration: float = None, close_price: float = None, volume: int = None):
         with self.lock:
             conn = self._get_conn()
             conn.execute("INSERT OR IGNORE INTO futures_daily (date, symbol) VALUES (?, ?)", (date, symbol))
@@ -36,6 +39,8 @@ class MarketManager(BaseManager):
                 conn.execute("UPDATE futures_daily SET calibration = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (calibration, date, symbol))
             if close_price is not None:
                 conn.execute("UPDATE futures_daily SET close_price = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (close_price, date, symbol))
+            if volume is not None:
+                conn.execute("UPDATE futures_daily SET volume = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (volume, date, symbol))
             conn.commit()
             conn.close()
             

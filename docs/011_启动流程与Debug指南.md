@@ -1,7 +1,7 @@
 # ArbDashboard 启动流程与 Debug 指南
 
 > 本文档描述 ArbDashboard（程序3）的完整启动流程、时序、常见冲突风险点，以及如何通过 Debug 输出定位问题。
-> 最后更新：2026-06-17
+> 最后更新：2026-07-03
 
 ---
 
@@ -119,11 +119,25 @@ Check the 'ArbNext Backend' window for error messages.
 ```
 17:04:24,469  分时采样服务启动
 17:04:24,469  自动交易引擎已禁用（安全模式）
-17:04:24,470  清晨刷新定时器注册
-17:04:24,470  自动净值更新定时器注册
-17:04:24,470  启动时自动运行 011 数据更新任务
+17:04:24,470  启动时自动运行 011 数据更新任务（daily_updater 子进程）
 17:04:24,490  011 任务已在后台启动
+17:04:24,500  DashboardSnapshotService 启动 → 仅刷新【黄金原油】【QDII欧美】  ← 低优先级 TAB 延迟 120 秒
+17:04:24,510  清晨刷新定时器注册
+17:04:24,510  自动净值更新定时器注册
 ```
+
+**DashboardSnapshotService 启动时序（V8.2+，2026-07-03 优化）：**
+
+| 时刻 | 事件 | 说明 |
+|------|------|------|
+| 启动时 | 刷新【黄金原油】【QDII欧美】数据 | 高优先级 TAB 立即可用 |
+| 启动 + 120 秒 | 刷新全量+低优先级分类（QDII亚洲/国内LOF/白银/现金管理） | 给 daily_updater 留足完成时间 |
+
+**设计意图**：每日首次启动时，`daily_updater` 子进程（011 任务）需要执行完整流水线（Woody VPS 同步、汇率、期货、份额、静态估值等），大约耗时 20-40 秒。DashboardSnapshotService 延迟 120 秒再启动低优先级分类的指数数据获取，避免：
+
+- 网络/CPU 资源被低优先级 API 请求抢占
+- 大量 `[INDEX-TENCENT]`/`[INDEX-EASTMONEY]` 日志淹没 daily_updater 的关键输出
+- 前端低优先级 TAB 的首次加载变慢（延迟后再加载，数据已就绪）
 
 ### 3.3 后台连接阶段（~30 秒，非阻塞）
 
@@ -143,6 +157,37 @@ Check the 'ArbNext Backend' window for error messages.
 ```
 
 **关键**：这些后台连接失败（IB、QMT、富途）不影响前端页面展示，只是对应数据源不可用。
+
+### 3.4 VPS 数据同步机制（V8.2+，2026-07-03 优化）
+
+在 `daily_updater` 的完整流水线中，`_try_sync_all_from_vps()` 负责从云端 VPS 增量同步历史数据文件：
+
+```
+[VPS] 正在扫描云端所有缺失的 woody 历史数据...
+  → 遍历 VPS 上所有 woody_*.json 文件
+  → 对每个文件：检查本地是否存在 & 是否已标记为已同步
+  → 未标记 → 读取解析 → 标记 access_sync_status(sync_date, "woody_vps_sync")
+```
+
+**历史问题（2026-07-03 前）**：跳过检查使用 key `"woody_vps_sync"`，但实际标记用 `"woody_lof_batch"` → key 不匹配 → 每次启动都重复解析所有历史文件（约 26 天 × 20+ 基金 = 20 秒浪费）。
+
+**修复**：成功读取文件后立即用 `mark_access_synced(file_date, f"{data_type}_vps_sync")` 标记，与跳过检查使用同一 key。次日启动时会跳过已处理文件。
+
+**数据类型的 sync key 对照表**：
+
+| 数据类型 | Skip check key | Mark key | 一致? |
+|---------|---------------|---------|-------|
+| woody | `woody_vps_sync` | `woody_vps_sync` | ✅ (v8.2) |
+| fx | `fx_vps_sync` | `fx_vps_sync` | ✅ |
+| futures | `futures_vps_sync` | `futures_vps_sync` | ✅ |
+| shares | `shares_vps_sync` | `jsl_shares_data` | ⚠️ (通过顶层防刷跳过) |
+
+**注意事项**：
+- `access_sync_status` 中超过 7 天的记录会被 `cleanup_old_data()` 自动清理
+- 如果需要强制重新同步某天的数据，手动删除对应记录：
+  ```sql
+  DELETE FROM access_sync_status WHERE sync_date='YYYY-MM-DD' AND access_source='woody_vps_sync';
+  ```
 
 ---
 
@@ -315,4 +360,4 @@ tasklist | findstr node
 
 ---
 
-*最后更新：2026-06-17*
+*最后更新：2026-07-03*

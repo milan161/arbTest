@@ -216,6 +216,46 @@ class SSEFuturesReader:
 _sse_reader = SSEFuturesReader()
 _sse_reader.start()
 
+# [AI-2026-07-02] AG0 期货盘口：东财 SSE 价格 + 新浪买卖盘口
+def _get_ag0_future_quote():
+    """获取沪银 AG0 实时盘口数据（东财 SSE 价格 + 新浪 bid/ask）"""
+    quote = None
+    # 优先：东财 SSE 价格和结算价
+    if _sse_reader.ag0_price > 0:
+        quote = {
+            'price': _sse_reader.ag0_price,
+            'bid': _sse_reader.ag0_price,
+            'ask': _sse_reader.ag0_price,
+            'settlement': _sse_reader.ag0_settlement,
+            'vwap': _sse_reader.ag0_vwap,
+            'source': '东财SSE'
+        }
+    # 补充：新浪 nf_AG0 获取买卖盘口
+    try:
+        import requests
+        r = requests.get('http://hq.sinajs.cn/list=nf_AG0',
+                         headers={'Referer': 'https://finance.sina.com.cn/'}, timeout=2.0)
+        if r.status_code == 200 and '="' in r.text:
+            parts = r.text.split('"')[1].split(',')
+            if len(parts) >= 11:
+                sina_price = float(parts[8]) if parts[8] else 0.0
+                sina_settle = float(parts[10]) if parts[10] else 0.0
+                sina_bid = float(parts[6]) if len(parts) > 6 and parts[6] else 0.0
+                sina_ask = float(parts[7]) if len(parts) > 7 and parts[7] else 0.0
+                if not quote:
+                    quote = {'price': sina_price, 'source': '新浪'}
+                # 用新浪覆盖 bid/ask（更准），保留东财的结算价
+                if sina_bid > 0:
+                    quote['bid'] = sina_bid
+                if sina_ask > 0:
+                    quote['ask'] = sina_ask
+                if sina_settle > 0:
+                    quote['settlement'] = sina_settle
+                quote['source'] = '东财SSE+新浪'
+    except Exception:
+        pass
+    return quote
+
 # [V10.2] 指数涨跌幅日内缓存：同指数同日只查一次新浪
 _index_pct_cache = {}  # "HSCEI_2026-06-18" -> float
 
@@ -1149,6 +1189,28 @@ class FundService:
                             # 联动计算官方溢价
                             if metrics['static_val'] > 0 and metrics.get('price', 0) > 0:
                                 metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
+                        
+                        # [SI 实时估值] 基于 COMEX 白银期货的实时估值（和 Woody GetRealtimeNetValue 一致）
+                        # [AI-2026-07-03] 传入 settlement_price(AG0昨结算) 给公式做比值基准
+                        if self.market_data_service:
+                            try:
+                                si_result = self.market_data_service.get_si_based_valuation(
+                                    nav_t1=nav_home,
+                                    calibration_factor=1.0,
+                                    position=float(fund.get('pos_ratio') or 0.95),
+                                    ag0_prev_settle=settlement_price,
+                                    ag0_realtime=ag_future_price
+                                )
+                                if si_result and si_result.get('nav') and si_result['nav'] > 0:
+                                    metrics['si_val'] = si_result['nav']
+                                    if metrics.get('price', 0) > 0:
+                                        metrics['si_premium'] = round((metrics['price'] / metrics['si_val'] - 1) * 100, 3)
+                                    else:
+                                        metrics['si_premium'] = None
+                            except Exception as e:
+                                logger.debug(f"[161226] SI 实时估值失败: {e}")
+                                metrics['si_val'] = None
+                                metrics['si_premium'] = None
 
 
                     # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子且无trade_etf的基金使用简化指数估值
@@ -1805,9 +1867,14 @@ class FundService:
                 fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
             else:
                 # [AI-2026-06-28] basket为空时，从 YAML 配置回退 valuation_portfolio
-                yaml_portfolio = fund.get('valuation_portfolio') or fund.get('hedging_portfolio')
-                if yaml_portfolio:
-                    fund_cfg["valuation_portfolio"] = yaml_portfolio
+                # [AI-2026-07-02] 修复：fund 变量未定义导致 NameError，此处暂时跳过 YAML 回退
+                # yaml_portfolio is fetched from config_service/lof_config.yaml if needed
+                try:
+                    yaml_portfolio = self.config_service.get_fund_config(code).get('valuation_portfolio', None) if self.config_service else None
+                    if yaml_portfolio:
+                        fund_cfg["valuation_portfolio"] = yaml_portfolio
+                except Exception:
+                    pass
 
             # 获取底层的 calculator 基准数据
             calculator = self._get_calculator()
@@ -1883,20 +1950,24 @@ class FundService:
             future_symbol = fund_cfg.get('trade_future', '')
             future_quote = None
             if future_symbol:
-                try:
-                    q = self.market_data_service.get_realtime_quote(future_symbol) if self.market_data_service else None
-                    if q:
-                        future_quote = {
-                            'price': q.get('price'),
-                            'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                            'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
-                            'source': q.get('source', '')
-                        }
-                    else:
+                # [AI-2026-07-02] AG0 沪银期货：优先从东财 SSE + 新浪获取实时数据
+                if future_symbol == 'AG0':
+                    future_quote = _get_ag0_future_quote()
+                else:
+                    try:
+                        q = self.market_data_service.get_realtime_quote(future_symbol) if self.market_data_service else None
+                        if q:
+                            future_quote = {
+                                'price': q.get('price'),
+                                'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
+                                'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                                'source': q.get('source', '')
+                            }
+                        else:
+                            future_quote = None
+                    except Exception as e:
+                        logger.error(f"Error getting future quote for {future_symbol}: {e}")
                         future_quote = None
-                except Exception as e:
-                    logger.error(f"Error getting future quote for {future_symbol}: {e}")
-                    future_quote = None
 
             # 获取 T-1 基准估值日数据
             t1_data = {}

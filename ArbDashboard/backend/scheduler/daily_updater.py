@@ -28,9 +28,10 @@ except ImportError:
 class DailyUpdater(BaseApp):
     def __init__(self):
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        super().__init__("daily_updater", app_dir=scripts_dir)
-        # [AI-2026-06-28] 修正配置文件路径：指向 arbcore/config/lof_config.yaml
-        correct_config = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "arbcore", "config", "lof_config.yaml")
+        logs_dir = os.path.abspath(os.path.join(scripts_dir, "..", "..", "logs"))  # [AI-2026-07-02] 日志统一到 ArbDashboard/logs/
+        super().__init__("daily_updater", app_dir=scripts_dir, log_dir=logs_dir)
+        # [AI-2026-07-03] 修正配置文件路径：指向项目根 arbcore/config/lof_config.yaml
+        correct_config = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "arbcore", "config", "lof_config.yaml")
         if os.path.exists(correct_config):
             self.config_path = correct_config
             self.config = self._load_config()
@@ -130,6 +131,8 @@ class DailyUpdater(BaseApp):
                     with open(local_path, 'r', encoding='utf-8') as f:
                         content = json.load(f)
                     synced_data_list.append({'date': file_date, 'content': content})
+                    # [AI-2026-07-03] 标记VPS文件已读取解析，下次跳过检查能找到此标记，避免重复加载
+                    self.db.mark_access_synced(file_date, f"{data_type}_vps_sync")
                 except Exception as e:
                     self.logger.error(f"[VPS] 解析本地同步文件失败 {remote_file}: {e}")
 
@@ -320,7 +323,7 @@ class DailyUpdater(BaseApp):
                             
                             # 1. 添加或更新数据库里的最新有效成分
                             for sym, w in db_weights.items():
-                                if w > 0:
+                                if w != 0:
                                     anchor = anchor_map.get(sym, 'US')
                                     if sym not in current_syms:
                                         # 智能识别新增的区域 ETF 锚点
@@ -338,7 +341,7 @@ class DailyUpdater(BaseApp):
                                     
                             # 2. 检查并移除被踢出的旧成分 (如 USO-JP)
                             for old_sym in current_syms:
-                                if old_sym not in db_weights or db_weights[old_sym] <= 0:
+                                if old_sym not in db_weights or db_weights[old_sym] == 0:
                                     portfolio_changed = True
                                     self.logger.info(f"🔄 [{code}] YAML删除成分股 ({old_sym})")
                                     
@@ -350,7 +353,7 @@ class DailyUpdater(BaseApp):
             conn.close()
             
             if yaml_updated:
-                config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "arbcore", "config", "lof_config.yaml")
+                config_file = self.config_path  # [AI-2026-07-03] 使用已修正的 self.config_path
                 with open(config_file, 'w', encoding='utf-8') as f:
                     yaml.safe_dump(self.config, f, allow_unicode=True, sort_keys=False)
                 self.logger.info("✅ lof_config.yaml 文件已成功覆写更新！")
@@ -432,6 +435,27 @@ class DailyUpdater(BaseApp):
                         self.logger.warning(f"⚠️ 抓取到的汇率日期为过去日期 ({date_info_str})，未更新到今天，因此不标记今日已同步。")
                 except Exception as e:
                     self.logger.error(f"❌ 本地汇率解析异常: {e}")
+
+        # [AI-2026-07-03] Level 2: 获取离岸人民币 CNH 汇率（用于白银比价计算）
+        try:
+            conn2 = self.db._get_conn()
+            cursor2 = conn2.execute(
+                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cnh IS NOT NULL",
+                (today_str,)
+            )
+            has_cnh = cursor2.fetchone()[0] > 0
+            conn2.close()
+            if not has_cnh:
+                cnh_data = data_fetcher.fetch_cnh_offshore_rate()
+                if cnh_data:
+                    cnh_date = pd.to_datetime(str(cnh_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                    cnh_rate = cnh_data.get('离岸价')
+                    self.db.upsert_exchange_rate(cnh_date, usd_cnh=cnh_rate)
+                    self.logger.info(f"✅ 离岸人民币 CNH 入库: {cnh_date} -> {cnh_rate}")
+            else:
+                self.logger.info(f"✅ 今日({today_str}) CNH 已在库中，跳过。")
+        except Exception as e:
+            self.logger.error(f"❌ 获取 CNH 离岸汇率失败: {e}")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
         """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
@@ -843,9 +867,10 @@ class DailyUpdater(BaseApp):
                         symbol = f_data.get('symbol')
                         settle = f_data.get('settle')
                         close_price = f_data.get('close')
+                        volume = f_data.get('volume')
                         
                         if symbol and (settle is not None or close_price is not None):
-                            self.db.upsert_futures_daily(date=date_info, symbol=symbol, settle_price=settle, close_price=close_price)
+                            self.db.upsert_futures_daily(date=date_info, symbol=symbol, settle_price=settle, close_price=close_price, volume=volume)
                     
                     self.logger.info(f"   ✅ [VPS] 同步入库期货数据: {date_info} ({len(futures_list)} 个品种)")
                     self.db.mark_access_synced(file_date, 'futures_vps_sync')
@@ -868,8 +893,9 @@ class DailyUpdater(BaseApp):
                 symbol = f_data.get('symbol')
                 settle = f_data.get('settle')
                 close_price = f_data.get('close')
+                volume = f_data.get('volume')
                 if symbol and (settle is not None or close_price is not None):
-                    self.db.upsert_futures_daily(date=today_str, symbol=symbol, settle_price=settle, close_price=close_price)
+                    self.db.upsert_futures_daily(date=today_str, symbol=symbol, settle_price=settle, close_price=close_price, volume=volume)
             self.db.mark_access_synced(today_str, source='futures_data')
             self.logger.info(f"✅ [本地兜底] 今日期货数据获取完成！")
         else:
@@ -921,11 +947,15 @@ class DailyUpdater(BaseApp):
 
     def _step10_calculate_static_valuation(self):
         """步骤十：基于同步后的因子数据，计算所有基金的静态估值 (static_val)"""
-        config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "arbcore", "config")
-        config_path = os.path.join(config_dir, 'lof_config.yaml')
-        if not os.path.exists(config_path):
-            self.logger.warning("⚠️ [静态估值] lof_config.yaml 不存在，跳过")
-            return
+        # [AI-2026-07-03] 使用 __init__ 中已修正的 self.config_path，不再重复计算路径
+        config_path = getattr(self, 'config_path', None)
+        if not config_path or not os.path.exists(config_path):
+            fallback_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "arbcore", "config", "lof_config.yaml")
+            if os.path.exists(fallback_path):
+                config_path = fallback_path
+            else:
+                self.logger.warning("⚠️ [静态估值] lof_config.yaml 不存在，跳过")
+                return
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         calc = StaticValuationCalculator(self.db)

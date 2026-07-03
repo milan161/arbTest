@@ -96,3 +96,8 @@ export function getBpOverride(code: string) {
 export function clearBpOverride(code: string) {
   return client.post('/api/bond/bp-override/clear', { code })
 }
+
+/** 白银比价数据（161226 沪银/SI 比价） */
+export function getSilverRatio() {
+  return client.get('/api/silver/ratio')
+}

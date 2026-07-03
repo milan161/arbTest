@@ -49,8 +49,10 @@ class DatabaseManager:
             conn.execute('DROP TABLE IF EXISTS api_sync_status')
 
             conn.execute('''CREATE TABLE IF NOT EXISTS system_health (id INTEGER PRIMARY KEY AUTOINCREMENT, component TEXT NOT NULL, status TEXT, message TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
-            conn.execute('''CREATE TABLE IF NOT EXISTS exchange_rate (date TEXT PRIMARY KEY, usd_cny_mid REAL, hkd_cny_mid REAL, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS exchange_rate (date TEXT PRIMARY KEY, usd_cny_mid REAL, hkd_cny_mid REAL, usd_cnh REAL, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')))''')
             try: conn.execute('ALTER TABLE exchange_rate ADD COLUMN hkd_cny_mid REAL')
+            except sqlite3.OperationalError: pass
+            try: conn.execute('ALTER TABLE exchange_rate ADD COLUMN usd_cnh REAL')
             except sqlite3.OperationalError: pass
 
             conn.execute('''CREATE TABLE IF NOT EXISTS usa_etf_daily_prices (date TEXT NOT NULL, symbol TEXT NOT NULL, price REAL, netvalue REAL, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (date, symbol))''')

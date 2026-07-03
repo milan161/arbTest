@@ -5,7 +5,9 @@
 
 /** 基金名称清洗：去掉末尾的 LOF 后缀 */
 export function cleanFundName(name: string): string {
-  return (name || '').replace(/LOF$/, '')
+  return (name || '')
+    .replace(/LOF$/, '')
+    .replace('国瑞白银期货', '白银期货')
 }
 
 /** 红色（涨/溢价） */

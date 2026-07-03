@@ -377,6 +377,130 @@ class DataFetcher:
             logger.error(f"Woody网页获取汇率数据失败: {e}")
         
         return None
+
+    def fetch_cnh_offshore_rate(self):
+        """从新浪财经获取离岸人民币 CNH 实时汇率（Sina fx_susdcnh）
+        
+        返回: dict { '日期', '离岸价', '来源' } 或 None
+        """
+        logger.info("从新浪财经获取离岸人民币 CNH 汇率")
+        try:
+            url = "https://hq.sinajs.cn/list=fx_susdcnh"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response.encoding = 'gbk'
+            if response.status_code == 200 and 'hq_str_fx_susdcnh' in response.text:
+                values = response.text.split('"')[1].split(',')
+                if len(values) >= 18:
+                    spot_rate = float(values[1])  # 第2个字段 = 实时离岸价
+                    date = values[17]
+                    logger.info(f"离岸人民币 CNH: {spot_rate} (日期: {date})")
+                    return {
+                        '日期': date,
+                        '离岸价': spot_rate,
+                        '来源': '新浪财经 fx_susdcnh'
+                    }
+        except Exception as e:
+            logger.error(f"获取离岸人民币 CNH 失败: {e}")
+        return None
+    
+    def fetch_ag0_from_sina(self):
+        """从新浪获取 AG0（沪银连续期货）实时数据
+        
+        新浪 nf_AG0 返回格式 (44 fields):
+        ar[0]=名称 ar[1]=今开 ar[2]=最高 ar[3]=最低 ar[4]=最新 ar[5]=昨收
+        ar[6]=昨结1 ar[7]=昨结2 ar[8]=现价 ar[9]=结算价 ar[10]=昨结算
+        ar[11]=涨跌1 ar[12]=涨跌2 ar[13]=成交量1 ar[14]=成交量2
+        ar[15]=市场 ar[16]=品种 ar[17]=日期 ar[18]=时间
+        ar[27]=VWAP ar[28]=均价 ar[29]=持仓量
+        
+        返回: dict { 'date', 'price', 'prev_settle', 'settle', 'vwap', 'volume', '持仓量', '来源' } 或 None
+        """
+        logger.info("从新浪获取 AG0 期货实时数据")
+        try:
+            url = "http://hq.sinajs.cn/list=nf_AG0"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response.encoding = 'gbk'
+            if response.status_code == 200 and 'hq_str_nf_AG0' in response.text:
+                parts = response.text.split('"')[1].split(',')
+                if len(parts) >= 30:
+                    result = {
+                        'date': parts[17],
+                        'price': float(parts[8]),       # 最新价
+                        'prev_settle': float(parts[10]), # 昨结算
+                        'settle': float(parts[9]),       # 结算价
+                        'vwap': float(parts[27]) if parts[27] else 0.0,  # VWAP
+                        'volume': int(float(parts[14])) if parts[14] else 0,  # 成交量
+                        'open_interest': int(float(parts[29])) if len(parts) > 29 and parts[29] else 0,  # 持仓量
+                        '来源': '新浪 nf_AG0'
+                    }
+                    return result
+        except Exception as e:
+            logger.error(f"获取 AG0 失败: {e}")
+        return None
+    
+    def fetch_si_from_sina(self):
+        """从新浪获取 SI（COMEX 白银期货）实时数据
+        
+        新浪 hf_SI 返回格式:
+        ar[0]=最新价 ar[7]=昨收 ar[12]=日期
+        
+        返回: dict { 'date', 'price', 'prev_close', '来源' } 或 None
+        """
+        logger.info("从新浪获取 SI 期货实时数据")
+        try:
+            url = "http://hq.sinajs.cn/list=hf_SI"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response.encoding = 'gbk'
+            if response.status_code == 200 and 'hq_str_hf_SI' in response.text:
+                parts = response.text.split('"')[1].split(',')
+                if len(parts) >= 13:
+                    return {
+                        'date': parts[12],
+                        'price': float(parts[0]),       # 最新价（美元/盎司）
+                        'prev_close': float(parts[7]),  # 昨收
+                        '来源': '新浪 hf_SI'
+                    }
+        except Exception as e:
+            logger.error(f"获取 SI 失败: {e}")
+        return None
+    
+    def fetch_cnh_from_sina(self):
+        """从新浪获取 CNH 实时汇率（备用，和 fetch_cnh_offshore_rate 相同）
+        
+        返回: dict { 'date', 'rate', '来源' } 或 None
+        """
+        logger.info("从新浪获取 CNH 汇率实时数据")
+        try:
+            url = "http://hq.sinajs.cn/list=fx_susdcnh"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response.encoding = 'gbk'
+            if response.status_code == 200 and 'hq_str_fx_susdcnh' in response.text:
+                parts = response.text.split('"')[1].split(',')
+                if len(parts) >= 18:
+                    return {
+                        'date': parts[17],
+                        'rate': float(parts[1]),  # 实时离岸价
+                        '来源': '新浪 fx_susdcnh'
+                    }
+        except Exception as e:
+            logger.error(f"获取 CNH 失败: {e}")
+        return None
     
     def fetch_lof_nav_data(self, fund_code, existing_data=None):
         """从东财获取LOF基金历史净值数据
@@ -633,7 +757,7 @@ class DataFetcher:
         return index_data
     
     def get_futures_settlement_data(self):
-        """从新浪获取期货结算价数据"""
+        """从新浪获取期货结算价数据（美股期货 + 内盘 AG0 沪银）"""
         logger.info("从新浪获取期货结算价数据")
         
         futures_data = []
@@ -641,7 +765,8 @@ class DataFetcher:
             'Referer': 'https://finance.sina.com.cn/'
         }
         
-        # 使用新浪API获取期货数据
+        # [AI-2026-07-02] 美股期货 + 内盘期货（AG0 沪银）分开请求
+        # 美股期货 URL
         url = "http://hq.sinajs.cn/list=hf_MGC,hf_GC,hf_CL,hf_NQ,hf_ES,hf_SI"
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
@@ -663,6 +788,31 @@ class DataFetcher:
                 logger.error(f"请求期货数据失败，状态码: {response.status_code}")
         except Exception as e:
             logger.error(f"获取期货数据失败: {e}")
+        
+        # [AI-2026-07-02] 内盘期货 AG0 沪银（新浪 nf_ 格式）
+        try:
+            url_cn = "http://hq.sinajs.cn/list=nf_AG0"
+            response_cn = requests.get(url_cn, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response_cn.encoding = 'gbk'
+            if response_cn.status_code == 200:
+                for line in response_cn.text.strip().split('\n'):
+                    if not line: continue
+                    try:
+                        symbol = line.split('=')[0].split('_')[-1]
+                        parts = line.split('"')[1].split(',')
+                        if len(parts) >= 11:
+                            # [AI-2026-07-03] 修复：parts[9]=今日结算价(VWAP/动态均价)，parts[10]=昨结算
+                            # 昨结算(parts[10])是前一天的结算价，不能作为今日的 settle_price 存入
+                            close_price = float(parts[8]) if len(parts) > 8 else None
+                            settle_price = float(parts[9]) if len(parts) > 9 and parts[9] else None
+                            volume = int(float(parts[14])) if len(parts) > 14 and parts[14] else None
+                            if close_price or settle_price:
+                                logger.info(f"{symbol} 收盘价: {close_price}, 结算价: {settle_price}")
+                                futures_data.append({"symbol": symbol, "settle": settle_price, "close": close_price, "volume": volume})
+                    except Exception as e:
+                        logger.error(f"解析内盘期货行失败 {line}: {e}")
+        except Exception as e:
+            logger.error(f"获取内盘期货数据失败: {e}")
         
         return futures_data
     
