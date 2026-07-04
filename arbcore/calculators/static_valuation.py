@@ -94,9 +94,12 @@ class StaticValuationCalculator:
         df['static_val'] = None
         df['val_error'] = None
         
-        # 继承因子权重
+        # 继承因子权重（bfill 向前填充，处理节假日权重缺失）
         for item in portfolio:
             sym = item.get('symbol', '').replace('^', '')
+            # 处理区域后缀 — 和 merge 时保持一致
+            if any(suffix in sym for suffix in ['-JP', '-EU', '-HK']):
+                sym = f"^{sym}"
             w_col = f"{sym}_weight"
             if w_col in df.columns:
                 df[w_col] = df[w_col].bfill().fillna(item.get('weight', 0))

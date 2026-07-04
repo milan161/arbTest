@@ -1209,9 +1209,11 @@ class DailyUpdater(BaseApp):
 
         # 默认：完整流水线（周末跳过除净值外的所有步骤）
         if now.weekday() in (5, 6):
-            self.logger.info("📅 [周末] 跳过完整流水线，仅执行净值更新...")
+            self.logger.info("📅 [周末] 跳过完整流水线，仅执行净值更新+静态估值...")
             self.step4_fetch_lof_market()
-            self.logger.info("🎉 [周末净值] 净值更新完毕！")
+            # [AI-2026-07-04] 周末也跑静态估值计算，避免 nav 更新后 static_val 缺失
+            self._step10_calculate_static_valuation()
+            self.logger.info("🎉 [周末净值+静态估值] 更新完毕！")
             return
         self._run_pipeline()
 
