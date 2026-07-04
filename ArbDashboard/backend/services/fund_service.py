@@ -1436,14 +1436,15 @@ class FundService:
         try:
             today = datetime.now().strftime('%Y-%m-%d')
 
-            # 1. 基础历史数据 (包含静态估值、汇率、并从 fund_daily_factors 回填缺失的净值)
+            # 1. 基础历史数据 (包含静态估值、汇率、并从 fund_daily_factors 回填缺失的净值 + hedge)
             query_hist = """
             SELECT h.date, h.price, 
                    COALESCE(h.nav, f.nav) as nav,
                    h.static_val, h.premium as static_premium, h.calibration,
                    h.index_close, h.index_pct, h.shares, h.shares_added, h.turnover_rate, h.volume,
                    h.valuation_error,
-                   r.usd_cny_mid, r.hkd_cny_mid
+                   r.usd_cny_mid, r.hkd_cny_mid,
+                   f.hedge
             FROM unified_fund_history h
             LEFT JOIN exchange_rate r ON h.date = r.date
             LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
@@ -1467,7 +1468,8 @@ class FundService:
             if is_hkd_fund and 'hkd_cny_mid' in df.columns:
                 df['usd_cny_mid'] = df['hkd_cny_mid']
 
-            # 计算估值误差百分比: val_error_pct = (static_val / nav - 1) * 100
+            # 计算估值误差（绝对差值）: val_error_pct = static_val - nav（非百分比）
+            # [AI-2026-07-04] 改为绝对差值，不再用百分比
             if 'valuation_error' in df.columns:
                 df['val_error_pct'] = df['valuation_error']
             mask = df['val_error_pct'].isna() if 'val_error_pct' in df.columns else pd.Series([True] * len(df))
@@ -1475,7 +1477,7 @@ class FundService:
             if valid_mask.any():
                 if 'val_error_pct' not in df.columns:
                     df['val_error_pct'] = 0.0
-                df.loc[valid_mask, 'val_error_pct'] = (df.loc[valid_mask, 'static_val'] / df.loc[valid_mask, 'nav'] - 1) * 100
+                df.loc[valid_mask, 'val_error_pct'] = df.loc[valid_mask, 'static_val'] - df.loc[valid_mask, 'nav']
 
             # 找最新有效净值（用于展示，不填充到行数据里）
             valid_nav_rows = df[df['nav'] > 0]

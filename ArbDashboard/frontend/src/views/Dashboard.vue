@@ -500,6 +500,9 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
         return ''
     }
 
+    // [AI-2026-07-04] 判断是否有 hedge 数据（单ETF基金使用魔法公式需要）
+    const hasHedge = fundHistory.value.some(r => r.hedge != null && r.hedge > 0)
+
     const baseCols: DataTableColumns<any> = [
         { title: '日期', key: 'date', width: 85, align: 'center', render(row: any) {
             const d = shortDate(row.date)
@@ -546,9 +549,11 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
               ]
             : [
                 { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
-                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { const v = row.val_error_pct || 0; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, formatPercent(v, 4)) } },
+                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { const v = row.val_error_pct || 0; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
                 { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { const nav = row.nav || 0; if (nav === 0) return '-'; const v = ((row.static_val || 0) - nav) / nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
                 { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium || 0; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
+                // [AI-2026-07-04] 单ETF基金（魔法公式）显示对冲值
+                ...(hasHedge ? [{ title: '对冲值', key: 'hedge', width: 95, align: 'center', render(row: any) { return row.hedge ? h('span', { class: 'num-cell' }, row.hedge.toFixed(2)) : '-' } }] : []),
               ],
         // QDII亚洲 / 国内LOF 专属：指数价 + 指数涨跌
         ...(['QDII亚洲', '国内LOF'].includes(selectedFund.value?.category || '') ? [
@@ -564,7 +569,7 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
     ]
 
     if (fundHistory.value.length > 0) {
-        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'latest_nav', 'futures_close', 'futures_pct']
+        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'latest_nav', 'futures_close', 'futures_pct', 'hedge']
         // Scan ALL rows to find dynamic keys (first row may lack data, e.g. 06-19 has no XOP_price)
         const dynamicKeys = new Set<string>()
         for (const row of fundHistory.value) {
