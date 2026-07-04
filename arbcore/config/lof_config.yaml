@@ -25,10 +25,10 @@ funds:
   - symbol: USO
     weight: 44.45
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 40.22
     anchor: EU
-  - symbol: USO-JP
+  - symbol: ^USO-JP
     weight: 15.33
     anchor: JP
   trade_etf: USO
@@ -92,10 +92,10 @@ funds:
   - symbol: USO
     weight: 65.94
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 32.42
     anchor: EU
-  - symbol: USO-JP
+  - symbol: ^USO-JP
     weight: 1.64
     anchor: JP
   trade_etf: USO
@@ -154,10 +154,10 @@ funds:
   - symbol: USO
     weight: 58.61
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 29.8
     anchor: EU
-  - symbol: USO-HK
+  - symbol: ^USO-HK
     weight: 11.58
     anchor: HK
   trade_etf: USO
@@ -205,7 +205,7 @@ funds:
   - symbol: GLD
     weight: 53.41
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 27.87
     anchor: EU
   - symbol: USO
@@ -280,7 +280,7 @@ funds:
   - symbol: GLD
     weight: 55.21
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 44.79
     anchor: EU
   trade_etf: GLD
@@ -302,7 +302,7 @@ funds:
   - symbol: GLD
     weight: 80.88
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 19.12
     anchor: EU
   sina_index_url: ''
@@ -447,10 +447,10 @@ funds:
   - symbol: GLD
     weight: 85.31
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 10.0
     anchor: EU
-  - symbol: GLD-JP
+  - symbol: ^GLD-JP
     weight: 4.69
     anchor: JP
   trade_etf: GLD
@@ -675,13 +675,13 @@ funds:
   - symbol: INDA
     weight: 59.4
     anchor: US
-  - symbol: INDA-EU
+  - symbol: ^INDA-EU
     weight: 34.78
     anchor: EU
-  - symbol: INDA-JP
+  - symbol: ^INDA-JP
     weight: 4.84
     anchor: JP
-  - symbol: INDA-HK
+  - symbol: ^INDA-HK
     weight: 0.98
     anchor: HK
   sina_index_url: ''
