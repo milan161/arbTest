@@ -372,6 +372,19 @@ async def lifespan(app: FastAPI):
             
             # [V10.0] 启动完成提示：引导用户手动连接需要的券商客户端
             system_status.add_milestone("INFO", "💡 如需实时行情，请点击顶部对应按钮连接券商客户端（通达信/IB/银河QMT/国金QMT/富途）")
+            
+            # [AI-2026-07-07] 启动时自动检测并连接 IB Gateway（如果已在运行）
+            try:
+                if market_data_service.ib_reader:
+                    success, msg = market_data_service.ib_reader.reconnect()
+                    if success:
+                        logger.info(f"✅ IB Gateway 自动连接成功")
+                        system_status.add_milestone("SUCCESS", "IB Gateway 自动连接成功")
+                    else:
+                        logger.info(f"ℹ️ IB Gateway 自动连接跳过: {msg}")
+                        system_status.add_milestone("INFO", f"IB Gateway 未检测到: {msg}")
+            except Exception as e:
+                logger.warning(f"IB 自动连接异常: {e}")
         
         asyncio.create_task(start_mds_later())
 

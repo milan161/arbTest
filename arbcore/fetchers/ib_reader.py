@@ -283,19 +283,18 @@ class IBReader(EWrapper, EClient):
                     c_snap = Contract()
                     c_snap.symbol = sym
                     c_snap.secType = "IND" if sym == "VIX" else "STK"
+                    # [AI-2026-07-07] 用 TRADES 获取夜盘最近成交价，替代 BID（低流动性标的无连续盘口）
                     c_snap.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
                     c_snap.currency = "USD"
                     self.req_events[req_id_snap] = threading.Event()
-                    # 兜底请求必须是 BID，获取无滑点盘口
-                    self.reqHistoricalData(req_id_snap, c_snap, "", "1800 S", "1 min", "BID", 0, 1, False, [])
+                    self.reqHistoricalData(req_id_snap, c_snap, "", "1800 S", "1 min", "TRADES", 0, 1, False, [])
                     
                     self.req_events[req_id_snap].wait(timeout=3.0)
                     price = self.req_data.get(req_id_snap)
                     if price:
                         if sym not in self.prices or not isinstance(self.prices[sym], dict):
-                            self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'bid_size': 0, 'ask_size': 0}
-                        self.prices[sym]['bid'] = price
-                        self.prices[sym]['ask'] = price # 快照拿不到Ask，用Bid平替
+                            self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'last': 0.0, 'bid_size': 0, 'ask_size': 0}
+                        self.prices[sym]['last'] = price
                         self.sources[sym] = "安全快照"
                         self.last_update_time = datetime.now()
                         # 重置 last_tick_time 以符合 60 秒常规检测，但下次兜底仍受 300 秒限制保护
@@ -403,7 +402,7 @@ class IBReader(EWrapper, EClient):
             sym = self.mkt_req_ids.get(reqId)
             if sym:
                 if sym not in self.prices or not isinstance(self.prices[sym], dict):
-                    self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'bid_size': 0, 'ask_size': 0}
+                    self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'last': 0.0, 'bid_size': 0, 'ask_size': 0}
                 
                 # 💡 只要长连接有任何跳动，都喂一口看门狗，重置30秒倒计时
                 if tickType in [1, 2, 4, 66, 67, 68]:
@@ -420,9 +419,11 @@ class IBReader(EWrapper, EClient):
                     self.sources[sym] = "长连接"
                 elif tickType in [2, 67]: # Ask
                     self.prices[sym]['ask'] = price
-                elif tickType in [4, 68] and self.prices[sym]['bid'] == 0.0: # 如果买卖一价为空，用最新价兜底
-                    self.prices[sym]['bid'] = price
-                    self.prices[sym]['ask'] = price
+                elif tickType in [4, 68]: # [AI-2026-07-07] 总是保存最近成交价，用于低流动性时替代bid/ask
+                    self.prices[sym]['last'] = price
+                    if self.prices[sym]['bid'] == 0.0:
+                        self.prices[sym]['bid'] = price
+                        self.prices[sym]['ask'] = price
                 
                 self.last_update_time = datetime.now()
                 
@@ -452,7 +453,7 @@ class IBReader(EWrapper, EClient):
         sym = self.mkt_req_ids.get(reqId)
         if sym:
             if sym not in self.prices or not isinstance(self.prices[sym], dict):
-                self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'bid_size': 0, 'ask_size': 0}
+                self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'last': 0.0, 'bid_size': 0, 'ask_size': 0}
                 
             # 💡 只要长连接有任何跳动，都喂一口看门狗，防止被断线判定
             if tickType in [0, 3, 5, 69, 70, 71]:
