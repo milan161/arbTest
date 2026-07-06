@@ -115,9 +115,10 @@ class DailyUpdater(BaseApp):
 
                 local_path = os.path.join(local_sync_dir, remote_file)
                 
-                # [性能优化] 如果数据库已经同步过该日期，且本地已存在该文件，则直接跳过读取，减少内存压力
+                # [性能优化] 如果数据库已经同步过该日期，直接跳过（不依赖本地缓存文件，修复本地缓存被删除后重复下载的bug）
                 sync_key = f"{data_type}_vps_sync"
-                if os.path.exists(local_path) and self.db.is_access_synced_today(file_date, sync_key):
+                # [AI-2026-07-06] 移除 os.path.exists 要求：只要 access_sync_status 有标记就跳过，即使缓存文件被删除
+                if self.db.is_access_synced_today(file_date, sync_key):
                     continue
 
                 # 3. 增量同步：如果本地不存在，则下载
@@ -212,6 +213,18 @@ class DailyUpdater(BaseApp):
             for item in vps_history_data:
                 file_date = item['date']
                 content = item['content']
+
+                # 🛡️ [AI-2026-07-06] 检查本地 raw_api_data 是否已有该日期的因子数据
+                # 解决 access_sync_status 被清理后 VPS 重复处理历史数据的 bug
+                existing_raw = self.db.get_raw_api_data(file_date, 'woody_lof')
+                if existing_raw:
+                    self.logger.info(f"   ⏭️ [VPS] 日期 {file_date} 的因子原始数据已存在，跳过入库解析")
+                    # 补打 VPS 同步标记，确保 _try_sync_all_from_vps 下次不再下载该文件
+                    self.db.mark_access_synced(file_date, 'woody_vps_sync')
+                    if file_date == today_str:
+                        vps_today_success = True
+                    continue
+
                 try:
                     # 提取真实内容 (Woody API 包装在 text 字段里)
                     api_content = content.get('text') if isinstance(content, dict) else content
@@ -226,6 +239,7 @@ class DailyUpdater(BaseApp):
                             self.logger.info(f"   ✅ [VPS] 日期 {file_date} 的因子解析成功")
                             # [性能优化] 标记该日期已处理，下次不再重复解析
                             self.db.mark_access_synced(file_date, sync_key)
+                            self.db.mark_access_synced(file_date, 'woody_vps_sync')
                             if file_date == today_str:
                                 vps_today_success = True
                 except Exception as e:

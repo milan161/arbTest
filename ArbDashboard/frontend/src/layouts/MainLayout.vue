@@ -50,8 +50,8 @@
             通达信
           </n-tag>
           <n-tag :type="hasIb ? 'success' : 'warning'" size="small" round
-            :style="{ fontWeight: 'bold', cursor: hasIb ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
-            @click="reconnectWithGuard(hasIb, 'IB', reconnectIB)">
+            :style="{ fontWeight: 'bold', cursor: 'pointer', width: '100%', justifyContent: 'center' }"
+            @click="reconnectIB()">
             <template #icon><n-icon><Zap /></n-icon></template>
             IB
           </n-tag>
