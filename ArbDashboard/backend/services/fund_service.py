@@ -1283,6 +1283,8 @@ class FundService:
                             except Exception as e:
                                 logger.warning(f"[{code}] 获取快照汇率失败: {e}")
                             
+                            # [AI-2026-07-06] 篮子基金ETF行情缺失标记（INDA低流动性场景专用）
+                            _basket_missing_etf = False
                             if current_fx and current_fx > 0:
                                 # 获取实时 ETF 价格
                                 current_etfs = {}
@@ -1298,6 +1300,9 @@ class FundService:
                                         q = self.market_data_service.get_realtime_quote(sym)
                                         if q and q.get('price'):
                                             current_etfs[sym] = q['price']
+                                    # [AI-2026-07-06] 篮子基金所有ETF组件均无实时行情时标记
+                                    if portfolio and not current_etfs:
+                                        _basket_missing_etf = True
                                 
                                 # 计算实时估值
                                 res = calculator.calculate(fund_cfg, current_fx, current_etfs)
@@ -1351,19 +1356,24 @@ class FundService:
 
                 # [V6.1] 备用兜底：如果实时计算失败（例如未连行情源，或美股休市无最新价），从采样表获取最近一次的记录
                 if not metrics.get('rt_val') or metrics['rt_val'] <= 0:
-                    try:
-                        sample_query = "SELECT rt_val, premium FROM fund_intraday_quotes WHERE fund_code=? ORDER BY date DESC, time DESC LIMIT 1"
-                        sample_df = pd.read_sql(sample_query, conn, params=(code,))
-                        if not sample_df.empty and sample_df.iloc[0]['rt_val'] > 0:
-                            metrics['rt_val'] = sample_df.iloc[0]['rt_val']
-                            metrics['rt_premium'] = sample_df.iloc[0]['premium']
-                        else:
-                            metrics['rt_val'] = 0
-                            metrics['rt_premium'] = 0
-                    except Exception as e:
-                        logger.error(f"从采样表获取 {code} 历史记录失败: {e}")
+                    # [AI-2026-07-06] 篮子基金ETF行情缺失时跳过stale兜底（INDA等低流动性场景）
+                    if _basket_missing_etf:
                         metrics['rt_val'] = 0
                         metrics['rt_premium'] = 0
+                    else:
+                        try:
+                            sample_query = "SELECT rt_val, premium FROM fund_intraday_quotes WHERE fund_code=? ORDER BY date DESC, time DESC LIMIT 1"
+                            sample_df = pd.read_sql(sample_query, conn, params=(code,))
+                            if not sample_df.empty and sample_df.iloc[0]['rt_val'] > 0:
+                                metrics['rt_val'] = sample_df.iloc[0]['rt_val']
+                                metrics['rt_premium'] = sample_df.iloc[0]['premium']
+                            else:
+                                metrics['rt_val'] = 0
+                                metrics['rt_premium'] = 0
+                        except Exception as e:
+                            logger.error(f"从采样表获取 {code} 历史记录失败: {e}")
+                            metrics['rt_val'] = 0
+                            metrics['rt_premium'] = 0
 
                 # 3. [V4.0] 灵魂逻辑重算 (确保静态溢价率和涨跌幅不为 0)
                 cp = float(metrics.get('price') or 0)

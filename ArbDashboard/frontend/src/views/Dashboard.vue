@@ -279,7 +279,7 @@ const allColumns: DataTableColumns<any> = [
     render(row: any) { return h(NText, { code: true, class: 'code-cell' }, { default: () => row.fund_code || '-' }) }
   },
   {
-    title: '名称', key: 'fund_name', fixed: 'left', align: 'center', ellipsis: { tooltip: true },
+    title: '名称', key: 'fund_name', width: 90, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
     render(row: any) {
       return h('span', { class: 'fund-name-cell clickable-cell',
         onClick: () => { selectedFund.value = row; showHistoryModal.value = true; fundStore.fetchFundHistory(row.fund_code) }
@@ -287,12 +287,12 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: '现价', key: 'price', align: 'center',
+    title: '现价', key: 'price', width: 62, align: 'center',
     sorter: (a: any, b: any) => (a.price || 0) - (b.price || 0),
     render(row: any) { return h('span', { class: 'num-cell' }, formatPrice(row.price)) }
   },
   {
-    title: '涨跌幅', key: 'price_change', align: 'center',
+    title: '涨跌幅', key: 'price_change', width: 66, align: 'center',
     sorter: (a: any, b: any) => (a.price_change || 0) - (b.price_change || 0),
     render(row: any) {
       const chg = row.price_change || 0
@@ -305,7 +305,7 @@ const allColumns: DataTableColumns<any> = [
       h('div', { style: 'font-size: 12px; font-weight: bold;' }, '实时估值'),
       h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击进实盘')
     ]),
-    key: 'rt_val_display', align: 'center',
+    key: 'rt_val_display', width: 80, align: 'center',
     className: 'col-rt-val',
     render(row: any) {
       const val = row.rt_val && row.rt_val > 0 ? row.rt_val.toFixed(4) : '-'
@@ -324,11 +324,11 @@ const allColumns: DataTableColumns<any> = [
     }
   },
   {
-    title: 'T-2/1日净值', key: 'nav', align: 'center',
+    title: 'T-2/1日净值', key: 'nav', width: 66, align: 'center',
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatValuation(row.nav)) }
   },
   {
-    title: '净值日期', key: 'nav_date', align: 'center',
+    title: '净值日期', key: 'nav_date', width: 60, align: 'center',
     render(row: any) { return h(NText, { depth: 3, class: 'date-cell' }, { default: () => shortDate(row.nav_date) }) }
   },
   {
@@ -336,7 +336,7 @@ const allColumns: DataTableColumns<any> = [
       h('div', { style: 'font-size: 12px; font-weight: bold;' }, '静态估值'),
       h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击看历史记录')
     ]),
-    key: 'static_val_display', align: 'center',
+    key: 'static_val_display', width: 82, align: 'center',
     className: 'col-static-val',
     render(row: any) {
       const val = formatValuation(row.static_val)
@@ -378,18 +378,18 @@ const allColumns: DataTableColumns<any> = [
       render(row: any) { return h('span', { class: 'num-cell muted' }, formatTurnoverRate(row.turnover_rate)) }
   },
   {
-    title: '指数价', key: 'index_close', width: 48, align: 'center',
+    title: '指数价', key: 'index_close', width: 80, align: 'center',
     render(row: any) { return h('span', { class: 'num-cell muted' }, formatIndexPrice(row.index_close)) }
   },
   {
-    title: '指数涨跌', key: 'index_pct', width: 54, align: 'center',
+    title: '指数涨跌', key: 'index_pct', width: 66, align: 'center',
     render(row: any) {
       if (!row.index_pct) return '-'
       return h('span', { class: 'num-cell compact', style: { color: priceColor(Number(row.index_pct)) } }, formatPercent(Number(row.index_pct), 2))
     }
   },
   {
-    title: '指数名称', key: 'index_name', width: 60, align: 'center',
+    title: '指数名称', key: 'index_name', width: 80, align: 'center',
     render(row: any) {
       const name = row.idx_name || row.related_index || '-'
       return h('span', { class: 'num-cell muted', style: 'font-size: 11px;' }, name)

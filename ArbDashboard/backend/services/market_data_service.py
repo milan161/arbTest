@@ -134,6 +134,18 @@ class MarketDataService:
                     price_data = prices[symbol]
                     bid = price_data.get('bid', 0) if isinstance(price_data, dict) else 0
                     ask = price_data.get('ask', 0) if isinstance(price_data, dict) else 0
+                    last = price_data.get('last', 0) if isinstance(price_data, dict) else 0
+                    # [AI-2026-07-07] 无买一卖一但有最近成交价时使用成交价（INDA夜盘低流动性）
+                    if last > 0 and bid <= 0:
+                        self._circuit_record_success('IB')
+                        return {
+                            'symbol': symbol,
+                            'price': last,
+                            'bid': last,
+                            'ask': last,
+                            'amount': 0,
+                            'source': 'IB(最近成交价)'
+                        }
                     if bid > 0:
                         # [AI-2026-07-02] 低流动性时 IB 只推送买一价，ib_reader 用 bid 平替 ask
                         # bid==ask 说明没有有效价差，返回 None 让前端显示"—"而非错误价格
