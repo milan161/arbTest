@@ -1800,7 +1800,9 @@ class FundService:
         try:
             rates_df = pd.read_sql_query("SELECT * FROM exchange_rate ORDER BY date DESC LIMIT 2", conn)
             if not rates_df.empty:
-                res["rates"] = rates_df.iloc[0].to_dict()
+                row_dict = rates_df.iloc[0].to_dict()
+                # [AI-2026-07-07] 将 NaN 转为 None，避免 JSON 序列化崩溃（SQL NULL → pandas NaN → JSON 非法）
+                res["rates"] = {k: (None if pd.isna(v) else v) for k, v in row_dict.items()}
                 # 计算涨跌幅（百分比）
                 if len(rates_df) >= 2:
                     current = rates_df.iloc[0]

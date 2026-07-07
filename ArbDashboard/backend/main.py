@@ -688,22 +688,34 @@ async def get_fund_valuation_meta(code: str):
             if t1_date:
                 # NAV 仍取最新有净值的记录（可能早于 T-1）
                 cursor.execute("""
-                    SELECT COALESCE(h.nav, f.nav) as nav, h.static_val, r.usd_cny_mid, h.calibration, h.price 
+                    SELECT COALESCE(h.nav, f.nav) as nav, h.static_val, h.calibration, h.price 
                     FROM unified_fund_history h
-                    LEFT JOIN exchange_rate r ON h.date = r.date
                     LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
                     WHERE h.fund_code = ? AND COALESCE(h.nav, f.nav, 0) > 0
                     ORDER BY h.date DESC LIMIT 1
                 """, (code,))
                 row = cursor.fetchone()
+                # [AI-2026-07-07] T-1 汇率单独查 t1_date 对应行（不从 nav JOIN 行取）
+                # 原来用 nav 所在日期 JOIN 取汇率，导致 07-06 T-1 显示的是 07-03 净值行的汇率 6.8047
+                # 正确做法：按 t1_date 查 exchange_rate，无则往前找最近一条
+                t1_fx = 0.0
+                try:
+                    fx_row = cursor.execute(
+                        "SELECT usd_cny_mid FROM exchange_rate WHERE date <= ? AND usd_cny_mid IS NOT NULL ORDER BY date DESC LIMIT 1",
+                        (t1_date,)
+                    ).fetchone()
+                    if fx_row and fx_row[0] is not None:
+                        t1_fx = float(fx_row[0])
+                except Exception:
+                    pass
                 if row:
                     t1_data = {
                         "date": t1_date,
                         "nav": float(row[0]) if row[0] is not None else 0.0,
                         "static_val": float(row[1]) if row[1] is not None else 0.0,
-                        "exchange_rate": float(row[2]) if row[2] is not None else 0.0,
-                        "calibration": float(row[3]) if row[3] is not None else 0.0,
-                        "price": float(row[4]) if row[4] is not None else 0.0
+                        "exchange_rate": t1_fx,
+                        "calibration": float(row[2]) if row[2] is not None else 0.0,
+                        "price": float(row[3]) if row[3] is not None else 0.0
                     }
                 elif base_data:
                     # 连净值都取不到时，以 T-2 垫底
