@@ -4,6 +4,7 @@
  */
 import { useMessage, useDialog } from 'naive-ui'
 import { addTrade } from '../api/ledgerApi'
+import { placeOrder } from '../api/tradingApi'
 
 export function useOrderLogic() {
   const message = useMessage()

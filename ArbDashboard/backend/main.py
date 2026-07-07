@@ -998,6 +998,40 @@ async def update_ib_core_symbols(request: Request):
         logger.error(f"更新 IB 核心标的失败: {e}")
         return {"status": "error", "message": str(e)}
 
+# --- [AI-2026-07-07] App-level toggle settings ---
+@app.get("/api/config/app_settings/skip_qdii_asia_index")
+async def get_skip_qdii_asia_index():
+    """获取是否跳过QDII亚洲/国内LOF指数实时抓取"""
+    val = db_manager.get_app_setting('skip_qdii_asia_index', '1')
+    return {"status": "ok", "data": int(val)}
+
+@app.post("/api/config/app_settings/skip_qdii_asia_index")
+async def update_skip_qdii_asia_index(request: Request):
+    """设置是否跳过QDII亚洲/国内LOF指数实时抓取"""
+    try:
+        data = await request.json()
+        skip = 1 if data.get('skip', True) else 0
+        db_manager.set_app_setting('skip_qdii_asia_index', str(skip))
+        return {"status": "ok", "data": skip, "message": "设置已保存"}
+    except Exception as e:
+        logger.error(f"更新 skip_qdii_asia_index 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+# [AI-2026-07-07] 回补缺失指数历史
+@app.post("/api/config/app_settings/backfill_indices")
+async def backfill_indices(request: Request):
+    """回补缺失的指数历史数据（Sina/腾讯 API）"""
+    try:
+        data = await request.json() or {}
+        days = data.get('days', 30)
+        
+        from services.index_repair_service import repair_with_sina
+        result = repair_with_sina(days_back=days)
+        return result
+    except Exception as e:
+        logger.error(f"回补缺失指数历史失败: {e}")
+        return {"status": "error", "message": str(e)}
+
 # --- Private / Custom Export APIs ---
 @app.get("/api/private/status")
 async def get_private_status():

@@ -79,6 +79,8 @@ def is_a_share_trading_hour(dt: datetime = None) -> bool:
 from .retry_manager import RetryManager, CircuitBreaker, create_retry_manager, create_circuit_breaker
 from .health_monitor import HealthMonitor
 from .config_manager import ConfigManager
+from .market_calendar import (is_trading_day, is_us_trading_day, is_hk_trading_day,
+                               symbol_to_exchange, classify_by_exchange, filter_closed_markets)
 
 __all__ = [
     'RetryManager',
@@ -89,4 +91,10 @@ __all__ = [
     'ConfigManager',
     'is_a_share_trading_day',
     'is_a_share_trading_hour',
+    'is_trading_day',
+    'is_us_trading_day',
+    'is_hk_trading_day',
+    'symbol_to_exchange',
+    'classify_by_exchange',
+    'filter_closed_markets',
 ]
