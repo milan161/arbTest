@@ -1162,8 +1162,10 @@ async def lazy_calc(fund_code: str = "162411"):
             val_peg = 0
         premium_peg = (lof_bid / val_peg - 1) * 100 if val_peg > 0 else 0
 
-        # 6. 赎回费率（从 get_valuation_meta 的 t1_data 信息里取，默认 0.50）
-        redemption_fee = 0.50
+        # [AI-2026-07-07] 赎回费率优先从 broker_redemption_fees 表读取
+        redemption_fee = ledger_service.get_fee_rate(fund_code)
+        if redemption_fee <= 0:
+            redemption_fee = 0.50
 
         result = {
             "fund_code": fund_code,
