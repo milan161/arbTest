@@ -121,6 +121,20 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?)
                 ''', historical_sources)
 
+            # [AI-2026-07-07] 应用级 key-value 设置表
+            conn.execute('''CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+            )''')
+            # 种子数据：默认跳过QDII亚洲/国内LOF指数（1=跳过=默认不开启实时抓取）
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM app_settings WHERE key='skip_qdii_asia_index'")
+            if cursor.fetchone()[0] == 0:
+                conn.execute("""
+                    INSERT INTO app_settings (key, value) VALUES ('skip_qdii_asia_index', '1')
+                """)
+
             conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95, target_type TEXT DEFAULT 'ETF')''')
             conn.execute('''CREATE TABLE IF NOT EXISTS jsl_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95)''')
             try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
@@ -308,6 +322,28 @@ class DatabaseManager:
     def vacuum_database(self, *args, **kwargs): return self.system.vacuum_database(*args, **kwargs)
     def get_data_source_config(self, *args, **kwargs): return self.system.get_data_source_config(*args, **kwargs)
     def update_data_source_config(self, *args, **kwargs): return self.system.update_data_source_config(*args, **kwargs)
+
+    # [AI-2026-07-07] app_settings key-value 读写
+    def get_app_setting(self, key: str, default: str = '0') -> str:
+        try:
+            conn = self._get_conn()
+            row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+            conn.close()
+            return row[0] if row else default
+        except Exception:
+            return default
+
+    def set_app_setting(self, key: str, value: str):
+        try:
+            conn = self._get_conn()
+            conn.execute("""INSERT INTO app_settings (key, value, updated_at)
+                            VALUES (?, ?, datetime('now', 'localtime'))
+                            ON CONFLICT(key) DO UPDATE SET value=?, updated_at=datetime('now', 'localtime')""",
+                         (key, value, value))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to set app_settings[{key}]: {e}")
 
     # Compatibility methods
     def mark_api_synced(self, *args, **kwargs): return self.mark_access_synced(*args, **kwargs)

@@ -179,18 +179,63 @@
       </div>
     </div>
 
+    <!-- [AI-2026-07-07] QDII亚洲/国内LOF 指数抓取开关 -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8">
+      <div class="flex items-center mb-4">
+        <div class="w-2 h-6 bg-purple-500 rounded mr-3"></div>
+        <h2 class="text-xl font-bold text-gray-700">QDII亚洲/国内LOF 指数实时抓取</h2>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+          <input type="checkbox" :checked="!skipQdiiAsia" @change="toggleSkipQdiiAsia($event)" />
+          <span>{{ skipQdiiAsia ? '已关闭（跳过）' : '已开启（实时抓取）' }}</span>
+        </label>
+        <button @click="saveSkipQdiiAsia" :disabled="savingSkip"
+                style="padding: 6px 20px; font-size: 13px; border: none; border-radius: 6px; background: #7c3aed; color: white; cursor: pointer; font-weight: bold; opacity: savingSkip ? 0.5 : 1;">
+          {{ savingSkip ? '保存中...' : '保存' }}
+        </button>
+      </div>
+      <div style="font-size: 12px; color: #94a3b8; line-height: 1.6; margin-top: 8px;">
+        <div>📌 关闭后：A股交易时段不再实时抓取QDII亚洲和国内LOF基金对应的指数数据（节省资源）</div>
+        <div>📌 关闭后：黄金原油、QDII欧美、白银的指数数据继续实时抓取，不受影响</div>
+        <div>📌 历史数据（index_history表）完全保留，周末/非交易时段仍可从DB兜底</div>
+        <div>⚠️ 修改后需重启程序生效</div>
+      </div>
+      
+      <!-- 回补缺失指数历史 -->
+      <div style="margin-top: 16px; padding-top: 12px; border-top: 1px dashed #e2e8f0;">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <span style="font-size: 13px; color: #64748b;">回补缺失指数历史：</span>
+          <button @click="backfillIndices" :disabled="backfillLoading"
+                  style="padding: 6px 20px; font-size: 13px; border: none; border-radius: 6px; background: #dc2626; color: white; cursor: pointer; font-weight: bold; opacity: backfillLoading ? 0.5 : 1;">
+            {{ backfillLoading ? '回补中...' : '开始回补' }}
+          </button>
+          <span v-if="backfillResult" style="font-size: 12px; color: #16a34a;">{{ backfillResult }}</span>
+        </div>
+        <div style="font-size: 11px; color: #94a3b8; margin-top: 6px; line-height: 1.5;">
+          通过新浪/腾讯 API 补采缺失的指数历史数据（默认回补30天），完成后会自动重算所有基金的静态估值。
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue';
 import { getDataSources, updateDataSource, updateDataSourcesPriority } from '../api';
-import { getIbCoreSymbols, postIbCoreSymbols } from '../api';
+import { getIbCoreSymbols, postIbCoreSymbols, getSkipQdiiAsiaIndex, postSkipQdiiAsiaIndex, postBackfillIndices } from '../api';
 import { useMessage, NInput, NButton, NTag, NSpace } from 'naive-ui';
 
 const message = useMessage();
 const ibCoreSymbols = ref([]);
 const ibCoreSymbolsText = ref('');
+
+// [AI-2026-07-07] QDII亚洲/国内LOF 指数抓取开关
+const skipQdiiAsia = ref(true);  // 默认 true = 跳过（关闭）
+const savingSkip = ref(false);
+const backfillLoading = ref(false);
+const backfillResult = ref('');
 
 // 富途可用标的列表（非 IB 核心美股 ETF）
 const futuCandidates = ref([
@@ -324,7 +369,60 @@ const saveAll = async () => {
     }
 };
 
-onMounted(() => { fetchConfigs(); loadIbCoreSymbols() });
+// [AI-2026-07-07] QDII亚洲/国内LOF 指数抓取开关
+const loadSkipQdiiAsia = async () => {
+  try {
+    const res = await getSkipQdiiAsiaIndex()
+    if (res.data.status === 'ok') {
+      skipQdiiAsia.value = res.data.data === 1
+    }
+  } catch (e) {
+    console.error('加载 QDII亚洲指数开关失败:', e)
+  }
+}
+
+const toggleSkipQdiiAsia = (event) => {
+  skipQdiiAsia.value = !event.target.checked
+}
+
+const saveSkipQdiiAsia = async () => {
+  savingSkip.value = true
+  try {
+    const res = await postSkipQdiiAsiaIndex({ skip: skipQdiiAsia.value })
+    if (res.data.status === 'ok') {
+      skipQdiiAsia.value = res.data.data === 1
+      message.success('设置已保存（需重启生效）')
+    } else {
+      message.error(res.data.message || '保存失败')
+    }
+  } catch (e) {
+    message.error('保存失败: ' + (e.message || e))
+  } finally {
+    savingSkip.value = false
+  }
+}
+
+const backfillIndices = async () => {
+  backfillLoading.value = true
+  backfillResult.value = ''
+  try {
+    const res = await postBackfillIndices(30)
+    if (res.data.status === 'ok') {
+      backfillResult.value = `✅ 新增 ${res.data.new_records || 0} 条, 跳过 ${res.data.skipped || 0} 条, 失败 ${res.data.failed || 0} 个`
+      message.success('指数历史回补完成')
+    } else {
+      backfillResult.value = '❌ ' + (res.data.message || '回补失败')
+      message.error(backfillResult.value)
+    }
+  } catch (e) {
+    backfillResult.value = '❌ ' + (e.message || e)
+    message.error(backfillResult.value)
+  } finally {
+    backfillLoading.value = false
+  }
+}
+
+onMounted(() => { fetchConfigs(); loadIbCoreSymbols(); loadSkipQdiiAsia() });
 </script>
 
 <style scoped>

@@ -541,7 +541,10 @@ def _build_index_daily_fallback(symbols: List[str], conn, now) -> Dict[str, Dict
 def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str, float]]:
     """
     [V10.16] 收盘后不再爬实时数据：
-    - 周末/假期 → 全部指数走 index_history 收盘价，不调任何 API
+    [AI-2026-07-07] 改用 exchange_calendars 日历判断各市场交易日
+
+    - 非交易日（周末/假期）→ 全部指数走 index_history 收盘价，不调任何 API
+    - 某交易所非交易日（如美股假期A股正常）→ 该交易所指数走 DB 兜底
     - 15:00后 A股指数 → 直接取 index_history 收盘价，不调API
     - 16:00后 港股指数 → 直接取 index_history 收盘价，不调API
     - 交易时段内 → 正常拉腾讯/新浪/东财API
@@ -553,97 +556,72 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
     if time.time() - _prefetch_cache_time < 60 and _prefetch_cache:
         if requested_set.issubset(_prefetch_cache.keys()):
             return _prefetch_cache
-        # 否则缓存不完整，穿透重新获取
     if not symbols:
         return {}
 
     now = datetime.now()
+    from arbcore.utils.market_calendar import symbol_to_exchange, is_trading_day
 
-    # ====== Step 0: 非交易日（周末/假期）→ 全部走 DB 兜底 ======
-    from arbcore.utils import is_a_share_trading_day
-    if not is_a_share_trading_day(now.date()):
-        if conn:
-            try:
-                db_results = _build_index_daily_fallback(symbols, conn, now)
-                if db_results:
-                    _prefetch_cache = db_results
-                    _prefetch_cache_time = time.time()
-                    logger.info(
-                        f"[INDEX-DB] 非交易日 {now.date()}（周末/假期），"
-                        f"{len(db_results)}/{len(symbols)} 个指数取上一交易日收盘价"
-                    )
-                    return db_results
-            except Exception as e:
-                logger.warning(f"[INDEX-DB] 非交易日兜底失败: {e}")
-        # 兜底失败 → 返回旧缓存
-        if _prefetch_cache:
-            return _prefetch_cache
-        return {}
-
-    # ====== Step 1: 分类 symbols → A股/港股/其他 ======
-    a_share_syms = []
-    hk_syms = []
-    other_syms = []
+    # ====== Step 0: 按交易所分组 ======
+    exchange_syms = {}  # {exchange: [syms]}
     for sym in symbols:
-        cat, _ = _classify_index_symbol(sym)
-        if cat == 'a_share':
-            a_share_syms.append(sym)
-        elif cat == 'hk':
-            hk_syms.append(sym)
-        elif cat == 'other':
-            other_syms.append(sym)
-        # 'skip' → 忽略
+        if not sym or sym == '-':
+            continue
+        ex = symbol_to_exchange(sym)
+        if ex is None:
+            continue  # 无法识别的跳过
+        exchange_syms.setdefault(ex, []).append(sym)
 
-    # ====== Step 2: 判断各市场是否已收盘 ======
-    a_closed = now.hour >= 15      # A股 15:00 收盘
-    hk_closed = now.hour >= 16     # 港股 16:00 收盘
-
+    # ====== Step 1: 判断各交易所今日是否开市 + 盘中/收盘 ======
     db_results = {}
     api_syms = []
 
-    # 已收盘的 → 从 DB 取收盘价
-    closed_syms = []
-    if a_closed:
-        closed_syms.extend(a_share_syms)
-    else:
-        api_syms.extend(a_share_syms)
+    for ex, syms in exchange_syms.items():
+        # 1a. 是否交易日？
+        if not is_trading_day(ex, now.date()):
+            # 非交易日 → 全部走 DB 兜底
+            if conn:
+                try:
+                    part = _build_index_daily_fallback(syms, conn, now)
+                    if part:
+                        db_results.update(part)
+                        logger.info(f"[INDEX-DB] {ex} 非交易日 {now.date()}，"
+                                    f"{len(part)}/{len(syms)} 个指数取上一交易日收盘价")
+                except Exception as e:
+                    logger.warning(f"[INDEX-DB] {ex} 兜底失败: {e}")
+            continue
 
-    if hk_closed:
-        closed_syms.extend(hk_syms)
-    else:
-        api_syms.extend(hk_syms)
+        # 1b. 交易日内：判断是否已收盘
+        if ex == 'A_SHARE':
+            closed = now.hour >= 15
+        elif ex == 'XHKG':
+            closed = now.hour >= 16
+        else:
+            # 其他交易所（如美股指数）默认不在此API获取
+            closed = True
 
-    # [V10.17] 'other' 符号（如 .SPACEVCP/.SPHCMSHP/800有色 等非标指数）
-    # 收盘后走 DB 兜底，交易时段走 API
-    if a_closed and hk_closed:
-        closed_syms.extend(other_syms)
-    else:
-        api_syms.extend(other_syms)
+        if closed:
+            if conn:
+                try:
+                    part = _build_index_daily_fallback(syms, conn, now)
+                    if part:
+                        db_results.update(part)
+                except Exception as e:
+                    logger.warning(f"[INDEX-DB] {ex} 收盘兜底失败: {e}")
+        else:
+            api_syms.extend(syms)
 
-    if closed_syms and conn:
-        try:
-            db_results = _build_index_daily_fallback(closed_syms, conn, now)
-            if db_results:
-                logger.info(
-                    f"[INDEX-DB] 收盘兜底: "
-                    f"A股{'已收盘' if a_closed else '交易中'} / 港股{'已收盘' if hk_closed else '交易中'} "
-                    f"→ {len(db_results)}个指数从DB取收盘价"
-                )
-        except Exception as e:
-            logger.warning(f"[INDEX-DB] 收盘兜底失败: {e}")
-
-    # ====== Step 3: 还在交易时段的 → 调 API ======
+    # ====== Step 2: 还在交易时段的 → 调 API ======
     api_results = {}
     if api_syms:
         api_results = _fetch_realtime_indices(api_syms, now)
 
-    # ====== Step 4: 合并并缓存 ======
+    # ====== Step 3: 合并并缓存 ======
     res = {**db_results, **api_results}
     if res:
         _prefetch_cache = res
         _prefetch_cache_time = time.time()
     elif _prefetch_cache:
-        # API和DB都没拿到数据，返回旧缓存
         return _prefetch_cache
 
     return res
@@ -990,8 +968,21 @@ class FundService:
             hist_grouped = hist_df.groupby('fund_code') if not hist_df.empty else {}
 
             # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅
-            all_related_indices = funds_df['related_index'].dropna().tolist()
-            index_changes_map = prefetch_index_changes(all_related_indices, conn=conn)
+            # [AI-2026-07-07] 根据 app_settings 过滤：跳过 QDII亚洲/国内LOF 指数
+            skip_flag = self.db.get_app_setting('skip_qdii_asia_index', '1')
+            if skip_flag == '1':
+                # 只保留黄金原油 + QDII欧美 + 白银的 related_index
+                keep_categories = {'黄金原油', 'QDII欧美', '白银'}
+                filtered_funds = funds_df[funds_df['category'].isin(keep_categories)]
+                indices_to_fetch = filtered_funds['related_index'].dropna().tolist()
+                if indices_to_fetch:
+                    logger.info(f"[INDEX-SKIP] skip_qdii_asia_index=1，仅抓取 {len(indices_to_fetch)} 个指数（跳过QDII亚洲/国内LOF）")
+                else:
+                    indices_to_fetch = []
+            else:
+                indices_to_fetch = funds_df['related_index'].dropna().tolist()
+            
+            index_changes_map = prefetch_index_changes(indices_to_fetch, conn=conn)
 
             # 预查哪些基金有完整权重篮子（跳过简化指数估值，直接用计算器）
             funds_with_basket = set()
@@ -1290,16 +1281,27 @@ class FundService:
                                 current_etfs = {}
                                 if self.market_data_service:
                                     portfolio = fund_cfg.get('valuation_portfolio', [])
+                                    from arbcore.utils.market_calendar import symbol_to_exchange, is_trading_day
+                                    now_dt = datetime.now()
                                     for item in portfolio:
-                                        sym = item.get('symbol', '').replace('^', '')
+                                        raw_sym = item.get('symbol', '')
+                                        sym_base = raw_sym.replace('^', '')
                                         # 去掉地区后缀，得到基础代码 USO/GLD
+                                        has_suffix = False
                                         for suffix in ['-EU', '-JP', '-HK']:
-                                            if sym.endswith(suffix):
-                                                sym = sym[:-len(suffix)]
+                                            if sym_base.endswith(suffix):
+                                                sym_base = sym_base[:-len(suffix)]
+                                                has_suffix = True
                                                 break
-                                        q = self.market_data_service.get_realtime_quote(sym)
+                                        # [AI-2026-07-07] 检查该组件对应的交易所今天是否开市
+                                        # 有后缀的 → 查对应的区域交易所；无后缀的 → 美股(NYSE)
+                                        ex = symbol_to_exchange(raw_sym)
+                                        if ex and not is_trading_day(ex, now_dt.date()):
+                                            logger.debug(f"[{code}] 跳过 {raw_sym}（{ex} 今日休市）")
+                                            continue
+                                        q = self.market_data_service.get_realtime_quote(sym_base)
                                         if q and q.get('price'):
-                                            current_etfs[sym] = q['price']
+                                            current_etfs[sym_base] = q['price']
                                     # [AI-2026-07-06] 篮子基金所有ETF组件均无实时行情时标记
                                     if portfolio and not current_etfs:
                                         _basket_missing_etf = True
