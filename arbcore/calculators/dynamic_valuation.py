@@ -53,6 +53,43 @@ class DynamicValuationCalculator:
             base_row = df.iloc[0].to_dict()
             base_date = base_row['date']
             
+            # [AI-2026-07-07] 校验基准日是否有美股ETF数据；若为空（美国假期），向前回溯到有数据的最近日期
+            # 获取该基金篮子里的所有 ETF 代码
+            etf_syms = pd.read_sql(
+                "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code = ?",
+                conn, params=(fund_code,)
+            )
+            if not etf_syms.empty:
+                sym_list = [s.replace('^', '') for s in etf_syms['underlying_symbol'].tolist() if s]
+                if sym_list:
+                    placeholders = ','.join('?' for _ in sym_list)
+                    etf_count = conn.execute(
+                        f"SELECT COUNT(*) FROM usa_etf_daily_prices "
+                        f"WHERE symbol IN ({placeholders}) AND date = ? AND price > 0",
+                        (*sym_list, base_date)
+                    ).fetchone()[0]
+                    if etf_count == 0:
+                        # 基准日无ETF数据 → 找最近一个有净值+ETF数据的日期
+                        logger.info(f"  ⏭️ [{fund_code}] 基准日 {base_date} 无ETF数据（美国假期），向前回溯...")
+                        corrected_df = pd.read_sql(f"""
+                            SELECT a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
+                                   c.usd_cny_mid as exchange_rate,
+                                   b.position, b.hedge, b.calibration
+                            FROM unified_fund_history a
+                            LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
+                            LEFT JOIN exchange_rate c ON a.date = c.date
+                            WHERE a.fund_code = ? AND COALESCE(a.nav, b.nav) > 0
+                              AND EXISTS (
+                                  SELECT 1 FROM usa_etf_daily_prices e
+                                  WHERE e.symbol IN ({placeholders}) AND e.date = a.date AND e.price > 0
+                              )
+                            ORDER BY a.date DESC LIMIT 1
+                        """, conn, params=(fund_code, *sym_list))
+                        if not corrected_df.empty:
+                            base_row = corrected_df.iloc[0].to_dict()
+                            base_date = base_row['date']
+                            logger.info(f"  ✅ [{fund_code}] 回溯后基准日调整为 {base_date}")
+
             # [FIX] 当最新日期缺少 hedge/position 时，向前查找最近的有效数据
             if pd.isna(base_row.get('hedge')) or float(base_row.get('hedge', 0)) <= 0:
                 try:

@@ -415,9 +415,6 @@ class DailyUpdater(BaseApp):
                         self.logger.info(f"   ✅ [VPS] 同步入库汇率: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
                         # 标记云端文件在此日期已完成同步
                         self.db.mark_access_synced(file_date, 'fx_vps_sync')
-                        # 只有当同步得到的汇率真实日期就是今天（或更晚），我们才认为今日汇率已同步完成
-                        if date_info_str >= today_str:
-                            self.db.mark_access_synced(today_str, source='official_exchange_rate')
                 except Exception as e:
                     self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 汇率时出错: {e}")
 
