@@ -8,12 +8,17 @@
             <div class="fx-item">
               <span class="fx-label">美元/人民币 (在岸价)</span>
               <span class="fx-value">{{ fxSpot || '获取中...' }}</span>
-              <span class="fx-time">{{ updateTime }}</span>
+              <span class="fx-time">ETF 用</span>
+            </div>
+            <div class="fx-item">
+              <span class="fx-label">美元/人民币 (中间价)</span>
+              <span class="fx-value">{{ fxMid || '-' }}</span>
+              <span class="fx-time">LOF 用</span>
             </div>
             <div class="fx-item">
               <span class="fx-label">数据源</span>
-              <n-tag size="tiny" type="info" round>新浪 fx_susdcny 实时</n-tag>
-              <n-tag size="tiny" type="success" round style="margin-left: 4px;">IB 盘前</n-tag>
+              <n-tag size="tiny" type="info" round>在岸价 新浪</n-tag>
+              <n-tag size="tiny" type="warning" round style="margin-left: 4px;">中间价 PBOC 国家外汇管理局</n-tag>
             </div>
           </div>
         </n-card>
@@ -163,6 +168,7 @@ interface FundData {
 interface PricesResponse {
   funds: Record<string, FundData>
   fx_spot: number
+  fx_mid: number
   us_prices: Record<string, number>
   update_time: string
 }
@@ -187,6 +193,7 @@ const GROUP_NAMES: Record<number, string> = { 1: '油气', 2: '生物科技', 3:
 const groups = ref<Group[]>([])
 const fundDataMap = ref<Record<string, FundData>>({})
 const fxSpot = ref('')
+const fxMid = ref('')
 const updateTime = ref('')
 const activeTab = ref('g1')
 const targetFund = ref<{ code: string; name: string; groupId: number } | null>(null)
@@ -275,6 +282,7 @@ async function fetchPrices() {
       const data: PricesResponse = json.data
       fundDataMap.value = data.funds || {}
       fxSpot.value = data.fx_spot > 0 ? data.fx_spot.toFixed(4) : '获取中...'
+      fxMid.value = data.fx_mid > 0 ? data.fx_mid.toFixed(4) : '-'
       updateTime.value = data.update_time
       if (targetFund.value) {
         suggestedQty.value = String(calculateQty(targetFund.value.code) || '等待中')

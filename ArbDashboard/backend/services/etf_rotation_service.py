@@ -71,10 +71,10 @@ class ETFRotationService:
         finally:
             conn.close()
 
-    # ─── 汇率: 实时在岸价 ──────────────────────────────
+    # ─── 汇率: 实时在岸价（ETF 用） ─────────────────────
 
     def get_realtime_fx_spot(self) -> float:
-        """从新浪获取 USD/CNY 实时在岸价（实盘汇率）"""
+        """从新浪获取 USD/CNY 实时在岸价（ETF 基金用，实盘市场汇率）"""
         now = time.time()
         if now - _fx_cache['time'] < 15 and _fx_cache['rate'] > 0:
             return _fx_cache['rate']
@@ -103,6 +103,23 @@ class ETFRotationService:
         if _fx_cache['rate'] > 0:
             return _fx_cache['rate']
         return 7.25
+
+    # ─── 汇率: 人民币中间价（LOF 用）───────────────────
+
+    def get_fx_mid(self) -> float:
+        """从数据库获取 USD/CNY 人民币中间价（LOF 基金估值用，PBOC 每日发布）"""
+        try:
+            conn = self.db._get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] and row[0] > 0:
+                return float(row[0])
+        except Exception as e:
+            logger.warning(f"[FX] 获取中间价失败: {e}")
+        # 兜底：回落为在岸价
+        return self.get_realtime_fx_spot()
 
     # ─── 实时行情: 美股锚点价格 ────────────────────────
 
@@ -202,10 +219,11 @@ class ETFRotationService:
 
         return result
 
-    def _compute_hedge(self, code: str, us_symbol: str, nav: float, position: float) -> Optional[float]:
+    def _compute_hedge(self, code: str, us_symbol: str, nav: float, position: float, fx: float) -> Optional[float]:
         """
         当数据库中 hedge 缺失时，通过 T-1 数据动态推演 hedge
-        hedge = (US_prev_close * FX_prev_spot) / (NAV * position)
+        hedge = (US_prev_close * FX_mid) / (NAV * position)
+        fx 参数由调用方根据基金类型传入（LOF→中间价，ETF→在岸价）
         """
         if nav <= 0 or position <= 0:
             return None
@@ -228,11 +246,8 @@ class ETFRotationService:
 
             if not df_us.empty:
                 us_prev = float(df_us.iloc[0].get('netvalue') or df_us.iloc[0].get('price') or 0)
-                if us_prev > 0:
-                    # 在岸价: 用新浪实时拿不到昨日的，用中间价近似（差异很小）
-                    fx = self.get_realtime_fx_spot()
-                    if fx > 0:
-                        return (us_prev * fx) / (nav * position)
+                if us_prev > 0 and fx > 0:
+                    return (us_prev * fx) / (nav * position)
         except Exception as e:
             logger.debug(f"[HEDGE] 计算 {code} 对冲值失败: {e}")
         return None
@@ -245,13 +260,15 @@ class ETFRotationService:
         返回结构:
         {
             "funds": { "162411": { price, rt_val, rt_premium, ... }, ... },
-            "fx_spot": 7.2512,
+            "fx_spot": 7.2512,      # 在岸价（ETF 用）
+            "fx_mid": 7.2010,       # 中间价（LOF 用）
             "us_prices": { "XOP": 152.3, ... },
             "update_time": "..."
         }
         """
         groups = self.get_rotation_list()
-        fx_spot = self.get_realtime_fx_spot()
+        fx_spot = self.get_realtime_fx_spot()   # 在岸价 → ETF
+        fx_mid = self.get_fx_mid()               # 中间价 → LOF
 
         # 收集所有需要行情的代码
         all_codes = set()
@@ -286,26 +303,28 @@ class ETFRotationService:
             us_sym = GROUP_US_MAP.get(gid, 'SPY')
             us_price = us_prices.get(us_sym, 0.0)
 
+            # [AI-2026-07-08] LOF → 中间价，ETF → 在岸价
+            fx = fx_mid if ftype == 'LOF' else fx_spot
+
             # 基准数据
             base = self._get_fund_base_data(code, ftype, gid)
             nav = base['nav']
             position = base['position']
             hedge = base['hedge']
 
-            # 在岸价
             price = cn_prices.get(code, 0.0)
 
             # 计算实时估值
             rt_val = 0.0
             rt_premium = 0.0
 
-            if nav > 0 and us_price > 0 and fx_spot > 0:
-                # 如果 hedge 缺失，动态计算
+            if nav > 0 and us_price > 0 and fx > 0:
+                # 如果 hedge 缺失，动态计算（用同类型汇率）
                 if hedge is None or hedge <= 0:
-                    hedge = self._compute_hedge(code, us_sym, nav, position)
+                    hedge = self._compute_hedge(code, us_sym, nav, position, fx)
 
                 if hedge and hedge > 0:
-                    rt_val = nav * (1.0 - position) + (us_price * fx_spot) / hedge
+                    rt_val = nav * (1.0 - position) + (us_price * fx) / hedge
                     if price > 0 and rt_val > 0:
                         rt_premium = round((price / rt_val - 1) * 100, 3)
 
@@ -324,6 +343,7 @@ class ETFRotationService:
         return {
             'funds': result_funds,
             'fx_spot': round(fx_spot, 4),
+            'fx_mid': round(fx_mid, 4),
             'us_prices': us_prices,
             'update_time': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
         }

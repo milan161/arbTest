@@ -53,53 +53,60 @@ class DynamicValuationCalculator:
             base_row = df.iloc[0].to_dict()
             base_date = base_row['date']
             
-            # [AI-2026-07-07] 校验基准日是否有美股ETF数据；若为空（美国假期），向前回溯到有数据的最近日期
-            # 先尝试从 fund_basket_weights 获取 ETF 代码，兜底用 related_index（单一ETF基金如162411）
-            etf_syms = pd.read_sql(
-                "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code = ?",
+            # [AI-2026-07-08] 校验基准日是否有美股ETF数据；仅对持有美股的基金类别做美国假期回溯
+            # QDII亚洲/国内LOF/债券货币 → 跳过，它们不持有美股
+            cat_df = pd.read_sql(
+                "SELECT category FROM unified_fund_list WHERE fund_code = ?",
                 conn, params=(fund_code,)
             )
-            sym_list = []
-            if not etf_syms.empty:
-                sym_list = [s.replace('^', '') for s in etf_syms['underlying_symbol'].tolist() if s]
-            if not sym_list:
-                # 无 basket_weights → 用 related_index 作为单一ETF代码
-                ri_df = pd.read_sql(
-                    "SELECT related_index FROM unified_fund_list WHERE fund_code = ?",
+            category = str(cat_df.iloc[0]['category']).strip() if not cat_df.empty else ''
+            us_categories = {'黄金原油', 'QDII欧美', '混合跨境', '白银'}
+            if category in us_categories:
+                # 先尝试从 fund_basket_weights 获取 ETF 代码，兜底用 related_index（单一ETF基金如162411）
+                etf_syms = pd.read_sql(
+                    "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code = ?",
                     conn, params=(fund_code,)
                 )
-                if not ri_df.empty:
-                    ri = str(ri_df.iloc[0]['related_index'] or '').strip()
-                    if ri and ri != '-' and ri != '0' and ri != 'nan':
-                        sym_list = [ri]
-            if sym_list:
-                placeholders = ','.join('?' for _ in sym_list)
-                etf_count = conn.execute(
-                    f"SELECT COUNT(*) FROM usa_etf_daily_prices "
-                    f"WHERE symbol IN ({placeholders}) AND date = ? AND price > 0",
-                    (*sym_list, base_date)
-                ).fetchone()[0]
-                if etf_count == 0:
-                    # 基准日无ETF数据 → 找最近一个有净值+ETF数据的日期
-                    logger.info(f"  ⏭️ [{fund_code}] 基准日 {base_date} 无ETF数据（美国假期），向前回溯...")
-                    corrected_df = pd.read_sql(f"""
-                        SELECT a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
-                               c.usd_cny_mid as exchange_rate,
-                               b.position, b.hedge, b.calibration
-                        FROM unified_fund_history a
-                        LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
-                        LEFT JOIN exchange_rate c ON a.date = c.date
-                        WHERE a.fund_code = ? AND COALESCE(a.nav, b.nav) > 0
-                          AND EXISTS (
-                              SELECT 1 FROM usa_etf_daily_prices e
-                              WHERE e.symbol IN ({placeholders}) AND e.date = a.date AND e.price > 0
-                          )
-                        ORDER BY a.date DESC LIMIT 1
-                    """, conn, params=(fund_code, *sym_list))
-                    if not corrected_df.empty:
-                        base_row = corrected_df.iloc[0].to_dict()
-                        base_date = base_row['date']
-                        logger.info(f"  ✅ [{fund_code}] 回溯后基准日调整为 {base_date}")
+                sym_list = []
+                if not etf_syms.empty:
+                    sym_list = [s.replace('^', '') for s in etf_syms['underlying_symbol'].tolist() if s]
+                if not sym_list:
+                    ri_df = pd.read_sql(
+                        "SELECT related_index FROM unified_fund_list WHERE fund_code = ?",
+                        conn, params=(fund_code,)
+                    )
+                    if not ri_df.empty:
+                        ri = str(ri_df.iloc[0]['related_index'] or '').strip()
+                        if ri and ri != '-' and ri != '0' and ri != 'nan':
+                            sym_list = [ri]
+                if sym_list:
+                    placeholders = ','.join('?' for _ in sym_list)
+                    etf_count = conn.execute(
+                        f"SELECT COUNT(*) FROM usa_etf_daily_prices "
+                        f"WHERE symbol IN ({placeholders}) AND date = ? AND price > 0",
+                        (*sym_list, base_date)
+                    ).fetchone()[0]
+                    if etf_count == 0:
+                        # 基准日无ETF数据 → 找最近一个有净值+ETF数据的日期
+                        logger.info(f"  ⏭️ [{fund_code}] 基准日 {base_date} 无美股ETF数据（美国假期），向前回溯...")
+                        corrected_df = pd.read_sql(f"""
+                            SELECT a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
+                                   c.usd_cny_mid as exchange_rate,
+                                   b.position, b.hedge, b.calibration
+                            FROM unified_fund_history a
+                            LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
+                            LEFT JOIN exchange_rate c ON a.date = c.date
+                            WHERE a.fund_code = ? AND COALESCE(a.nav, b.nav) > 0
+                              AND EXISTS (
+                                  SELECT 1 FROM usa_etf_daily_prices e
+                                  WHERE e.symbol IN ({placeholders}) AND e.date = a.date AND e.price > 0
+                              )
+                            ORDER BY a.date DESC LIMIT 1
+                        """, conn, params=(fund_code, *sym_list))
+                        if not corrected_df.empty:
+                            base_row = corrected_df.iloc[0].to_dict()
+                            base_date = base_row['date']
+                            logger.info(f"  ✅ [{fund_code}] 回溯后基准日调整为 {base_date}")
 
             # [FIX] 当最新日期缺少 hedge/position 时，向前查找最近的有效数据
             if pd.isna(base_row.get('hedge')) or float(base_row.get('hedge', 0)) <= 0:
