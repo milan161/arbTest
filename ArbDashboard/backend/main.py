@@ -2315,6 +2315,7 @@ async def get_silver_ratio():
     
     try:
         cursor = conn.cursor()
+        # [AI-2026-07-08] 改用 在岸价 (usd_cny_spot) -> CNH -> 中间价 三级回退，Woody 实际使用在岸价
         cursor.execute("""
             SELECT
                 a.date,
@@ -2322,32 +2323,33 @@ async def get_silver_ratio():
                 a.settle_price AS ag_settle,
                 a.volume AS ag_volume,
                 s.close_price AS si_close,
-                COALESCE(e.usd_cnh, e.usd_cny_mid) AS usd_cnh
+                COALESCE(e.usd_cny_spot, e.usd_cnh, e.usd_cny_mid) AS usd_cny_spot
             FROM futures_daily a
             LEFT JOIN futures_daily s ON a.date = s.date AND s.symbol = 'SI'
             LEFT JOIN exchange_rate e ON a.date = e.date
             WHERE a.symbol = 'AG0'
               AND a.close_price IS NOT NULL
               AND s.close_price IS NOT NULL
-              AND (e.usd_cnh IS NOT NULL OR e.usd_cny_mid IS NOT NULL)
+              AND (e.usd_cny_spot IS NOT NULL OR e.usd_cnh IS NOT NULL OR e.usd_cny_mid IS NOT NULL)
             ORDER BY a.date DESC
         """)
         rows = cursor.fetchall()
         data = []
         
-        # 实时抓取今日 SI 和 CNH（对齐 Woody：21:00 前每次页面访问都覆写 today row）
+        # 实时抓取今日 SI 和 在岸价 USDCNY（对齐 Woody：21:00 前每次页面访问都覆写 today row）
         today_si = None
-        today_cnh = None
+        today_spot = None
         if not is_finalized:
             try:
                 si_raw = market_data_service.data_fetcher.fetch_si_from_sina()
                 if si_raw and si_raw.get('price', 0) > 0:
                     today_si = si_raw['price']
-                cnh_raw = market_data_service.data_fetcher.fetch_cnh_from_sina()
-                if cnh_raw and cnh_raw.get('rate', 0) > 0:
-                    today_cnh = cnh_raw['rate']
+                # Woody 实际使用在岸价 (USDCNY)，不是 CNH
+                spot_raw = market_data_service.data_fetcher.fetch_cny_spot_rate()
+                if spot_raw and spot_raw.get('人民币在岸价', 0) > 0:
+                    today_spot = spot_raw['人民币在岸价']
             except Exception as e:
-                logger.warning(f"[白银比价] 实时获取 SI/CNH 失败: {e}")
+                logger.warning(f"[白银比价] 实时获取 SI/USDCNY 失败: {e}")
         else:
             logger.info(f"[白银比价] 今日数据已定稿 (≥21:00)，使用数据库存档值")
         
@@ -2357,27 +2359,27 @@ async def get_silver_ratio():
             ag_settle = float(row[2]) if row[2] is not None else ag_close
             ag_volume = int(row[3]) if row[3] is not None else None
             
-            # 今日行：用实时 SI 和 CNH 覆盖（对齐 Woody 的 _updateStockHistory 机制）
+            # 今日行：用实时 SI 和 USDCNY 覆盖（对齐 Woody 的 _updateStockHistory 机制）
             if row_date == today_str:
                 si_close = today_si if today_si else float(row[4])
-                usd_cnh = today_cnh if today_cnh else float(row[5])
+                usd_cny_spot = today_spot if today_spot else float(row[5])
             else:
                 si_close = float(row[4])
-                usd_cnh = float(row[5])
+                usd_cny_spot = float(row[5])
             
-            ratio = (ag_settle / 1000.0 * 31.1035 / usd_cnh) / si_close if (usd_cnh > 0 and si_close > 0 and ag_settle) else None
+            ratio = (ag_settle / 1000.0 * 31.1035 / usd_cny_spot) / si_close if (usd_cny_spot > 0 and si_close > 0 and ag_settle) else None
             data.append({
                 "date": row_date,
                 "ag_close": ag_close,
                 "ag_settle": ag_settle,
                 "ag_volume": ag_volume,
                 "si_close": round(si_close, 2),
-                "usd_cnh": round(usd_cnh, 4),
+                "usd_cny_spot": round(usd_cny_spot, 4),
                 "ratio": round(ratio, 4) if ratio else None
             })
         
         # 如果数据库还没有今日行但实时数据可用，拼一个今日行（用 AG0 新浪实时数据）
-        if (not data or data[0]['date'] != today_str) and today_si and today_cnh:
+        if (not data or data[0]['date'] != today_str) and today_si and today_spot:
             try:
                 ag0_raw = market_data_service.data_fetcher.fetch_ag0_from_sina()
                 if ag0_raw:
@@ -2385,15 +2387,15 @@ async def get_silver_ratio():
                     ag_settle = ag0_raw.get('settle') or ag_close  # settle = parts[9] (今日结算价)
                     ag_volume = ag0_raw.get('volume')
                     ratio = None
-                    if ag_settle and today_si > 0 and today_cnh > 0:
-                        ratio = (ag_settle / 1000.0 * 31.1035 / today_cnh) / today_si
+                    if ag_settle and today_si > 0 and today_spot > 0:
+                        ratio = (ag_settle / 1000.0 * 31.1035 / today_spot) / today_si
                     today_row = {
                         "date": today_str,
                         "ag_close": ag_close,
                         "ag_settle": ag_settle,
                         "ag_volume": ag_volume,
                         "si_close": round(today_si, 2),
-                        "usd_cnh": round(today_cnh, 4),
+                        "usd_cny_spot": round(today_spot, 4),
                         "ratio": round(ratio, 4) if ratio else None
                     }
                     data.insert(0, today_row)

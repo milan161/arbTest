@@ -463,6 +463,27 @@ class DailyUpdater(BaseApp):
         except Exception as e:
             self.logger.error(f"❌ 获取 CNH 离岸汇率失败: {e}")
 
+        # [AI-2026-07-08] Level 3: 获取人民币在岸价 USDCNY（用于白银比价，Woody 实际使用在岸价而非 CNH）
+        try:
+            conn3 = self.db._get_conn()
+            cursor3 = conn3.execute(
+                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cny_spot IS NOT NULL",
+                (today_str,)
+            )
+            has_spot = cursor3.fetchone()[0] > 0
+            conn3.close()
+            if not has_spot:
+                spot_data = data_fetcher.fetch_cny_spot_rate()
+                if spot_data:
+                    spot_date = pd.to_datetime(str(spot_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                    spot_rate = spot_data.get('人民币在岸价')
+                    self.db.upsert_exchange_rate(spot_date, usd_cny_spot=spot_rate)
+                    self.logger.info(f"✅ 人民币在岸价 USDCNY 入库: {spot_date} -> {spot_rate}")
+            else:
+                self.logger.info(f"✅ 今日({today_str}) USDCNY 已在库中，跳过。")
+        except Exception as e:
+            self.logger.error(f"❌ 获取人民币在岸价失败: {e}")
+
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
         """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
         conn = self.db._get_conn()

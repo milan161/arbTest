@@ -1692,6 +1692,19 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+- code: '159561'
+  name: 德国ETF嘉实
+  category: QDII欧美
+  trade_etf: DAX
+  trade_future: ''
+  holdings:
+    equity_ratio: 100
+  valuation_portfolio:
+  - symbol: DAX
+    weight: 100
+    anchor: US
+  redemption_fee_rate: 0.5
+  commission_rate: 0
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
 future_oil_calibration: .nan
