@@ -30,12 +30,7 @@ class DailyUpdater(BaseApp):
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
         logs_dir = os.path.abspath(os.path.join(scripts_dir, "..", "..", "logs"))  # [AI-2026-07-02] 日志统一到 ArbDashboard/logs/
         super().__init__("daily_updater", app_dir=scripts_dir, log_dir=logs_dir)
-        # [AI-2026-07-03] 修正配置文件路径：指向项目根 arbcore/config/lof_config.yaml
-        correct_config = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "arbcore", "config", "lof_config.yaml")
-        if os.path.exists(correct_config):
-            self.config_path = correct_config
-            self.config = self._load_config()
-            self.logger.info(f"📄 配置文件重定向: {self.config_path}")
+        # [AI-2026-07-08] 移除：BaseApp 现已在 arbcore/config/ 优先查找，无需重复重定向
         self.woody_crawler = WoodyWebCrawler()
         self.hist_manager = HistoricalDataManager(db_manager=self.db)
         self._woody_logged_in = False  # 延迟登录标记

@@ -568,6 +568,12 @@ async def get_fund_basket(code: str):
     data = fund_service.get_fund_basket(code)
     return {"status": "ok", "data": data}
 
+@app.get("/api/fund/hedge_multipliers")
+async def get_hedge_multipliers():
+    """获取所有期货乘数配置（前端沙盘可调用）"""
+    from arbcore.config.futures_multipliers import list_all_multipliers
+    return {"status": "ok", "data": list_all_multipliers()}
+
 @app.get("/api/fund/{code}/valuation_meta")
 async def get_fund_valuation_meta(code: str):
     try:
@@ -580,8 +586,9 @@ async def get_fund_valuation_meta(code: str):
             return {"status": "error", "message": f"Fund {code} not found in database"}
             
         trade_future = ""
-        if "原油" in str(f_row[0]) or "USO" in str(f_row[1]): trade_future = "CL"
-        elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]): trade_future = "GC"
+        # [AI-2026-07-07] 按 Woody 实盘实践改用微型合约：MCL(100桶)代替CL(1000桶)，MGC(10盎司)代替GC(100盎司)
+        if "原油" in str(f_row[0]) or "USO" in str(f_row[1]): trade_future = "MCL"
+        elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]): trade_future = "MGC"
         elif "白银" in str(f_row[0]): trade_future = "AG0"
             
         fund_cfg = {

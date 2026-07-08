@@ -70,8 +70,15 @@ class BaseApp:
         
         self.db = DatabaseManager()
         
-        # 配置文件路径，优先在应用目录下查找
-        self.config_path = os.path.join(self.app_dir, config_name)
+        # 配置文件路径，优先查找 arbcore/config/ 下的规范位置，再 fallback 到应用目录
+        core_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", config_name)
+        app_config_path = os.path.join(self.app_dir, config_name)
+        if os.path.exists(core_config_path):
+            self.config_path = core_config_path
+        elif os.path.exists(app_config_path):
+            self.config_path = app_config_path
+        else:
+            self.config_path = app_config_path  # fallback 到应用目录，让 _load_config 打 warning
         self.config = self._load_config()
         self.logger.info(f"🚀 {name} 启动，应用目录: {self.app_dir}，配置文件: {self.config_path}")
 
