@@ -38,19 +38,9 @@ export interface FundItem {
 }
 
 /**
- * TAB 分类映射（与 unified_fund_list.category 字段保持一致）
- * 每个值对应数据库中真实存在的 category，无历史遗留空壳条目。
- * DB 已有的 category: 黄金原油 | QDII欧美 | 混合跨境 | QDII亚洲 | 国内LOF | 白银 | 债券/货币
+ * [AI-2026-07-09] 分类已简化：数据库 category 值与主看板 TAB 名一一对应，无子分类映射。
+ * 主看板 TAB 完全由数据库动态分类生成，不再需要 TAB→分类映射表。
  */
-export const TAB_CATEGORIES: Record<string, string[]> = {
-  '黄金原油': ['黄金原油'],
-  'QDII欧美': ['QDII欧美', '混合跨境'],
-  'QDII亚洲': ['QDII亚洲'],
-  '国内LOF': ['国内LOF'],
-  '白银': ['白银'],
-  '现金管理': ['债券/货币']
-}
-
 export const HIGH_FREQ_TABS = ['自选', '黄金原油', 'QDII欧美']
 
 export const useFundStore = defineStore('fund', () => {
@@ -74,6 +64,19 @@ export const useFundStore = defineStore('fund', () => {
     localStorage.setItem('dashboard_tab', v)
   })
   const searchKeyword = ref('')
+  // [AI-2026-07-09] 动态 TAB：从数据库读取的真实分类列表（category 值与 TAB 名一致）
+  const dbCategories = ref<string[]>([])
+
+  // [AI-2026-07-09] 主看板 TAB 固定顺序（自选始终第一，其余按用户指定顺序，未知分类追加末尾）
+  const DASHBOARD_TAB_ORDER = ['黄金原油', 'QDII欧美', 'QDII日本', 'QDII亚洲', '国内LOF', '现金管理', '白银']
+
+  /** 主看板 TAB 列表：始终含"我的自选"，其余由数据库分类动态生成，按固定顺序排序 */
+  const dashboardTabs = computed<string[]>(() => {
+    const cats = dbCategories.value.filter((c) => c && c !== '自选')
+    const ordered = DASHBOARD_TAB_ORDER.filter((c) => cats.includes(c))
+    const extra = cats.filter((c) => !DASHBOARD_TAB_ORDER.includes(c))
+    return ['自选', ...ordered, ...extra]
+  })
   const fundHistory = ref<any[]>([])
   const fundHistoryLoading = ref(false)
   const intradayData = ref<any[]>([])
@@ -99,10 +102,8 @@ export const useFundStore = defineStore('fund', () => {
     if (currentTab.value === '自选') {
       data = data.filter((item) => watchlist.value.includes(item.fund_code))
     } else {
-      const categories = TAB_CATEGORIES[currentTab.value]
-      if (categories) {
-        data = data.filter((item) => categories.includes(item.category))
-      }
+      // [AI-2026-07-09] 分类已简化，currentTab 即数据库 category 值，直接精确过滤
+      data = data.filter((item) => item.category === currentTab.value)
     }
 
     if (searchKeyword.value) {
@@ -168,6 +169,18 @@ export const useFundStore = defineStore('fund', () => {
     }
   }
 
+  // [AI-2026-07-09] 拉取数据库动态分类，驱动主看板 TAB 生成
+  async function fetchCategories() {
+    try {
+      const res = await api.getCategories()
+      if (res.data?.status === 'ok' && Array.isArray(res.data.data)) {
+        dbCategories.value = res.data.data
+      }
+    } catch (err) {
+      console.error('获取基金分类失败', err)
+    }
+  }
+
   async function fetchFundHistory(code: string) {
     fundHistoryLoading.value = true
     try {
@@ -222,6 +235,7 @@ export const useFundStore = defineStore('fund', () => {
     intradayData, basketData,
     watchlist,
     filteredTableData, refreshInterval,
+    dashboardTabs, fetchCategories,
     toggleWatchlist, isInWatchlist,
     fetchDashboard, fetchFundHistory, fetchIntraday, fetchBasket,
     setTab

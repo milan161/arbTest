@@ -9,27 +9,31 @@ logger = logging.getLogger(__name__)
 
 class MarketManager(BaseManager):
     # [AI-2026-07-08] 新增 usd_cny_spot 在岸价支持
-    def upsert_exchange_rate(self, date: str, usd_cny_mid: float = None, hkd_cny_mid: float = None, usd_cnh: float = None, usd_cny_spot: float = None):
+    # [AI-2026-07-09] 新增 jpy_cny_mid 日元中间价支持（QDII日本估值）
+    def upsert_exchange_rate(self, date: str, usd_cny_mid: float = None, hkd_cny_mid: float = None, usd_cnh: float = None, usd_cny_spot: float = None, jpy_cny_mid: float = None):
         with self.lock:
             conn = self._get_conn()
             cursor = conn.cursor()
             # [AI-2026-07-03] 新增 usd_cnh 列支持
             # [AI-2026-07-08] 新增 usd_cny_spot 列支持
-            cursor.execute("SELECT usd_cny_mid, hkd_cny_mid, usd_cnh, usd_cny_spot FROM exchange_rate WHERE date = ?", (date,))
+            # [AI-2026-07-09] 新增 jpy_cny_mid 列支持
+            cursor.execute("SELECT usd_cny_mid, hkd_cny_mid, usd_cnh, usd_cny_spot, jpy_cny_mid FROM exchange_rate WHERE date = ?", (date,))
             row = cursor.fetchone()
             
             exist_usd = row[0] if row else None
             exist_hkd = row[1] if row else None
             exist_cnh = row[2] if row else None
             exist_spot = row[3] if row else None
+            exist_jpy = row[4] if row else None
             
             new_usd = usd_cny_mid if usd_cny_mid is not None else exist_usd
             new_hkd = hkd_cny_mid if hkd_cny_mid is not None else exist_hkd
             new_cnh = usd_cnh if usd_cnh is not None else exist_cnh
             new_spot = usd_cny_spot if usd_cny_spot is not None else exist_spot
+            new_jpy = jpy_cny_mid if jpy_cny_mid is not None else exist_jpy
             
-            query = "INSERT OR REPLACE INTO exchange_rate (date, usd_cny_mid, hkd_cny_mid, usd_cnh, usd_cny_spot, updated_at) VALUES (?, ?, ?, ?, ?, (datetime('now', 'localtime')))"
-            conn.execute(query, (date, new_usd, new_hkd, new_cnh, new_spot))
+            query = "INSERT OR REPLACE INTO exchange_rate (date, usd_cny_mid, hkd_cny_mid, usd_cnh, usd_cny_spot, jpy_cny_mid, updated_at) VALUES (?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')))"
+            conn.execute(query, (date, new_usd, new_hkd, new_cnh, new_spot, new_jpy))
             conn.commit()
             conn.close()
 

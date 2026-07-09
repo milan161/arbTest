@@ -123,6 +123,10 @@ def symbol_to_exchange(symbol: str) -> Optional[str]:
     if any(clean.startswith(p) for p in _HK_INDEX_PREFIXES):
         return 'XHKG'
     
+    # [AI-2026-07-09] 日本指数 → JPX
+    if clean in ('N225', 'NKY', 'NIKKEI', 'TOPIX', 'TOPX'):
+        return 'JPX'
+    
     # 3. A股指数（6位数字 或 SZ/SH 前缀）
     if clean.startswith('SZ') or clean.startswith('SH'):
         return 'A_SHARE'

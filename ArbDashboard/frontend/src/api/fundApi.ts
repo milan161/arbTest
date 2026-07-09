@@ -16,6 +16,11 @@ export function getFundHistory(code: string) {
   return client.get(`/api/fund/${code}/history`)
 }
 
+/** 动态基金分类（主看板 TAB 用） */
+export function getCategories() {
+  return client.get('/api/config/categories')
+}
+
 /** 基金分时数据（曲线图用） */
 export function getFundIntraday(code: string, date?: string) {
   return client.get(`/api/fund/${code}/intraday`, { params: { date } })

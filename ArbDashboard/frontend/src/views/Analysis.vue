@@ -370,7 +370,7 @@ const watchlist = ref<string[]>(JSON.parse(localStorage.getItem('watchlist') || 
 // 分类映射：前端显示名称 → 数据库category值
 const categoryMap: Record<string, string[]> = {
   'gold_oil': ['黄金原油'],
-  'qdii_us': ['纯ETF', 'QDII欧美', '混合跨境', '指数'],
+  'qdii_us': ['QDII欧美', 'QDII日本'],  // [AI-2026-07-09] 分类已简化，纯ETF/指数为sub_category不再作category；混合跨境已并入QDII欧美
   'qdii_asia': ['QDII 亚洲', 'QDII亚洲'],
   'domestic_lof': ['指数LOF', '其他', '国内LOF'],
   'silver': ['白银']

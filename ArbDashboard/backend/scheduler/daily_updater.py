@@ -373,21 +373,21 @@ class DailyUpdater(BaseApp):
             self.logger.error(f"❌ 同步YAML配置失败: {e}")
 
     def step3_fetch_exchange_rate(self):
-        """步骤三：抓取汇率（人民币中间价）存入库"""
-        self.logger.info("=== 步骤三：抓取汇率（人民币中间价） ===")
+        """[AI-2026-07-08] 步骤三：抓取汇率（中间价/在岸价/离岸价）存入库，2 级降级：VPS 同步 → 本地直连兜底"""
+        self.logger.info("=== 步骤三：抓取汇率（中间价/在岸价/离岸价） ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
 
-        # 🛡️ 数据库检查：如果库里已有今天的汇率数据，无需连 VPS
+        # 🛡️ 数据库检查：仅当今日三个汇率字段（中间价/在岸价/离岸价）都已齐备时才跳过
+        # [AI-2026-07-08] 改为三字段全齐才跳过，避免"中间价有了但 spot/cnh 永远不补"的漏洞
         try:
             conn = self.db._get_conn()
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cny_mid IS NOT NULL",
+            row = conn.execute(
+                "SELECT usd_cny_mid, usd_cny_spot, usd_cnh FROM exchange_rate WHERE date = ?",
                 (today_str,)
-            )
-            count = cursor.fetchone()[0]
+            ).fetchone()
             conn.close()
-            if count > 0:
-                self.logger.info(f"✅ 今日({today_str})汇率已在库中，无需连VPS，直接跳过。")
+            if row and row[0] is not None and row[1] is not None and row[2] is not None:
+                self.logger.info(f"✅ 今日({today_str})三汇率已齐备，无需连VPS，直接跳过。")
                 self.db.mark_access_synced(today_str, source='official_exchange_rate')
                 return
         except Exception as e:
@@ -401,13 +401,23 @@ class DailyUpdater(BaseApp):
                 file_date = item['date']
                 content = item['content']
                 try:
+                    # [AI-2026-07-08] 读取全部四个汇率字段（中间价/在岸价/离岸价）
                     date_info = content.get('date')
                     usd_val = content.get('usd_cny_mid')
                     hkd_val = content.get('hkd_cny_mid')
-                    if date_info and usd_val:
+                    cny_spot_val = content.get('usd_cny_spot')
+                    cnh_val = content.get('usd_cnh')
+                    # 中间价缺失则尝试用其他汇率兜底日期，避免整条跳过
+                    if date_info and (usd_val or cny_spot_val or cnh_val):
                         date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
-                        self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
-                        self.logger.info(f"   ✅ [VPS] 同步入库汇率: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
+                        self.db.upsert_exchange_rate(
+                            date_info_str,
+                            usd_cny_mid=usd_val,
+                            hkd_cny_mid=hkd_val,
+                            usd_cny_spot=cny_spot_val,
+                            usd_cnh=cnh_val,
+                        )
+                        self.logger.info(f"   ✅ [VPS] 同步入库汇率: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}, CNYSpot:{cny_spot_val}, CNH:{cnh_val}")
                         # 标记云端文件在此日期已完成同步
                         self.db.mark_access_synced(file_date, 'fx_vps_sync')
                 except Exception as e:
@@ -418,8 +428,8 @@ class DailyUpdater(BaseApp):
             self.logger.info("✅ 今日已同步过人民币中间价，跳过实时抓取。")
             return
 
-        # Level 1: 实时抓取作为兜底
-        self.logger.info("📡 [Level 1] 尝试实时抓取人民币中间价...")
+        # Level 1: 实时抓取作为兜底（[AI-2026-07-08] 单级兜底补全：中间价 + 在岸价 + 离岸价 一次抓全）
+        self.logger.info("📡 [Level 1] 尝试实时抓取人民币中间价/在岸价/离岸价...")
         from arbcore.fetchers.data_fetcher import data_fetcher
         exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
         if exchange_rate_data:
@@ -431,7 +441,7 @@ class DailyUpdater(BaseApp):
                     hkd_val = exchange_rate_data.get('hkd_cny_mid')
                     self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
                     self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
-                    
+
                     # 关键修复：只有当抓取到的汇率实际生效日期是今天（或更晚）时，才标记今日已同步
                     # 如果抓到的是昨天的日期，说明今天最新的还没更新，我们绝不标记今日同步，以便稍后重试
                     if date_info_str >= today_str:
@@ -442,47 +452,43 @@ class DailyUpdater(BaseApp):
                 except Exception as e:
                     self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
-        # [AI-2026-07-03] Level 2: 获取离岸人民币 CNH 汇率（用于白银比价计算）
+        # [AI-2026-07-08] Level 1 兜底补全：在岸价 + 离岸价 直连新浪（VPS 未提供时单级也能补齐）
+        # 在岸价 USDCNY
         try:
-            conn2 = self.db._get_conn()
-            cursor2 = conn2.execute(
-                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cnh IS NOT NULL",
-                (today_str,)
-            )
-            has_cnh = cursor2.fetchone()[0] > 0
-            conn2.close()
-            if not has_cnh:
-                cnh_data = data_fetcher.fetch_cnh_offshore_rate()
-                if cnh_data:
-                    cnh_date = pd.to_datetime(str(cnh_data.get('日期', today_str))).strftime('%Y-%m-%d')
-                    cnh_rate = cnh_data.get('离岸价')
-                    self.db.upsert_exchange_rate(cnh_date, usd_cnh=cnh_rate)
-                    self.logger.info(f"✅ 离岸人民币 CNH 入库: {cnh_date} -> {cnh_rate}")
-            else:
-                self.logger.info(f"✅ 今日({today_str}) CNH 已在库中，跳过。")
-        except Exception as e:
-            self.logger.error(f"❌ 获取 CNH 离岸汇率失败: {e}")
-
-        # [AI-2026-07-08] Level 3: 获取人民币在岸价 USDCNY（用于白银比价，Woody 实际使用在岸价而非 CNH）
-        try:
-            conn3 = self.db._get_conn()
-            cursor3 = conn3.execute(
-                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cny_spot IS NOT NULL",
-                (today_str,)
-            )
-            has_spot = cursor3.fetchone()[0] > 0
-            conn3.close()
+            conn_spot = self.db._get_conn()
+            has_spot = conn_spot.execute(
+                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cny_spot IS NOT NULL", (today_str,)
+            ).fetchone()[0] > 0
+            conn_spot.close()
             if not has_spot:
                 spot_data = data_fetcher.fetch_cny_spot_rate()
                 if spot_data:
                     spot_date = pd.to_datetime(str(spot_data.get('日期', today_str))).strftime('%Y-%m-%d')
                     spot_rate = spot_data.get('人民币在岸价')
-                    self.db.upsert_exchange_rate(spot_date, usd_cny_spot=spot_rate)
-                    self.logger.info(f"✅ 人民币在岸价 USDCNY 入库: {spot_date} -> {spot_rate}")
-            else:
-                self.logger.info(f"✅ 今日({today_str}) USDCNY 已在库中，跳过。")
+                    if spot_rate is not None:
+                        self.db.upsert_exchange_rate(spot_date, usd_cny_spot=spot_rate)
+                        self.logger.info(f"✅ [Level 1] 在岸价 USDCNY 入库: {spot_date} -> {spot_rate}")
         except Exception as e:
-            self.logger.error(f"❌ 获取人民币在岸价失败: {e}")
+            self.logger.error(f"❌ [Level 1] 在岸价直连兜底失败: {e}")
+        # 离岸价 CNH
+        try:
+            conn_cnh = self.db._get_conn()
+            has_cnh = conn_cnh.execute(
+                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cnh IS NOT NULL", (today_str,)
+            ).fetchone()[0] > 0
+            conn_cnh.close()
+            if not has_cnh:
+                cnh_data = data_fetcher.fetch_cnh_offshore_rate()
+                if cnh_data:
+                    cnh_date = pd.to_datetime(str(cnh_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                    cnh_rate = cnh_data.get('离岸价')
+                    if cnh_rate is not None:
+                        self.db.upsert_exchange_rate(cnh_date, usd_cnh=cnh_rate)
+                        self.logger.info(f"✅ [Level 1] 离岸价 CNH 入库: {cnh_date} -> {cnh_rate}")
+        except Exception as e:
+            self.logger.error(f"❌ [Level 1] 离岸价直连兜底失败: {e}")
+
+        self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价）采集结束。")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
         """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
@@ -630,7 +636,7 @@ class DailyUpdater(BaseApp):
         conn_ufl.close()
         fund_categories = {str(r[0]): (r[1] or '') for r in all_fund_rows if r[0]}
         all_codes = list(fund_categories.keys())
-        T2_CATEGORIES = {'黄金原油', 'QDII欧美', '混合跨境'}
+        T2_CATEGORIES = {'黄金原油', 'QDII欧美'}  # [AI-2026-07-09] 混合跨境已并入QDII欧美
 
         for code in all_codes:
             if not code: continue
@@ -1065,7 +1071,7 @@ class DailyUpdater(BaseApp):
                 hk_funds.append((fund_code, ri, pos_ratio or 0.95))
             elif category == 'QDII欧美':
                 us_funds.append((fund_code, ri, pos_ratio or 0.95))
-            elif category in ('黄金原油', '混合跨境'):
+            elif category == '黄金原油':
                 continue  # step10 已处理
             else:
                 # 根据指数代码推断

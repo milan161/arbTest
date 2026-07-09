@@ -56,3 +56,102 @@ def calculate_basket_valuation(
         
     net_ratio = position * (w_change * fx_change - 1.0)
     return base_nav * (1.0 + net_ratio)
+
+# [AI-2026-07-09] 新增：指数估值公式（用于 QDII日本、无 hedge 的指数基金）
+def calculate_index_valuation(
+    base_nav: float,
+    position: float,
+    current_idx: float,
+    base_idx: float,
+    current_fx: float,
+    base_fx: float
+) -> Optional[float]:
+    """
+    指数估值公式（无 hedge、无 basket 的兜底逻辑）。
+    
+    适用场景：
+    - QDII日本（513000、513520、159866）跟踪日经225
+    - QDII亚洲（161725、161726）跟踪港股指数
+    - 国内LOF（A股指数基金）
+    
+    公式：估值 = T-1净值 × (1 + 仓位 × (指数T/指数T-1 × 汇率T/汇率T-1 - 1))
+    
+    参数：
+    - base_nav: T-1日净值
+    - position: 仓位比例 (0-1)，如 0.95 表示 95%
+    - current_idx: 指数当前值（T日）
+    - base_idx: 指数基准值（T-1日）
+    - current_fx: 当前汇率（T日）
+    - base_fx: 基准汇率（T-1日）
+    
+    返回：估值（float）或 None（数据不足）
+    """
+    if not all([base_nav, position, current_idx, base_idx, current_fx, base_fx]):
+        return None
+    if base_nav <= 0 or base_idx <= 0 or base_fx <= 0:
+        return None
+    if current_idx <= 0 or current_fx <= 0:
+        return None
+        
+    # 指数涨跌幅
+    idx_change = current_idx / base_idx
+    
+    # 汇率涨跌幅
+    fx_change = current_fx / base_fx
+    
+    # 净值变动 = 仓位 × (指数涨跌 × 汇率涨跌 - 1)
+    net_ratio = position * (idx_change * fx_change - 1.0)
+    
+    return base_nav * (1.0 + net_ratio)
+
+
+# [AI-2026-07-09] 新增：亚洲市场估值公式（港股指数，与指数公式相同但语义区分）
+def calculate_asia_valuation(
+    base_nav: float,
+    position: float,
+    current_idx: float,
+    base_idx: float,
+    current_fx: float,
+    base_fx: float
+) -> Optional[float]:
+    """
+    亚洲市场估值公式（港股指数基金）。
+    
+    适用场景：
+    - QDII亚洲（161725 嘉实恒生H股、161726 招商标普港股）
+    - 跟踪港股指数（HSI、HSCEI 等）
+    
+    公式与 calculate_index_valuation 相同：
+    估值 = T-1净值 × (1 + 仓位 × (指数T/指数T-1 × 汇率T/汇率T-1 - 1))
+    
+    区别在于汇率处理：
+    - 港股使用港币汇率（HKD/CNY）
+    - 日股使用日元汇率（JPY/CNY）
+    """
+    # 港股和日股的公式完全一致，汇率已在参数中区分
+    return calculate_index_valuation(
+        base_nav, position, current_idx, base_idx, current_fx, base_fx
+    )
+
+
+# [AI-2026-07-09] 新增：国内 LOF 估值公式（A股指数，无汇率）
+def calculate_lof_premium(
+    base_nav: float,
+    position: float,
+    current_idx: float,
+    base_idx: float,
+    current_fx: float = 1.0,
+    base_fx: float = 1.0
+) -> Optional[float]:
+    """
+    国内 LOF 估值公式（A股指数基金，无汇率）。
+    
+    适用场景：
+    - 国内 LOF（501018、501025 等）跟踪 A股指数
+    - 汇率固定为 1.0（无跨境）
+    
+    公式：估值 = T-1净值 × (1 + 仓位 × (指数T/指数T-1 - 1))
+    """
+    return calculate_index_valuation(
+        base_nav, position, current_idx, base_idx, current_fx, base_fx
+    )

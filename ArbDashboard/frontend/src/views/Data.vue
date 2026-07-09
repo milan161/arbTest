@@ -62,8 +62,18 @@
               <n-button size="tiny" @click="handleExportClick">导出</n-button>
             </n-space>
           </template>
+          <!-- 第一步：选择/输入基金分类 -->
           <div class="mb-3">
-            <n-select v-model:value="selectedTab" :options="tabOptions" placeholder="点击基金分类" clearable style="width: 100%;" />
+            <!-- [AI-2026-07-09] 允许用户输入新分类（如 QDII日本）：filterable + tag 模式；蓝色高亮边框让占位符更醒目 -->
+            <n-select v-model:value="selectedTab" :options="tabOptions" placeholder="请点击选择基金分类（可输入新分类）" filterable tag
+              class="category-select-highlight" style="width: 100%;" />
+          </div>
+          <!-- 第二步：在已确定分类下，修改已有基金或新增 -->
+          <div v-if="selectedTab" style="margin-bottom: 8px;">
+            <n-text depth="3" style="font-size: 12px;">
+              当前分类：<n-text strong style="color: #2563eb;">{{ selectedTab }}</n-text>
+               （点击上方列表项可修改，或点下方按钮新增该分类下的基金）
+            </n-text>
           </div>
           <div style="height: 260px; overflow-y: auto;">
             <n-list small hoverable clickable v-if="filteredFunds.length > 0">
@@ -77,29 +87,30 @@
                 </div>
               </n-list-item>
             </n-list>
-            <n-empty v-else description="该分类下暂无基金配置" />
+            <n-empty v-else :description="selectedTab ? `「${selectedTab}」分类下暂无基金，点击下方新增` : '请先选择基金分类'" />
           </div>
-          <n-button block type="primary" style="margin-top: 12px;" @click="addNewFund">
-             新增基金
+          <n-button block type="primary" style="margin-top: 12px;" @click="addNewFund" :disabled="!selectedTab">
+              新增基金到「{{ selectedTab || '请先选分类' }}」
           </n-button>
         </n-card>
 
+        <!-- [AI-2026-07-09] 自留地 UI 改造：① 把"仅在本地..."小字移到标题"自留地"后面；② 删除"选择导出基金"label；③ 输入框宽度收窄到仅够8位代码 -->
         <n-card :bordered="false" class="shadow-soft private-card" style="margin-top: 16px;">
           <template #header>
-             <div class="flex-center gap-2">
+             <div class="flex-center gap-2" style="flex-wrap: wrap;">
                 <n-icon size="18" color="#64748b"><Database /></n-icon>
                 <span>自留地</span>
+                <n-text depth="3" style="font-size: 11px; color: #94a3b8;">
+                  * 该功能仅在本地环境且加载私有插件时可用
+                </n-text>
              </div>
           </template>
           <div class="p-2 text-center" v-if="!isPrivateVisible">
             <n-button quaternary block @click="checkPrivateAccess">进入私有空间</n-button>
           </div>
           <div v-else class="p-2 animate-fade-in">
-            <n-text depth="3" style="font-size: 11px; display: block; margin-bottom: 12px; color: #94a3b8;">
-               * 该功能仅在本地环境且加载私有插件时可用
-            </n-text>
-            <n-form-item label="选择导出基金">
-               <n-input v-model:value="exportCode" placeholder="输入 6 位代码" />
+            <n-form-item label-placement="top">
+               <n-input v-model:value="exportCode" placeholder="输入 6 位代码" style="width: 110px;" />
                <div class="flex gap-2 mt-2">
                   <n-button v-for="code in quickCodes" :key="code" size="small" secondary @click="exportCode = code">
                      {{ code }}
@@ -129,11 +140,12 @@
                   <n-input v-model:value="fundForm.name" />
                </n-form-item>
             </n-gi>
-            <n-gi>
-               <n-form-item label="内盘分类">
-                  <n-input v-model:value="fundForm.category" />
-               </n-form-item>
-            </n-gi>
+             <!-- [AI-2026-07-09] 新增时自动带入第一步所选分类；编辑时允许修改分类 -->
+             <n-gi>
+                <n-form-item label="基金分类">
+                   <n-input v-model:value="fundForm.category" placeholder="如 QDII欧美 / QDII日本" />
+                </n-form-item>
+             </n-gi>
             <n-gi>
                <n-form-item label="仓位(%)">
                   <n-input-number v-model:value="fundForm.holdings.equity_ratio" :step="0.1" style="width:100%" />
@@ -206,8 +218,7 @@ import {
   NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NUpload
 } from 'naive-ui'
 import { Play, FileDown, Database, Trash2, HelpCircle, RefreshCw, CheckCircle, Clock } from 'lucide-vue-next'
-import { triggerTask as triggerSystemTask, getFundConfigs, upsertFundConfig, deleteFundConfig, exportFundConfig, importFundConfig } from '../api'
-import { TAB_CATEGORIES } from '../store/fundStore'
+import { triggerTask as triggerSystemTask, getFundConfigs, upsertFundConfig, deleteFundConfig, exportFundConfig, importFundConfig, getCategories } from '../api'
 import { getDataStatus, getNavStatus } from '../api/systemApi'
 import client from '../api/client'
 
@@ -266,21 +277,15 @@ const handleImportConfirm = async () => {
   }
 }
 
-const tabOptions = [
-  { label: '黄金原油', value: '黄金原油' },
-  { label: 'QDII欧美', value: 'QDII欧美' },
-  { label: 'QDII亚洲', value: 'QDII亚洲' },
-  { label: '国内LOF', value: '国内LOF' },
-  { label: '白银', value: '白银' },
-  { label: '现金管理', value: '现金管理' }
-]
-const selectedTab = ref('')
+// [AI-2026-07-09] 分类下拉框改为动态读取数据库分类（与主看板一致），不再硬编码，避免新增分类（如 QDII日本）不显示
+const tabOptions = ref<{ label: string; value: string }[]>([])
+// [AI-2026-07-09] 初值必须为 null（不能是空串），否则 n-select 会把 '' 当成"已选中空选项"而不显示 placeholder
+const selectedTab = ref<string | null>(null)
 
 const filteredFunds = computed(() => {
   if (!selectedTab.value) return fundConfigs.value
-  const categories = TAB_CATEGORIES[selectedTab.value] || []
-  if (categories.length === 0) return fundConfigs.value
-  return fundConfigs.value.filter(f => categories.includes(f.category))
+  // [AI-2026-07-09] 分类已简化，selectedTab 即数据库 category 值，直接精确过滤
+  return fundConfigs.value.filter(f => f.category === selectedTab.value)
 })
 
 // 数据同步状态
@@ -374,10 +379,28 @@ const fetchFundConfigs = async () => {
   }
 }
 
+// [AI-2026-07-09] 动态拉取数据库分类，填充分类下拉框（与主看板一致，含 QDII日本 等新增分类）
+const fetchCategories = async () => {
+  try {
+    const res = await getCategories()
+    if (res.data?.status === 'ok' && Array.isArray(res.data.data)) {
+      tabOptions.value = res.data.data.map((c: string) => ({ label: c, value: c }))
+    }
+  } catch (e) {
+    console.error('获取分类失败', e)
+  }
+}
+
+// [AI-2026-07-09] 强制先选基金分类才能新增：用上方 TAB 分类下拉(selectedTab)作为前置分类，
+// 未选则提示，不打开弹窗；打开后自动带入分类并隐藏"内盘分类"手填框
 const addNewFund = () => {
+  if (!selectedTab.value) {
+    message.warning('请先在上方「请点击选择基金分类」中选择一个分类，再新增基金')
+    return
+  }
   editMode.value = false
   Object.assign(fundForm, {
-    code: '', name: '', category: '', trade_etf: '', trade_future: '',
+    code: '', name: '', category: selectedTab.value, trade_etf: '', trade_future: '',
     holdings: { equity_ratio: 95.0 },
     valuation_portfolio: [{ symbol: '', weight: 100, anchor: 'US' }]
   })
@@ -399,6 +422,7 @@ const handleSaveFund = async () => {
     message.success('配置已保存成功')
     showFundModal.value = false
     fetchFundConfigs()
+    fetchCategories()  // [AI-2026-07-09] 新增/修改分类后立即刷新下拉框，保证新建分类（如 QDII日本）立即可见
   } catch (e) {
     message.error('保存失败')
   }
@@ -460,6 +484,7 @@ const handleExport = async () => {
 
 onMounted(() => {
   fetchFundConfigs()
+  fetchCategories()
   fetchDataStatus()
   fetchNavStatus()
   // 每 60 秒刷新数据状态
@@ -468,6 +493,21 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* [AI-2026-07-09] 基金分类下拉框高亮：蓝边+浅蓝底，占位符文字染蓝，提升可见性 */
+.category-select-highlight {
+  border: 1px solid #2563eb !important;
+  border-radius: 6px;
+  background: #eff6ff !important;
+}
+.category-select-highlight :deep(.n-base-selection-placeholder),
+.category-select-highlight :deep(.n-base-selection__placeholder) {
+  color: #2563eb !important;
+  font-weight: 600;
+  opacity: 1 !important;
+}
+.category-select-highlight :deep(.n-base-selection) {
+  background: transparent !important;
+}
 .data-status-grid { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .data-status-item {
   display: flex; justify-content: space-between; align-items: center;

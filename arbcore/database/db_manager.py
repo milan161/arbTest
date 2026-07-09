@@ -54,6 +54,9 @@ class DatabaseManager:
             except sqlite3.OperationalError: pass
             try: conn.execute('ALTER TABLE exchange_rate ADD COLUMN usd_cnh REAL')
             except sqlite3.OperationalError: pass
+            # [AI-2026-07-09] 新增 jpy_cny_mid 列支持日元汇率（QDII日本估值）
+            try: conn.execute('ALTER TABLE exchange_rate ADD COLUMN jpy_cny_mid REAL')
+            except sqlite3.OperationalError: pass
 
             conn.execute('''CREATE TABLE IF NOT EXISTS usa_etf_daily_prices (date TEXT NOT NULL, symbol TEXT NOT NULL, price REAL, netvalue REAL, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (date, symbol))''')
             try: conn.execute('ALTER TABLE usa_etf_daily_prices ADD COLUMN netvalue REAL')

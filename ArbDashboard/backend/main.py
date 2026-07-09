@@ -916,17 +916,29 @@ async def get_all_fund_configs():
     cfg = config_manager_service.load_config()
     return {"status": "ok", "data": cfg.get('funds', [])}
 
+# [AI-2026-07-09] 根治：YAML 改动后自动同步 unified_fund_list 表，主看板即时生效，不再需要手动跑同步脚本
+def _sync_config_to_db():
+    try:
+        cfg = config_manager_service.load_config()
+        db.sync_unified_fund_list(cfg.get('funds', []))
+    except Exception as e:
+        logger.error(f"[配置同步] YAML→数据库失败: {e}")
+
 @app.post("/api/config/funds/upsert")
 async def upsert_fund_config(request: Request):
-    """新增或修改基金配置"""
+    """新增或修改基金配置，并自动同步数据库"""
     data = await request.json()
     success = config_manager_service.upsert_fund_config(data)
+    if success:
+        _sync_config_to_db()
     return {"status": "ok" if success else "error"}
 
 @app.delete("/api/config/funds/{code}")
 async def delete_fund_config(code: str):
-    """从 YAML 中删除基金"""
+    """从 YAML 中删除基金，并自动同步数据库"""
     success = config_manager_service.delete_fund_config(code)
+    if success:
+        _sync_config_to_db()
     return {"status": "ok" if success else "error"}
 
 @app.get("/api/config/funds/export")
@@ -949,14 +961,31 @@ async def export_fund_config():
 
 @app.post("/api/config/funds/import")
 async def import_fund_config(file: UploadFile = File(...)):
-    """从上传的 YAML 文件导入基金配置"""
+    """从上传的 YAML 文件导入基金配置，并自动同步数据库"""
     try:
         content = await file.read()
         yaml_text = content.decode('utf-8')
         config_manager_service.import_config(yaml_text)
+        _sync_config_to_db()
         return {"status": "ok", "message": "导入成功，旧配置已备份为 .bak"}
     except Exception as e:
         logger.error(f"导入 YAML 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+# [AI-2026-07-09] 动态 TAB：返回 unified_fund_list 中所有去重的基金分类，供主看板动态生成 TAB
+@app.get("/api/config/categories")
+async def get_fund_categories():
+    """返回数据库中所有真实存在的基金分类（去重）"""
+    try:
+        conn = db._get_conn()
+        rows = conn.execute(
+            "SELECT DISTINCT category FROM unified_fund_list WHERE category IS NOT NULL AND category != ''"
+        ).fetchall()
+        conn.close()
+        cats = sorted({r[0] for r in rows if r[0]})
+        return {"status": "ok", "data": cats}
+    except Exception as e:
+        logger.error(f"获取基金分类失败: {e}")
         return {"status": "error", "message": str(e)}
 
 # --- IB 核心套利标的配置 APIs ---

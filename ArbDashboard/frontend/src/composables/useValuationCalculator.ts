@@ -57,7 +57,7 @@ export function useValuationCalculator() {
     ['511880', '511360', '511520'].includes(fundCode.value),
   )
 
-  /** 是否为复杂业务分类（黄金原油、纯ETF、QDII欧美、混合跨境） */
+  /** 是否为复杂业务分类（黄金原油、QDII欧美、QDII日本） */
   const isComplexCategory = computed(() => {
     if (isCashManagement.value) return false
     const cat = meta.value?.fund_config?.category || ''

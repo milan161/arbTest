@@ -120,15 +120,8 @@ def _ensure_daily_snapshot(conn):
     except Exception as e:
         logger.warning(f"[SNAPSHOT] 加载汇率失败: {e}")
 
-# TAB → SQL category 值映射（与 unified_fund_list.category 保持一致）
-_TAB_CATEGORY_MAP = {
-    '黄金原油': ['黄金原油'],
-    'QDII欧美': ['QDII欧美', '混合跨境'],
-    'QDII亚洲': ['QDII亚洲'],
-    '国内LOF': ['国内LOF'],
-    '白银': ['白银'],
-    '现金管理': ['债券/货币'],
-}
+# [AI-2026-07-09] 分类已简化为：数据库 category 值与主看板 TAB 名一一对应，无子分类映射。
+# 传入的 category 直接作为 SQL 过滤值使用。
 
 # ============================================================
 # [V7.1] 内置东财SSE白银期货长连接阅读器
@@ -317,6 +310,16 @@ def get_index_change_percent(symbol: str) -> float:
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 CES300 涨跌幅: {parts[8]}%")
                     result = float(parts[8])
+                    
+        # [AI-2026-07-09] 日经225(N225) — 新浪全球指数接口 int_nikkei
+        elif clean_sym in ('N225', 'NKY', 'NIKKEI'):
+            r = requests.get("http://hq.sinajs.cn/list=int_nikkei", headers=headers_sina, timeout=1.5)
+            if r.status_code == 200 and '="' in r.text:
+                parts = r.text.split('"')[1].split(',')
+                if len(parts) >= 4:
+                    # 新浪全球指数格式: 名称,当前价,涨跌额,涨跌幅%
+                    result = float(parts[3])
+                    logger.info(f"[INDEX-SINA] 获取日经225 {clean_sym} 涨跌幅: {result}%")
                     
         # 2. A股指数 (6位代码)
         elif clean_sym.isdigit() and len(clean_sym) == 6:
@@ -616,6 +619,26 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
     if api_syms:
         api_results = _fetch_realtime_indices(api_syms, now)
 
+    # [AI-2026-07-09] N225历史存储：每次获取实时数据后写入index_history，供T-1静态估值使用
+    # N225历史无法通过TDX回采（新浪/东财均不支持历史K线），必须靠实时抓取积累
+    if api_results:
+        try:
+            today_str = now.strftime('%Y-%m-%d')
+            import sqlite3
+            db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'arb_master.db')
+            conn_write = sqlite3.connect(db_path)
+            for sym, data in api_results.items():
+                if sym == 'N225' and data.get('price', 0) > 0:
+                    conn_write.execute(
+                        "INSERT OR REPLACE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
+                        (sym, today_str, data['price'], 'sina')
+                    )
+                    logger.info(f"[INDEX-HISTORY] 写入 {sym} {today_str} close={data['price']}")
+            conn_write.commit()
+            conn_write.close()
+        except Exception as e:
+            logger.warning(f"写入N225历史数据异常: {e}")
+
     # ====== Step 3: 合并并缓存 ======
     res = {**db_results, **api_results}
     if res:
@@ -725,6 +748,10 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
             # [V10.13] 美股指数（.INX, .NDX, .SP500-45 等）走新浪获取
             sina_req = f"s_sh{clean_sym}"
             ret_code = clean_sym
+        # [AI-2026-07-09] 日经225(N225) — 新浪全球指数接口 int_nikkei
+        elif clean_sym in ('N225', 'NKY', 'NIKKEI'):
+            sina_req = "int_nikkei"
+            ret_code = "N225"
         else:
             continue
             
@@ -762,6 +789,9 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                     missing_sina_reqs.add(f"s_sz{ret_code}")
                 else:
                     missing_sina_reqs.add(f"s_sh{ret_code}")
+            # [AI-2026-07-09] 日经225等全球指数 — 直接用新浪全球指数接口名
+            elif ret_code == 'N225':
+                missing_sina_reqs.add("int_nikkei")
             else:
                 missing_sina_reqs.add(f"rt_hk{ret_code}")
                 
@@ -798,6 +828,15 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                                     if original_sym not in res:
                                         res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
                                         logger.info(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                    # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
+                    elif var_name.startswith('var hq_str_int_'):
+                        code = var_name.replace('var hq_str_', '')
+                        if code in sina_to_syms:
+                            for original_sym in sina_to_syms[code]:
+                                if original_sym not in res:
+                                    if len(parts) >= 4:
+                                        res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
+                                        logger.info(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
         except Exception as e:
             logger.warning(f"预取新浪指数兜底异常: {e}")
 
@@ -920,7 +959,8 @@ class FundService:
                 where_clause = f"WHERE fund_code IN ({placeholders})"
                 params.extend(watchlist)
             elif category:
-                cats = _TAB_CATEGORY_MAP.get(category, [category])
+                # [AI-2026-07-09] 分类已简化，category 直接对应数据库值
+                cats = [category]
                 placeholders = ",".join("?" for _ in cats)
                 where_clause = f"WHERE category IN ({placeholders})"
                 params.extend(cats)
@@ -1058,8 +1098,14 @@ class FundService:
                         if vol > 0 and sh > 0 and price > 0:
                             metrics['turnover_rate'] = (vol / (price * sh)) * 100  # 换手率(%) = 成交额/(现价×份额) × 100
 
+                    # [AI-2026-07-09] 修复涨跌幅：prev_close 必须是"昨收"（前一日收盘价），
+                    # 不能是 iloc[0]（当日最新价，与现价相同会导致涨跌幅≈0 或错乱）。
+                    # valid_prices 按日期降序（iloc[0]=当日），昨收取 iloc[1]，不足则用 iloc[0] 兜底。
                     if not valid_prices.empty:
-                        metrics['prev_close'] = valid_prices.iloc[0]['price']
+                        if len(valid_prices) >= 2:
+                            metrics['prev_close'] = valid_prices.iloc[1]['price']
+                        else:
+                            metrics['prev_close'] = valid_prices.iloc[0]['price']
                     else:
                         metrics['prev_close'] = 0
 
