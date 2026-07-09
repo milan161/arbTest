@@ -53,14 +53,9 @@
       <n-gi :span="24">
         <n-card :bordered="false" class="main-card" content-style="padding: 0;">
           <div class="table-toolbar">
+            <!-- [AI-2026-07-09] TAB 改为动态：从数据库分类生成，新增分类（如 QDII日本）自动出现 -->
             <n-tabs type="bar" v-model:value="currentTab" animated style="flex: 1;" class="custom-tabs">
-              <n-tab-pane name="自选" tab="我的自选" />
-              <n-tab-pane name="黄金原油" tab="黄金原油" />
-              <n-tab-pane name="QDII欧美" tab="QDII欧美" />
-              <n-tab-pane name="QDII亚洲" tab="QDII亚洲" />
-              <n-tab-pane name="国内LOF" tab="国内LOF" />
-              <n-tab-pane name="白银" tab="白银" />
-              <n-tab-pane name="现金管理" tab="现金管理" />
+              <n-tab-pane v-for="tab in dashboardTabs" :key="tab" :name="tab" :tab="tab === '自选' ? '我的自选' : tab" />
             </n-tabs>
             <n-input v-model:value="searchKeyword" placeholder="搜索代码/名称..." class="search-input" size="small" clearable />
           </div>
@@ -139,7 +134,7 @@ const appStore = useAppStore()
 
 // ===== 从 Store 解构响应式状态（保持与模板同名的变量，避免改模板） =====
 const { tableData, loading, currentTab, searchKeyword, watchlist,
-        filteredTableData, fundHistory, dashboardMeta } = storeToRefs(fundStore)
+        filteredTableData, fundHistory, dashboardMeta, dashboardTabs } = storeToRefs(fundStore)
 const { milestones } = storeToRefs(appStore)
 
 // ===== 本地状态（无需进 Store） =====
@@ -252,6 +247,8 @@ const fetchRates = async () => {
 
 onMounted(() => {
   // [AI-2026-06-28] 取消重置 TAB，由 fundStore 从 localStorage 恢复上次浏览的 TAB
+  // [AI-2026-07-09] 拉取数据库动态分类，生成主看板 TAB
+  fundStore.fetchCategories()
   fetchData()
   setupRefreshTimer()
   // [交换位置] 时钟 + 汇率
@@ -604,7 +601,7 @@ const columns = computed<DataTableColumns<any>>(() => {
 
   // 1. 动态重命名净值日期列
   const t1Tabs = ['QDII亚洲', '国内LOF', '白银']
-  const t2Tabs = ['QDII欧美', '黄金原油', '混合跨境']
+  const t2Tabs = ['QDII欧美', 'QDII日本', '黄金原油']  // [AI-2026-07-09] 混合跨境已并入QDII欧美；QDII日本同属T-2
   const navCol = cols.find(c => c.key === 'nav')
   if (navCol) {
     if (t1Tabs.includes(currentTab.value)) navCol.title = 'T-1日净值'

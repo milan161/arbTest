@@ -5,7 +5,14 @@ import pandas as pd
 import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-from .valuation_math import calculate_magic_valuation, calculate_basket_valuation
+# [AI-2026-07-09] 导入新增的指数/亚洲/LOF估值函数
+from .valuation_math import (
+    calculate_magic_valuation, 
+    calculate_basket_valuation,
+    calculate_index_valuation,
+    calculate_asia_valuation,
+    calculate_lof_premium
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +175,27 @@ class StaticValuationCalculator:
                     'weight': row.get(f"{sym}_weight", p.get('weight', 0)) / 100.0
                 })
         
-        return calculate_basket_valuation(b_nav, position, c_fx, b_fx, items)
+        basket_val = calculate_basket_valuation(b_nav, position, c_fx, b_fx, items)
+        if basket_val:
+            return basket_val
+        
+        # [AI-2026-07-09] 3. 指数估值公式（无 hedge、无 basket 的兜底）
+        # 适用：QDII日本（513000/513520/159866）、QDII亚洲、国内LOF
+        related_index = fund_config.get('related_index', '')
+        if related_index and related_index in row and related_index in base_row:
+            c_idx = row[related_index]
+            b_idx = base_row[related_index]
+            if pd.notna(c_idx) and pd.notna(b_idx) and c_idx > 0 and b_idx > 0:
+                # 根据 valuation_method 选择对应函数
+                valuation_method = fund_config.get('valuation_method', '')
+                if valuation_method == 'equity_asia':
+                    return calculate_asia_valuation(b_nav, position, c_idx, b_idx, c_fx, b_fx)
+                elif valuation_method == 'lof_domestic':
+                    return calculate_lof_premium(b_nav, position, c_idx, b_idx, c_fx, b_fx)
+                else:
+                    return calculate_index_valuation(b_nav, position, c_idx, b_idx, c_fx, b_fx)
+        
+        return None
 
     def _save_results(self, fund_code: str, df: pd.DataFrame):
         """保存结果到数据库"""

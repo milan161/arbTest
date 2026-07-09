@@ -10,8 +10,8 @@ funds:
   name: 南方原油
   category: 黄金原油
   holdings:
-    equity_ratio: 87.48
-    cash_ratio: 12.52
+    equity_ratio: 87.58
+    cash_ratio: 12.42
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -22,18 +22,18 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
-    weight: 43.58
-    anchor: EU
   - symbol: USO
-    weight: 41.48
+    weight: 52.27
     anchor: US
+  - symbol: USO-EU
+    weight: 32.94
+    anchor: EU
   - symbol: USO-JP
-    weight: 14.94
+    weight: 14.79
     anchor: JP
   trade_etf: USO
   trade_future: MCL
-  position: 87.48
+  position: 87.58
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -42,8 +42,8 @@ funds:
   name: 嘉实原油
   category: 黄金原油
   holdings:
-    equity_ratio: 85.87
-    cash_ratio: 14.13
+    equity_ratio: 85.77
+    cash_ratio: 14.23
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -90,17 +90,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 64.25
+    weight: 73.76
     anchor: US
   - symbol: USO-EU
-    weight: 34.28
+    weight: 24.47
     anchor: EU
   - symbol: USO-JP
-    weight: 1.47
+    weight: 1.77
     anchor: JP
   trade_etf: USO
   trade_future: MCL
-  position: 85.87
+  position: 85.77
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -109,8 +109,8 @@ funds:
   name: 易方达原油
   category: 黄金原油
   holdings:
-    equity_ratio: 89.09
-    cash_ratio: 10.91
+    equity_ratio: 89.18
+    cash_ratio: 10.82
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -152,17 +152,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 58.61
+    weight: 64.08
     anchor: US
-  - symbol: ^USO-EU
-    weight: 29.8
+  - symbol: USO-EU
+    weight: 24.97
     anchor: EU
-  - symbol: ^USO-HK
-    weight: 11.58
+  - symbol: USO-HK
+    weight: 10.94
     anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 89.09
+  position: 89.18
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -173,22 +173,22 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 93.55
-    cash_ratio: 6.45
+    equity_ratio: 95.32
+    cash_ratio: 4.68
   valuation_portfolio:
   - symbol: GLD
-    weight: 68.63
+    weight: 72.93
     anchor: US
   - symbol: SLV
-    weight: 16.56
+    weight: 16.46
     anchor: US
   - symbol: USO
-    weight: 14.82
+    weight: 10.61
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 93.55
+  position: 95.32
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -199,17 +199,17 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 76.49
-    cash_ratio: 23.51
+    equity_ratio: 76.85
+    cash_ratio: 23.15
   valuation_portfolio:
   - symbol: GLD
-    weight: 53.86
+    weight: 52.91
     anchor: US
   - symbol: USO-EU
-    weight: 29.68
+    weight: 25.5
     anchor: EU
   - symbol: USO
-    weight: 16.46
+    weight: 21.59
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
@@ -226,7 +226,7 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 76.49
+  position: 76.85
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -432,8 +432,8 @@ funds:
   name: 中信保诚
   category: 黄金原油
   holdings:
-    equity_ratio: 97.93
-    cash_ratio: 2.07
+    equity_ratio: 97.91
+    cash_ratio: 2.09
   holdings_portfolio: []
   future_hedging:
   - symbol: MGC
@@ -445,17 +445,17 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 85.4
+    weight: 85.9
     anchor: US
   - symbol: GLD-EU
-    weight: 11.34
+    weight: 10.8
     anchor: EU
   - symbol: GLD-JP
-    weight: 3.26
+    weight: 3.31
     anchor: JP
   trade_etf: GLD
   trade_future: MGC
-  position: 97.93
+  position: 97.91
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -665,7 +665,7 @@ funds:
   related_index: QQQ
 - code: '164824'
   name: 交银印度
-  category: 混合跨境
+  category: QDII欧美
   trade_etf: INDA
   trade_future: ''
   holdings:
@@ -757,7 +757,7 @@ funds:
   related_index: XLE
 - code: '160644'
   name: 港美互联网
-  category: 混合跨境
+  category: QDII欧美
   trade_etf: ''
   trade_future: ''
   holdings:
@@ -804,7 +804,7 @@ funds:
   related_index: ''
 - code: '501225'
   name: 顺丰半导体芯片
-  category: 混合跨境
+  category: QDII欧美
   trade_etf: SOXX
   trade_future: ''
   holdings:
@@ -827,7 +827,7 @@ funds:
   related_index: SOXX
 - code: '501312'
   name: 海外科技
-  category: 混合跨境
+  category: QDII欧美
   trade_etf: ''
   trade_future: ''
   holdings:
@@ -1256,7 +1256,7 @@ funds:
   idx_name: 沪深300指数
 - code: '511880'
   name: 银华日利
-  category: 债券/货币
+  category: 现金管理
   data_source: other
   sub_category: 货币ETF
   holdings:
@@ -1264,7 +1264,7 @@ funds:
     cash_ratio: 100.0
 - code: '511360'
   name: 海富通短融
-  category: 债券/货币
+  category: 现金管理
   data_source: other
   sub_category: 短融ETF
   holdings:
@@ -1272,7 +1272,7 @@ funds:
     cash_ratio: 100.0
 - code: '511520'
   name: 富国政金
-  category: 债券/货币
+  category: 现金管理
   data_source: other
   sub_category: 政金债ETF
   holdings:
@@ -1701,6 +1701,45 @@ funds:
     equity_ratio: 100
   valuation_portfolio:
   - symbol: DAX
+    weight: 100
+    anchor: US
+  redemption_fee_rate: 0.5
+  commission_rate: 0
+- code: '513000'
+  name: 易方达日经225
+  category: QDII日本
+  trade_etf: NKY
+  trade_future: NK
+  holdings:
+    equity_ratio: 93
+  valuation_portfolio:
+  - symbol: NKY
+    weight: 100
+    anchor: US
+  redemption_fee_rate: 0.5
+  commission_rate: 0
+- code: '159866'
+  name: 工银日经225
+  category: QDII日本
+  trade_etf: NKY
+  trade_future: NK
+  holdings:
+    equity_ratio: 100
+  valuation_portfolio:
+  - symbol: NKY
+    weight: 100
+    anchor: US
+  redemption_fee_rate: 0.5
+  commission_rate: 0
+- code: '513520'
+  name: 华夏日经225
+  category: QDII日本
+  trade_etf: NKY
+  trade_future: NK
+  holdings:
+    equity_ratio: 97
+  valuation_portfolio:
+  - symbol: NKY
     weight: 100
     anchor: US
   redemption_fee_rate: 0.5
