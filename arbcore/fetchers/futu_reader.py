@@ -186,14 +186,6 @@ class FutuReader:
                 for attempt in range(1, self.max_retries + 1):
                     try:
                         self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
-                        for _wait in range(50):
-                            if self.ctx._ctx._quote_conn:
-                                break
-                            time.sleep(0.1)
-                        if not self.ctx._ctx._quote_conn:
-                            self.ctx.close()
-                            self.ctx = None
-                            raise Exception("连接超时")
                         self.subscribed_codes = set()
                         connected = True
                         logger.info(f"[富途] 连接成功 (第 {attempt} 次)")

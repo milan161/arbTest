@@ -2,28 +2,29 @@
   <div class="dashboard">
     <n-grid :cols="24" :x-gap="10" :y-gap="10">
       <!-- 时钟+汇率（引擎状态已移到侧边栏） -->
-      <n-gi :span="6">
+      <n-gi :span="8">
         <n-card size="small" :bordered="false" class="stat-card">
-          <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-            <div><span class="date">{{ currentDate }}</span> <span class="time">{{ currentTime }}</span></div>
-            <div style="display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 2px; font-size: 13px;">
-              <div style="white-space: nowrap;">
-                <span style="color: #64748b;">USD/CNY </span>
-                <span style="font-weight: bold; margin-right: 6px;">{{ rates.usd_cny_mid || '-' }}</span>
-                <span :class="['rate-change', rates.usd_change >= 0 ? 'up' : 'down']" style="font-size: 11px;">{{ formatChange(rates.usd_change) }}</span>
-              </div>
-              <div style="white-space: nowrap;">
-                <span style="color: #64748b;">HKD/CNY </span>
-                <span style="font-weight: bold; margin-right: 6px;">{{ rates.hkd_cny_mid || '-' }}</span>
-                <span :class="['rate-change', rates.hkd_change >= 0 ? 'up' : 'down']" style="font-size: 11px;">{{ formatChange(rates.hkd_change) }}</span>
-              </div>
+          <div style="display: flex; flex-direction: column; gap: 2px; padding: 2px 0;">
+            <div style="display: flex; align-items: baseline; gap: 12px; white-space: nowrap;">
+              <span style="font-weight: 600; font-size: 14px;">{{ currentDate }} <span class="time">{{ currentTime }}</span></span>
+              <span style="color: #64748b; font-size: 12px;">USD/CNY</span>
+              <span style="font-weight: bold; font-size: 13px;">{{ rates.usd_cny_mid || '-' }}</span>
+              <span :class="['rate-change', rates.usd_change >= 0 ? 'up' : 'down']" style="font-size: 11px;">{{ formatChange(rates.usd_change) }}</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 12px; white-space: nowrap; font-size: 12px;">
+              <span style="color: #64748b; width: 86px; display: inline-block;">HKD/CNY</span>
+              <span style="font-weight: bold; margin-right: 2px;">{{ rates.hkd_cny_mid || '-' }}</span>
+              <span :class="['rate-change', rates.hkd_change >= 0 ? 'up' : 'down']" style="font-size: 11px; margin-right: 8px;">{{ formatChange(rates.hkd_change) }}</span>
+              <span style="color: #64748b;">JPY/CNY</span>
+              <span style="font-weight: bold; margin-right: 2px;">{{ rates.jpy_cny_mid || '-' }}</span>
+              <span :class="['rate-change', rates.jpy_change >= 0 ? 'up' : 'down']" style="font-size: 11px;">{{ formatChange(rates.jpy_change) }}</span>
             </div>
           </div>
         </n-card>
       </n-gi>
 
       <!-- 系统里程碑日志 -->
-      <n-gi :span="18">
+      <n-gi :span="16">
         <n-card size="small" :bordered="false" class="stat-card log-card" content-style="padding: 0; position: relative;">
           <n-button quaternary circle size="tiny" @click="fetchData" style="position: absolute; right: 4px; top: 4px; z-index: 10;">
             <template #icon><n-icon><Zap /></n-icon></template>
@@ -213,8 +214,10 @@ const currentTime = ref('')
 const rates = ref({
   usd_cny_mid: '',
   hkd_cny_mid: '',
+  jpy_cny_mid: '',
   usd_change: 0,
-  hkd_change: 0
+  hkd_change: 0,
+  jpy_change: 0
 })
 let clockTimer: any = null
 
@@ -237,8 +240,10 @@ const fetchRates = async () => {
     if (data.status === 'ok') {
       rates.value.usd_cny_mid = data.data?.rates?.usd_cny_mid || '-'
       rates.value.hkd_cny_mid = data.data?.rates?.hkd_cny_mid || '-'
+      rates.value.jpy_cny_mid = data.data?.rates?.jpy_cny_mid || '-'
       rates.value.usd_change = data.data?.usd_change || 0
       rates.value.hkd_change = data.data?.hkd_change || 0
+      rates.value.jpy_change = data.data?.jpy_change || 0
     }
   } catch (e) {
     console.error('获取汇率失败', e)
@@ -570,7 +575,7 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
     ]
 
     if (fundHistory.value.length > 0) {
-        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'latest_nav', 'futures_close', 'futures_pct', 'hedge']
+        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'jpy_cny_mid', 'latest_nav', 'futures_close', 'futures_pct', 'hedge']
         // Scan ALL rows to find dynamic keys (first row may lack data, e.g. 06-19 has no XOP_price)
         const dynamicKeys = new Set<string>()
         for (const row of fundHistory.value) {

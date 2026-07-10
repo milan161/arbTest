@@ -490,6 +490,8 @@ async def lifespan(app: FastAPI):
         signal_detector.stop()
     auto_trade_runner.stop()
     market_data_service.realtime_manager.stop()
+    if market_data_service and market_data_service.ib_reader:
+        market_data_service.ib_reader.disconnect_from_ib()
 
 app = FastAPI(title="ArbNext API", version="1.0.0", lifespan=lifespan)
 
@@ -650,8 +652,8 @@ async def get_fund_valuation_meta(code: str):
                 if q:
                     return sym, {
                         'price': q.get('price'),
-                        'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                        'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                        'bid': q.get('bid'),  # None = 等待数据/非夜盘
+                        'ask': q.get('ask'),
                         'source': q.get('source', '')
                     }
                 return sym, None
@@ -1900,7 +1902,7 @@ async def trigger_task(task: str):
     lofarb_dir = os.path.normpath(os.path.join(backend_dir, "..", "..", "LOFarb"))
     task_map = {
         "011": os.path.join(scripts_dir, "daily_updater.py"),
-        "012": os.path.join(lofarb_dir, "LOF012_calculate_static_valuation.py"),
+        "012": [os.path.join(scripts_dir, "daily_updater.py"), "--static-valuation"],
         "nav": [os.path.join(scripts_dir, "daily_updater.py"), "--nav-only"],
         "morning": [os.path.join(scripts_dir, "daily_updater.py"), "--refresh-morning"]
     }

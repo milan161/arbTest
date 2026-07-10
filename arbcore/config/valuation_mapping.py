@@ -11,6 +11,7 @@
 内部估值方法分类 (程序使用):
 - commodity: 商品型 (黄金原油、白银)
 - equity_us: 欧美股票型 (美股指数、纯ETF)
+- equity_jp: 日本股票型 (QDII日本)
 - equity_asia: 亚洲股票型 (QDII亚洲)
 - hybrid_cross: 混合跨境型
 - lof: 国内LOF型
@@ -61,6 +62,11 @@ FUND_VALUATION_MAP = {
     '501310': 'lof_domestic',
     '501311': 'lof_domestic',
     '501312': 'lof_domestic',
+    
+    # 日本股票型 - QDII日本
+    '513000': 'equity_jp',
+    '159866': 'equity_jp',
+    '513520': 'equity_jp',
 }
 
 # 估值方法到前端 TAB 的映射
@@ -70,6 +76,7 @@ VALUATION_TO_TAB = {
     'equity_us_etf': 'QDII欧美',
     'equity_us_index': 'QDII欧美',
     'hybrid_cross': 'QDII欧美',
+    'equity_jp': 'QDII日本',
     'equity_asia': 'QDII亚洲',
     'lof_domestic': '国内LOF',
 }
@@ -81,7 +88,8 @@ VALUATION_CALCULATOR_MAP = {
     'equity_us_etf': 'calculate_etf_valuation',             # ETF标的
     'equity_us_index': 'calculate_index_valuation',         # 指数标的
     'hybrid_cross': 'calculate_basket_valuation',           # 一篮子资产
-    'equity_asia': 'calculate_asia_valuation',              # 亚洲市场
+    'equity_asia': 'calculate_asia_valuation',           # 亚洲市场
+    'equity_jp': 'calculate_asia_valuation',               # 日本市场（复用亚洲方法）
     'lof_domestic': 'calculate_lof_premium',                # LOF折溢价
 }
 
