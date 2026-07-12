@@ -502,6 +502,36 @@ class DataFetcher:
             logger.error(f"获取 CNH 失败: {e}")
         return None
     
+    def fetch_jpy_cny_rate(self):
+        """从新浪财经获取 JPY/CNY 日元兑人民币实时汇率
+        
+        Returns:
+            dict { '日期', '日元汇率', '来源' } 或 None
+        """
+        logger.info("从新浪财经获取 JPY/CNY 日元汇率")
+        try:
+            url = "https://hq.sinajs.cn/list=fx_sjpycny"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response.encoding = 'gbk'
+            if response.status_code == 200 and 'hq_str_fx_sjpycny' in response.text:
+                values = response.text.split('"')[1].split(',')
+                if len(values) >= 18:
+                    rate = float(values[1])  # 第2个字段 = 实时汇率
+                    date = values[17]
+                    logger.info(f"JPY/CNY 日元汇率: {rate} (日期: {date})")
+                    return {
+                        '日期': date,
+                        'jpy_cny_rate': rate,
+                        '来源': '新浪财经 fx_sjpycny'
+                    }
+        except Exception as e:
+            logger.error(f"获取 JPY/CNY 汇率失败: {e}")
+        return None
+    
     def fetch_lof_nav_data(self, fund_code, existing_data=None):
         """从东财获取LOF基金历史净值数据
         
