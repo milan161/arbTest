@@ -1501,8 +1501,8 @@ class FundService:
                    h.static_val, h.premium as static_premium, h.calibration,
                    h.index_close, h.index_pct, h.shares, h.shares_added, h.turnover_rate, h.volume,
                    h.valuation_error,
-                   r.usd_cny_mid, r.hkd_cny_mid,
-                   f.hedge
+                    r.usd_cny_mid, r.hkd_cny_mid, r.jpy_cny_mid,
+                    f.hedge
             FROM unified_fund_history h
             LEFT JOIN exchange_rate r ON h.date = r.date
             LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
@@ -1511,8 +1511,9 @@ class FundService:
             df = pd.read_sql(query_hist, conn, params=(fund_code,))
             if df.empty: return []
 
-            # 判断是否是港币基金。若是，在返回的 usd_cny_mid 字段里使用港币汇率 hkd_cny_mid
+            # 判断基金类型：港币/日元基金，在返回的 usd_cny_mid 字段里替换对应汇率
             is_hkd_fund = False
+            is_jp_fund = False
             try:
                 fund_info_df = pd.read_sql("SELECT category, idx_name FROM unified_fund_list WHERE fund_code=? LIMIT 1", conn, params=(fund_code,))
                 if not fund_info_df.empty:
@@ -1520,11 +1521,15 @@ class FundService:
                     idx_name = str(fund_info_df.iloc[0]['idx_name'] or '')
                     if '亚洲' in cat or '恒生' in idx_name or '香港' in idx_name or 'H股' in idx_name or '港币' in idx_name:
                         is_hkd_fund = True
+                    if '日本' in cat:
+                        is_jp_fund = True
             except:
                 pass
 
             if is_hkd_fund and 'hkd_cny_mid' in df.columns:
                 df['usd_cny_mid'] = df['hkd_cny_mid']
+            if is_jp_fund and 'jpy_cny_mid' in df.columns:
+                df['usd_cny_mid'] = df['jpy_cny_mid']
 
             # 计算估值误差（绝对差值）: val_error_pct = static_val - nav（非百分比）
             # [AI-2026-07-04] 改为绝对差值，不再用百分比
@@ -1867,6 +1872,12 @@ class FundService:
                         curr_val = current['hkd_cny_mid']
                         if prev_val != 0:
                             res["hkd_change"] = ((curr_val - prev_val) / prev_val) * 100
+                    # JPY/CNY 涨跌幅
+                    if 'jpy_cny_mid' in current and pd.notna(current.get('jpy_cny_mid')) and pd.notna(previous.get('jpy_cny_mid')):
+                        prev_val = previous['jpy_cny_mid']
+                        curr_val = current['jpy_cny_mid']
+                        if prev_val != 0:
+                            res["jpy_change"] = ((curr_val - prev_val) / prev_val) * 100
             count_df = pd.read_sql_query("SELECT count(*) as count FROM unified_fund_list", conn)
             res["stats"]["fund_count"] = int(count_df.iloc[0]['count']) if not count_df.empty else 0
         except: pass
@@ -1997,8 +2008,8 @@ class FundService:
                     if q:
                         realtime_quotes[sym] = {
                             'price': q.get('price'),
-                            'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                            'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                            'bid': q.get('bid'),  # None = 等待数据/非夜盘
+                            'ask': q.get('ask'),
                             'bid_size': q.get('bid_size', 0),
                             'ask_size': q.get('ask_size', 0),
                             'source': q.get('source', '')
@@ -2021,8 +2032,8 @@ class FundService:
                         if q:
                             future_quote = {
                                 'price': q.get('price'),
-                                'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                                'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
+                                'bid': q.get('bid'),  # None = 等待数据/非夜盘
+                                'ask': q.get('ask'),
                                 'source': q.get('source', '')
                             }
                         else:

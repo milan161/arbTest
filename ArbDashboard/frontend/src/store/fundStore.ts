@@ -41,7 +41,7 @@ export interface FundItem {
  * [AI-2026-07-09] 分类已简化：数据库 category 值与主看板 TAB 名一一对应，无子分类映射。
  * 主看板 TAB 完全由数据库动态分类生成，不再需要 TAB→分类映射表。
  */
-export const HIGH_FREQ_TABS = ['自选', '黄金原油', 'QDII欧美']
+export const HIGH_FREQ_TABS = ['自选', '黄金原油', 'QDII欧美', 'QDII日本']
 
 export const useFundStore = defineStore('fund', () => {
   // ---- state ----

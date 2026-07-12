@@ -61,12 +61,12 @@
             <template #icon><n-icon><Zap /></n-icon></template>
             银河QMT
           </n-tag>
-          <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round
-            :style="{ fontWeight: 'bold', cursor: hasFutu ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
-            @click="reconnectWithGuard(hasFutu, '富途', reconnectFutu)">
-            <template #icon><n-icon><Zap /></n-icon></template>
-            富途
-          </n-tag>
+           <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round
+             :style="{ fontWeight: 'bold', cursor: hasFutu ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+             @click="reconnectWithGuard(hasFutu, '富途', reconnectFutu)">
+             <template #icon><n-icon><Zap /></n-icon></template>
+             富途
+           </n-tag>
           <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
             :style="{ fontWeight: 'bold', cursor: hasGuojin ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
             @click="reconnectWithGuard(hasGuojin, '国金QMT', reconnectGuojin)">

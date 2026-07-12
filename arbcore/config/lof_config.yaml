@@ -1708,6 +1708,7 @@ funds:
 - code: '513000'
   name: 易方达日经225
   category: QDII日本
+  related_index: N225
   trade_etf: NKY
   trade_future: NK
   holdings:
@@ -1721,6 +1722,7 @@ funds:
 - code: '159866'
   name: 工银日经225
   category: QDII日本
+  related_index: N225
   trade_etf: NKY
   trade_future: NK
   holdings:
@@ -1734,6 +1736,7 @@ funds:
 - code: '513520'
   name: 华夏日经225
   category: QDII日本
+  related_index: N225
   trade_etf: NKY
   trade_future: NK
   holdings:

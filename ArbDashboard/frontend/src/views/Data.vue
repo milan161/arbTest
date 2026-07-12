@@ -52,6 +52,22 @@
               立即更新净值
             </n-button>
           </div>
+
+          <!-- [AI-2026-07-10] 静态估值手动触发 -->
+          <n-divider title-placement="left">静态估值</n-divider>
+          <div class="nav-action-card">
+            <div class="nav-action-info">
+              <div class="nav-title">重算静态估值</div>
+              <div class="nav-desc">
+                基于最新因子/指数数据，重新计算所有基金的静态估值（含 QDII日本新基金）。
+                <span v-if="staticValLastTime">上次计算: {{ staticValLastTime }}</span>
+              </div>
+            </div>
+            <n-button type="primary" @click="triggerStaticValuation" :loading="staticValRunning">
+              <template #icon><n-icon><RefreshCw /></n-icon></template>
+              立即计算
+            </n-button>
+          </div>
         </n-card>
       </n-gi>
       <n-gi :span="10">
@@ -367,6 +383,26 @@ const triggerNavUpdate = async () => {
   } finally {
     setTimeout(() => { navRunning.value = false }, 2000)
     setTimeout(() => fetchNavStatus(), 3000)
+  }
+}
+
+// [AI-2026-07-10] 静态估值手动触发
+const staticValLastTime = ref('')
+const staticValRunning = ref(false)
+
+const triggerStaticValuation = async () => {
+  staticValRunning.value = true
+  try {
+    const res = await triggerSystemTask('012')
+    if (res.data.status === 'ok') {
+      message.success('静态估值计算已后台运行，请稍后刷新看板查看结果')
+    } else {
+      message.error(`启动失败: ${res.data.message}`)
+    }
+  } catch (e: any) {
+    message.error(`启动失败: ${e.message}`)
+  } finally {
+    setTimeout(() => { staticValRunning.value = false }, 2000)
   }
 }
 

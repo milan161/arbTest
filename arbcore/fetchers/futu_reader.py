@@ -47,6 +47,7 @@ class FutuReader:
         self.last_connect_time = 0
         self.last_log_time = 0
         self.disabled = True  # [V10.0] 启动时不自动连接，用户点击页面"富途"按钮才重连
+        self._lock = threading.Lock()  # [V10.13] 多线程并发保护
         
         # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
     
@@ -173,6 +174,11 @@ class FutuReader:
         if self.disabled:
             return False, "富途API已被禁用（启动时连接失败，请点击页面'富途'标签重试）", self.prices
             
+        with self._lock:  # [V10.13] 多线程并发保护
+            return self._get_prices_impl(symbols)
+    
+    def _get_prices_impl(self, symbols):
+        """get_prices 的实际实现，由 _lock 保护"""
         try:
             # ctx 为 None 说明还没连接或已断开，尝试连接
             if self.ctx is None:
@@ -186,14 +192,6 @@ class FutuReader:
                 for attempt in range(1, self.max_retries + 1):
                     try:
                         self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
-                        for _wait in range(50):
-                            if self.ctx._ctx._quote_conn:
-                                break
-                            time.sleep(0.1)
-                        if not self.ctx._ctx._quote_conn:
-                            self.ctx.close()
-                            self.ctx = None
-                            raise Exception("连接超时")
                         self.subscribed_codes = set()
                         connected = True
                         logger.info(f"[富途] 连接成功 (第 {attempt} 次)")
@@ -237,12 +235,11 @@ class FutuReader:
 
             new_codes = [c for c in futu_codes if c not in self.subscribed_codes]
             
-            # 订阅新增加的股票，指定 Session.ALL 获取夜盘
+            # 订阅新增加的股票，指定 Session.ALL 获取盘前盘后夜盘全时段数据
             if new_codes:
                 ret, data = self.ctx.subscribe(new_codes, [SubType.QUOTE], session=Session.ALL)
                 if ret != 0:
-                    self.close()
-                    logger.warning(f"[富途] 订阅失败: {data}")
+                    logger.warning(f"[富途] 订阅失败: {data}（连接保留，下次重试）")
                     return False, f"富途API未运行 (订阅失败): {data}", self.prices
                 self.subscribed_codes.update(new_codes)
                 logger.info(f"[富途] 已订阅: {', '.join(new_codes)}")
@@ -267,60 +264,54 @@ class FutuReader:
                     bid_0 = safe_float(row.get('bid_price_0'))
                     ask_0 = safe_float(row.get('ask_price_0'))
                     last_0 = safe_float(row.get('last_price'))
+                    overnight_0 = safe_float(row.get('overnight_price'))
+                    pre_0 = safe_float(row.get('pre_price'))
+                    after_0 = safe_float(row.get('after_price'))
+                    
+                    # [V10.13] 打印富途裸数据排查盘口问题
+                    logger.info(f"【富途裸数据】 {code}: bid={bid_0} ask={ask_0} last={last_0} overnight={overnight_0} pre={pre_0} after={after_0}")
                     
                     if bid_0 > 0: bid = bid_0
                     if ask_0 > 0: ask = ask_0
                     if last_0 > 0: last = last_0
                     
-                    # 如果买一/卖一都缺失，使用夜盘/盘前/盘后/最新价作为兜底
-                    if bid <= 0 or ask <= 0:
-                        fallback_price = 0.0
-                        overnight = safe_float(row.get('overnight_price'))
-                        pre = safe_float(row.get('pre_price'))
-                        after = safe_float(row.get('after_price'))
-                        
-                        if overnight > 0: fallback_price = overnight
-                        elif pre > 0: fallback_price = pre
-                        elif after > 0: fallback_price = after
-                        elif last_0 > 0: fallback_price = last_0
-                        
-                        if fallback_price > 0:
-                            if bid <= 0:
-                                bid = fallback_price
-                            if ask <= 0:
-                                ask = fallback_price
+                    # [V10.13] 真实盘口修补逻辑
+                    # 规则：有真实 bid/ask 时用真实数据；没有时存 last_price（上游显示价格,"等待数据"）
+                    if bid > 0 or ask > 0:
+                        # 一边有真实盘口，另一边缺失 → 用 last 补齐
+                        if bid > 0 and ask <= 0:
+                            ask = last if last > 0 else bid
+                        elif ask > 0 and bid <= 0:
+                            bid = last if last > 0 else ask
+                        # 两边都有 → 真实价差
+                    # 两边都缺失（bid=0, ask=0）：保留 last 作为价格，bid/ask 为 0
                     
-                    # 如果仍有缺失，用last_price兜底bid/ask
-                    if bid <= 0 and last > 0:
-                        bid = last
-                    if ask <= 0 and last > 0:
-                        ask = last
-                    if bid > 0 and ask <= 0:
-                        ask = bid
-                    
-                    if bid > 0:
+                    # 只要有 last 就存，上游决定 bid/ask 的显示
+                    if last > 0:
                         self.prices[code] = {
                             'bid': bid,
                             'ask': ask,
-                            'last': last if last > 0 else bid
+                            'last': last
                         }
                 
                 # 控制台心跳回显 (每30秒打印一次)
                 current_time = time.time()
                 if current_time - self.last_log_time >= 30:
                     if self.prices:
-                        price_strs = [f"{k}=${v['bid']:.2f}" for k, v in self.prices.items()]
+                        price_strs = [f"{k}=${v.get('last', 0):.2f}" for k, v in self.prices.items()]
                         logger.info(f"[富途] 实时价格: {', '.join(price_strs)}")
                     self.last_log_time = current_time
                 
+                # [V10.13] 如果没有任何标的获取到真实盘口（如非交易时段），返回失败而非成功
+                if not self.prices:
+                    return False, "非交易时段，无真实盘口数据", self.prices
                 return True, "成功获取富途价格", self.prices
             else:
-                self.close()
-                logger.warning(f"[富途] 获取数据失败: {data}")
+                logger.warning(f"[富途] 获取数据失败: {data}（连接保留，下次重试）")
                 return False, f"富途API未运行: {data}", self.prices
                 
         except Exception as e:
-            self.close()
+            logger.warning(f"[富途] get_prices 异常: {e}")
             err_msg = str(e)
             if "refused" in err_msg.lower() or "10061" in err_msg:
                 logger.warning("[富途] 无法连接到OpenD，已永久禁用后续自动重试。如需使用请重启系统。")

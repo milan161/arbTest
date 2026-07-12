@@ -488,7 +488,25 @@ class DailyUpdater(BaseApp):
         except Exception as e:
             self.logger.error(f"❌ [Level 1] 离岸价直连兜底失败: {e}")
 
-        self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价）采集结束。")
+        # [AI-2026-07-10] JPY/CNY 日元汇率
+        try:
+            conn_jpy = self.db._get_conn()
+            has_jpy = conn_jpy.execute(
+                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND jpy_cny_mid IS NOT NULL", (today_str,)
+            ).fetchone()[0] > 0
+            conn_jpy.close()
+            if not has_jpy:
+                jpy_data = data_fetcher.fetch_jpy_cny_rate()
+                if jpy_data:
+                    jpy_date = pd.to_datetime(str(jpy_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                    jpy_rate = jpy_data.get('jpy_cny_rate')
+                    if jpy_rate is not None:
+                        self.db.upsert_exchange_rate(jpy_date, jpy_cny_mid=jpy_rate)
+                        self.logger.info(f"✅ [Level 1] JPY/CNY 入库: {jpy_date} -> {jpy_rate}")
+        except Exception as e:
+            self.logger.error(f"❌ [Level 1] JPY/CNY 直连兜底失败: {e}")
+
+        self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价/日元）采集结束。")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
         """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
@@ -1036,6 +1054,7 @@ class DailyUpdater(BaseApp):
         a_share = []
         hk_funds = []
         us_funds = []
+        jp_funds = []
 
         # 读取 fund_list.csv 获取分类（与 jsl/03_eod_all.py 一致）
         csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -1069,6 +1088,8 @@ class DailyUpdater(BaseApp):
                 a_share.append((fund_code, ri, pos_ratio or 0.95))
             elif category == 'QDII亚洲':
                 hk_funds.append((fund_code, ri, pos_ratio or 0.95))
+            elif category == 'QDII日本':
+                jp_funds.append((fund_code, ri, pos_ratio or 0.95))
             elif category == 'QDII欧美':
                 us_funds.append((fund_code, ri, pos_ratio or 0.95))
             elif category == '黄金原油':
@@ -1082,7 +1103,7 @@ class DailyUpdater(BaseApp):
                 elif ri_upper in ('.INX', '.NDX', 'SPY', 'QQQ', 'XOP', 'XLY', 'XBI', 'KWEB', 'RSPH', 'INDA'):
                     us_funds.append((fund_code, ri, pos_ratio or 0.95))
 
-        self.logger.info(f"  分类结果: A股={len(a_share)}, 港股={len(hk_funds)}, 美股={len(us_funds)}")
+        self.logger.info(f"  分类结果: A股={len(a_share)}, 港股={len(hk_funds)}, 美股={len(us_funds)}, 日股={len(jp_funds)}")
 
         total_updated = 0
 
@@ -1160,6 +1181,11 @@ class DailyUpdater(BaseApp):
                             curr_fx = cursor.fetchone()
                             cursor.execute("SELECT usd_cny_mid FROM exchange_rate WHERE date = ?", (prev_date,))
                             prev_fx = cursor.fetchone()
+                        elif fx_type == 'jpy':
+                            cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date = ?", (date,))
+                            curr_fx = cursor.fetchone()
+                            cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date = ?", (prev_date,))
+                            prev_fx = cursor.fetchone()
                         else:  # hkd
                             cursor.execute("SELECT hkd_cny_mid FROM exchange_rate WHERE date = ?", (date,))
                             curr_fx = cursor.fetchone()
@@ -1213,14 +1239,22 @@ class DailyUpdater(BaseApp):
         process_batch(a_share, "A股指数/LOF (无汇率)", fx_type='none')
         process_batch(hk_funds, "QDII亚洲 (港币)", fx_type='hkd')
         process_batch(us_funds, "QDII欧美 (美元)", fx_type='usd')
+        process_batch(jp_funds, "QDII日本 (日元)", fx_type='jpy')
 
         conn.commit()
         conn.close()
         self.logger.info(f"✅ [简单估值] 完成，共更新 {total_updated} 条记录")
 
-    def run(self, nav_only=False, refresh_morning=False):
+    def run(self, nav_only=False, refresh_morning=False, static_valuation=False):
         today_str = datetime.now().strftime('%Y-%m-%d')
         now = datetime.now()
+
+        if static_valuation:
+            self.logger.info("🚀 [静态估值模式] 仅执行静态估值计算 (step10 + step11)...")
+            self._step10_calculate_static_valuation()
+            self.step11_simple_static_valuation()
+            self.logger.info("🎉 [静态估值模式] 静态估值计算完成！")
+            return
 
         if refresh_morning:
             self.logger.info("🚀 [清晨刷新] 清除9:20前旧标记，重新抓取 Woody/汇率/VPS 上午数据...")
@@ -1276,6 +1310,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ArbNext 日度数据流水线")
     parser.add_argument("--nav-only", action="store_true", help="仅更新基金净值 (step4)")
     parser.add_argument("--refresh-morning", action="store_true", help="清除上午标记后重新抓取 Woody/汇率/VPS")
+    parser.add_argument("--static-valuation", action="store_true", help="仅计算静态估值 (step10 + step11)")
     args = parser.parse_args()
 
     # 进程互斥锁（跨平台）：用 PID 文件防多实例
@@ -1314,7 +1349,7 @@ if __name__ == "__main__":
             locked = True
 
     try:
-        DailyUpdater().run(nav_only=args.nav_only, refresh_morning=args.refresh_morning)
+        DailyUpdater().run(nav_only=args.nav_only, refresh_morning=args.refresh_morning, static_valuation=args.static_valuation)
     finally:
         if locked:
             try:
