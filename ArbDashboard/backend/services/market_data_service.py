@@ -180,13 +180,8 @@ class MarketDataService:
             # 2. 富途兜底（全时段可用）
             if self.futu_reader:
                 if self._circuit_is_tripped('富途'):
-                    # [V10.13] 如果富途实际已连接（用户点过重连），自动清熔断
-                    if self.futu_reader.ctx is not None and not getattr(self.futu_reader, 'disabled', False):
-                        self._circuit_reset('富途')
-                        logger.info(f"🟢 [MDS] 富途已实际连接，自动清除熔断")
-                    else:
-                        logger.debug(f"🔴 富途已熔断，跳过兜底 {symbol}")
-                        return None
+                    logger.debug(f"🔴 富途已熔断，跳过兜底 {symbol}")
+                    return None
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
                     if success and symbol in prices:
@@ -197,16 +192,14 @@ class MarketDataService:
                         last = quote.get('last', 0)
                         return {
                             'symbol': symbol,
-                            'price': last if last > 0 else (bid if bid > 0 else 0),
-                            'bid': bid if bid > 0 else None,    # [V10.13] 0→None 前端显示"等待数据"
-                            'ask': ask if ask > 0 else None,    # [V10.13] 0→None 前端显示"等待数据"
+                            'price': last if last > 0 else bid,
+                            'bid': bid,
+                            'ask': ask if ask > 0 else bid,
                             'amount': 0,
                             'source': '富途'
                         }
                     else:
-                        # [V10.13] 非交易时段/已被禁用 不记熔断
-                        if "非交易时段" not in msg and "已被禁用" not in msg:
-                            self._circuit_record_failure('富途')
+                        self._circuit_record_failure('富途')
                         now = time.time()
                         last_warn = self._futu_warn_cooldown.get(symbol, 0)
                         if now - last_warn > 300:
@@ -228,50 +221,33 @@ class MarketDataService:
                     'amount': 0,
                     'source': '非夜盘时段'
                 }
-            # 富途已连但数据获取失败（如 API 会话断连）
-            if self.futu_reader is not None and self.futu_reader.ctx is not None and not getattr(self.futu_reader, 'disabled', False):
-                return {
-                    'symbol': symbol,
-                    'price': 0,
-                    'bid': None,
-                    'ask': None,
-                    'amount': 0,
-                    'source': '富途(等待重连)'
-                }
             return None # [FIX] 美股不能继续往下走A股引擎
                     
         elif source == 'FUTU':
             # [V10.1] 熔断检查
             if self._circuit_is_tripped('富途'):
-                # [V10.13] 如果富途实际已连接，自动清熔断
-                if self.futu_reader and self.futu_reader.ctx is not None and not getattr(self.futu_reader, 'disabled', False):
-                    self._circuit_reset('富途')
-                    logger.info(f"🟢 [MDS] 富途已实际连接，自动清除熔断")
-                else:
-                    logger.debug(f"🔴 富途已熔断，跳过 {symbol}")
-                    return None
+                logger.debug(f"🔴 富途已熔断，跳过 {symbol}")
+                return None
             # 直接走富途通道
             if self.futu_reader:
                 try:
-                        success, msg, prices = self.futu_reader.get_prices([symbol])
-                        if success and symbol in prices:
-                            self._circuit_record_success('富途')
-                            quote = prices[symbol]
-                            bid = quote.get('bid', 0)
-                            ask = quote.get('ask', 0)
-                            last = quote.get('last', 0)
-                            return {
-                                'symbol': symbol,
-                                'price': last if last > 0 else (bid if bid > 0 else 0),
-                                'bid': bid if bid > 0 else None,    # [V10.13] 0→None 前端显示"等待数据"
-                                'ask': ask if ask > 0 else None,    # [V10.13] 0→None 前端显示"等待数据"
-                                'amount': 0,
-                                'source': '富途'
-                            }
-                        else:
-                            # [V10.13] 非交易时段/已被禁用 不记熔断
-                            if "非交易时段" not in msg and "已被禁用" not in msg:
-                                self._circuit_record_failure('富途')
+                    success, msg, prices = self.futu_reader.get_prices([symbol])
+                    if success and symbol in prices:
+                        self._circuit_record_success('富途')
+                        quote = prices[symbol]
+                        bid = quote.get('bid', 0)
+                        ask = quote.get('ask', 0)
+                        last = quote.get('last', 0)
+                        return {
+                            'symbol': symbol,
+                            'price': last if last > 0 else bid,
+                            'bid': bid,
+                            'ask': ask if ask > 0 else bid,
+                            'amount': 0,
+                            'source': '富途'
+                        }
+                    else:
+                        self._circuit_record_failure('富途')
                         # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
                         now = time.time()
                         last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
@@ -332,20 +308,18 @@ class MarketDataService:
             sources.append("IB (Ready)")
         else:
             sources.append("IB (未运行)")
-        # 实时检测富途的真实可用状态：API 上下文存在且未被熔断禁用，且端口可达
+        # 实时检测富途 OpenD 端口的真实连接状态（避免因 IB 优先级高未触发富途连接而导致状态不显示的问题）
         if self.futu_reader is not None and not any("富途" in s for s in sources):
-            futu_ok = (self.futu_reader.ctx is not None and not getattr(self.futu_reader, 'disabled', False))
-            if futu_ok:
-                import socket
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(0.1)
-                    port_open = (sock.connect_ex((self.futu_reader.host, self.futu_reader.port)) == 0)
-                    sock.close()
-                    if port_open:
-                        sources.append("富途 (Ready)")
-                except:
-                    pass
+            import socket
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.1)
+                is_futu_online = (sock.connect_ex((self.futu_reader.host, self.futu_reader.port)) == 0)
+                sock.close()
+                if is_futu_online:
+                    sources.append("富途 (Ready)")
+            except:
+                pass
         return sources
     
     # [AI-2026-07-03] 修复 SI 实时估值公式：对齐 Woody — 将 SI 转 CNY/kg 后与 AG0 昨结算比，而非直接用 SI 百分比涨跌幅
