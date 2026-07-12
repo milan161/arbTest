@@ -162,6 +162,16 @@
                    <n-input v-model:value="fundForm.category" placeholder="如 QDII欧美 / QDII日本" />
                 </n-form-item>
              </n-gi>
+             <n-gi>
+                <n-form-item label="估值算法">
+                   <n-select v-model:value="fundForm.valuation_method" :options="[
+                      { label: '自适应 (默认推演)', value: '' },
+                      { label: 'ETF净值 (etf)', value: 'etf' },
+                      { label: '一篮子权重 (basket)', value: 'basket' },
+                      { label: '纯指数 (index)', value: 'index' }
+                   ]" />
+                </n-form-item>
+             </n-gi>
             <n-gi>
                <n-form-item label="仓位(%)">
                   <n-input-number v-model:value="fundForm.holdings.equity_ratio" :step="0.1" style="width:100%" />
@@ -437,6 +447,7 @@ const addNewFund = () => {
   editMode.value = false
   Object.assign(fundForm, {
     code: '', name: '', category: selectedTab.value, trade_etf: '', trade_future: '',
+    valuation_method: '',
     holdings: { equity_ratio: 95.0 },
     valuation_portfolio: [{ symbol: '', weight: 100, anchor: 'US' }]
   })

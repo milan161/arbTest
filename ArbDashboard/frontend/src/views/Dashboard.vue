@@ -561,8 +561,8 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 // [AI-2026-07-04] 单ETF基金（魔法公式）显示对冲值
                 ...(hasHedge ? [{ title: '对冲值', key: 'hedge', width: 95, align: 'center', render(row: any) { return row.hedge ? h('span', { class: 'num-cell' }, row.hedge.toFixed(2)) : '-' } }] : []),
               ],
-        // QDII亚洲 / 国内LOF 专属：指数价 + 指数涨跌
-        ...(['QDII亚洲', '国内LOF'].includes(selectedFund.value?.category || '') ? [
+        // QDII亚洲 / 国内LOF / 指数型基金 专属：指数价 + 指数涨跌
+        ...(['QDII亚洲', '国内LOF'].includes(selectedFund.value?.category || '') || selectedFund.value?.sub_category === '指数' ? [
             { title: '指数价', key: 'index_close', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.index_close, row.index_close_chg) } },
             { title: '指数涨跌', key: 'index_pct', width: 85, align: 'center', render(row: any) { if (row.index_pct == null) return '-'; return h('span', { style: { color: priceColor(row.index_pct), fontWeight: '500' } }, row.index_pct.toFixed(2) + '%') } },
         ] : []),
