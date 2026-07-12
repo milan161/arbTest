@@ -1,3 +1,25 @@
+# ======================================================================
+# 基金分类与估值算法映射指南 (Fund Category & Valuation Mapping)
+# ======================================================================
+# 本配置文件定义了所有基金的静态与动态运行参数。不同基金类别对应不同的估值和对冲策略。
+#
+# 1. 黄金原油 (大宗商品)
+#    - 估值算法: 矩阵估值算法 (Matrix Valuation)，依赖 Woody API 提供的多区域锚点 (如 ^USO-EU, ^USO-JP)。
+#      注：必须使用带有 ^ 前缀的区域后缀。
+#    - 对冲算法: 目前主要使用对应 ETF (GLD, USO) 进行对冲。未来计划引入期货对冲 (MGC, MCL)，
+#      目前基于 pure future 的估值算法尚未实装，相关 beta 字段已废弃/移除。
+#
+# 2. QDII欧美
+#    - 估值算法 (优先级1): 魔法公式 (Magic Valuation) - 适用于单一ETF型基金 (如 162411/XOP)，直接使用 Woody API 的 hedge 因子。
+#    - 估值算法 (特例): 区域锚点矩阵估值 - 仅 164814 (印度基金) 采用类似大宗商品的区域锚点估值。
+#    - 估值算法 (优先级2): 单一指数估值 (Index Valuation) - 适用于纯指数基金 (如 161125/标普500, 161130/纳斯达克)。
+#    - 对冲算法: 直接使用美股对应 ETF (如 XOP) 对冲。
+#
+# 3. QDII日本
+#    - 估值算法: 单一指数估值 (Index Valuation) - 直接使用相关指数。
+#    - 对冲算法: 通常不进行日内对冲，主打场内折溢价申赎。
+# ======================================================================
+
 currencies:
 - currency: GBP
   symbol: USD
@@ -17,18 +39,17 @@ funds:
   - symbol: MCL
     delivery_month: '2604'
     weight: 100.0
-    beta: 0.85
     currency: USD
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 63.39
     anchor: EU
   - symbol: USO
     weight: 22.51
     anchor: US
-  - symbol: USO-JP
+  - symbol: ^USO-JP
     weight: 14.1
     anchor: JP
   trade_etf: USO
@@ -84,18 +105,17 @@ funds:
   - symbol: MCL
     delivery_month: '2604'
     weight: 100.0
-    beta: 0.85
     currency: USD
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 58.71
     anchor: EU
   - symbol: USO
     weight: 41.36
     anchor: US
-  - symbol: USO-JP
+  - symbol: ^USO-JP
     weight: -0.07
     anchor: JP
   trade_etf: USO
@@ -146,18 +166,17 @@ funds:
   - symbol: MCL
     delivery_month: '2604'
     weight: 100.0
-    beta: 0.85
     currency: USD
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 56.25
     anchor: EU
   - symbol: USO
     weight: 35.11
     anchor: US
-  - symbol: USO-HK
+  - symbol: ^USO-HK
     weight: 8.64
     anchor: HK
   trade_etf: USO
@@ -208,7 +227,7 @@ funds:
   - symbol: GLD
     weight: 25.55
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 12.2
     anchor: EU
   sina_index_url: ''
@@ -272,7 +291,6 @@ funds:
   - symbol: MGC
     delivery_month: '2604'
     weight: 100.0
-    beta: 1.0
     currency: USD
     exchange: SMART
     name: ''
@@ -280,7 +298,7 @@ funds:
   - symbol: GLD
     weight: 52.07
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 47.93
     anchor: EU
   trade_etf: GLD
@@ -302,7 +320,7 @@ funds:
   - symbol: GLD
     weight: 81.46
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 18.54
     anchor: EU
   sina_index_url: ''
@@ -410,7 +428,6 @@ funds:
   - symbol: MGC
     delivery_month: '2604'
     weight: 100.0
-    beta: 1.0
     currency: USD
     exchange: SMART
     name: ''
@@ -439,7 +456,6 @@ funds:
   - symbol: MGC
     delivery_month: ''
     weight: 100.0
-    beta: 1.0
     currency: USD
     exchange: SMART
     name: ''
@@ -447,10 +463,10 @@ funds:
   - symbol: GLD
     weight: 78.71
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 18.97
     anchor: EU
-  - symbol: GLD-JP
+  - symbol: ^GLD-JP
     weight: 2.32
     anchor: JP
   trade_etf: GLD
@@ -510,6 +526,7 @@ funds:
 - code: '162411'
   name: 华宝油气
   category: QDII欧美
+  valuation_method: etf
   trade_etf: XOP
   trade_future: ''
   holdings:
@@ -631,9 +648,10 @@ funds:
     name: 表明普 500 指数微型期货（Micro E-mini S&P 500
   position: 95.0
   sub_category: 指数
+  valuation_method: index
   woody_supported: true
   data_source: woody
-  related_index: SPY
+  related_index: .INX
 - code: '161130'
   name: 易方达纳100
   category: QDII欧美
@@ -660,12 +678,14 @@ funds:
     name: 微型纳斯达克100指数期货
   position: 95.0
   sub_category: 指数
+  valuation_method: index
   woody_supported: true
   data_source: woody
-  related_index: QQQ
+  related_index: .NDX
 - code: '164824'
   name: 交银印度
   category: QDII欧美
+  valuation_method: basket
   trade_etf: INDA
   trade_future: ''
   holdings:
@@ -909,7 +929,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 160322 港股精选相关指数映射
+  related_index: HSCI
 - code: '501305'
   name: 港股高股息
   category: QDII亚洲
@@ -925,7 +946,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 501305 港股高股息相关指数映射
+  related_index: 930914.CSI
 - code: '501303'
   name: 恒生中型股
   category: QDII亚洲
@@ -941,7 +963,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSMCI
+  # [AI-2026-07-12] 修复 501303 恒生中型股相关指数映射
+  related_index: HSMI
 - code: '501302'
   name: 恒生指数基金
   category: QDII亚洲
@@ -1005,7 +1028,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 501306 港股高股息LOFC相关指数映射
+  related_index: 930914.CSI
 - code: '161831'
   name: 恒生国企LOF
   category: QDII亚洲
@@ -1037,7 +1061,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 501307 银华高股息LOF相关指数映射
+  related_index: 930917.CSI
 - code: '501301'
   name: 香港大盘LOF
   category: QDII亚洲
@@ -1053,7 +1078,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 501301 香港大盘LOF相关指数映射
+  related_index: HSCCI
 - code: '160717'
   name: H股LOF
   category: QDII亚洲
@@ -1069,7 +1095,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 160717 H股LOF相关指数映射
+  related_index: HSCEI
 - code: '501311'
   name: 新经济港股通LOF
   category: QDII亚洲
@@ -1085,7 +1112,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 501311 新经济港股通LOF相关指数映射
+  related_index: HSSCNE
 - code: '501025'
   name: 香港银行LOF
   category: QDII亚洲
@@ -1101,7 +1129,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 501025 香港银行LOF相关指数映射
+  related_index: 869
 - code: '161124'
   name: 港股小盘LOF
   category: QDII亚洲
@@ -1117,7 +1146,8 @@ funds:
   trade_future: ''
   woody_supported: false
   data_source: hkindex
-  related_index: HSI
+  # [AI-2026-07-12] 修复 161124 港股小盘LOF相关指数映射
+  related_index: HSSI
 - code: '160706'
   name: 嘉实沪深300
   category: 国内LOF
@@ -1708,6 +1738,7 @@ funds:
 - code: '513000'
   name: 易方达日经225
   category: QDII日本
+  rate_type: spot
   related_index: N225
   trade_etf: NKY
   trade_future: NK
@@ -1722,6 +1753,7 @@ funds:
 - code: '159866'
   name: 工银日经225
   category: QDII日本
+  rate_type: spot
   related_index: N225
   trade_etf: NKY
   trade_future: NK
@@ -1736,6 +1768,7 @@ funds:
 - code: '513520'
   name: 华夏日经225
   category: QDII日本
+  rate_type: spot
   related_index: N225
   trade_etf: NKY
   trade_future: NK

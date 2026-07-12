@@ -15,10 +15,10 @@ LOF 基金套利监控系统旨在为专业投资提供一?*端到?*?*高可?*?*
 - **基座**：基?`BaseApp`，统丢配置加载与多线程追溯?
 - **逻辑**：优先从云端 VPS 拉取高质量同步数据，若云端缺失则启动本地 API 降级采集?
 
-### 2.2 思?(Calculators) - LOF012
-- **职责**：纯本地静估值精算引擎?
-- **基座**：利?`arbcore.calculators` 算法库?
-- **特征**：零网络依赖，基于数据库 `fund_daily_factors` 进行毫秒级批量推演，产出 T-1 日真值?
+### 2.2 思考引擎 (Calculators) - LOF012
+- **职责**：纯本地静态估值精算引擎与动态推演中心。
+- **基座**：利用 `arbcore.calculators` 算法库（包含 `static_valuation` 和 `dynamic_valuation`）。
+- **特征**：零网络依赖，基于数据库 `fund_daily_factors` 和 YAML 配置的 `valuation_method` 显式标志，进行毫无歧义的批量推演，产出 T-1 日真值和盘中实时预测。
 
 ### 2.3 跳动 (Real-time Hub) - LOF02
 - **职责**：极速实时行情网关与 API 中心?

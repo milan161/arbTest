@@ -190,11 +190,12 @@ class DynamicValuationCalculator:
             position = fund_config.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
             
         # 1. 尝试魔法公式 (Hedge)
+        valuation_method = fund_config.get('valuation_method', '')
         b_hedge = base_data['hedge']
         portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
         
         rt_val = None
-        if pd.notna(b_hedge) and b_hedge > 0 and len(portfolio) == 1:
+        if valuation_method != 'basket' and pd.notna(b_hedge) and b_hedge > 0 and len(portfolio) == 1:
             # 分子：实时价格，去掉 ^ 前缀和 -EU/-JP/-HK 后缀，得到基础代码 USO/GLD
             full_symbol = portfolio[0].get('symbol', '')
             primary_sym = full_symbol.lstrip('^')  # ^USO-EU → USO-EU

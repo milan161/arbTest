@@ -47,7 +47,7 @@
           "trade_etf": "USO",
           "position": 75.77,
           "valuation_portfolio": [
-            {"symbol": "USO-EU", "weight": 64.93, "anchor": "EU"},
+            {"symbol": "^USO-EU", "weight": 64.93, "anchor": "EU"},
             {"symbol": "USO", "weight": 35.07, "anchor": "US"}
           ]
         },
@@ -59,7 +59,7 @@
           "trade_etf": "USO",
           "position": 75.37,
           "valuation_portfolio": [
-            {"symbol": "USO-EU", "weight": 51.11, "anchor": "EU"},
+            {"symbol": "^USO-EU", "weight": 51.11, "anchor": "EU"},
             {"symbol": "USO", "weight": 48.89, "anchor": "US"}
           ]
         },
@@ -71,7 +71,7 @@
           "trade_etf": "USO",
           "position": 77.91,
           "valuation_portfolio": [
-            {"symbol": "USO-EU", "weight": 58.04, "anchor": "EU"},
+            {"symbol": "^USO-EU", "weight": 58.04, "anchor": "EU"},
             {"symbol": "USO", "weight": 41.96, "anchor": "US"}
           ]
         },
@@ -95,7 +95,7 @@
           "position": 93.87,
           "valuation_portfolio": [
             {"symbol": "GLD", "weight": 76.7, "anchor": "US"},
-            {"symbol": "USO-EU", "weight": 23.3, "anchor": "EU"}
+            {"symbol": "^USO-EU", "weight": 23.3, "anchor": "EU"}
           ]
         },
         {
@@ -107,7 +107,7 @@
           "position": 96.46,
           "valuation_portfolio": [
             {"symbol": "GLD", "weight": 54.77, "anchor": "US"},
-            {"symbol": "GLD-EU", "weight": 45.23, "anchor": "EU"}
+            {"symbol": "^GLD-EU", "weight": 45.23, "anchor": "EU"}
           ]
         },
         {
@@ -119,7 +119,7 @@
           "position": 93.82,
           "valuation_portfolio": [
             {"symbol": "GLD", "weight": 80.56, "anchor": "US"},
-            {"symbol": "GLD-EU", "weight": 19.44, "anchor": "EU"}
+            {"symbol": "^GLD-EU", "weight": 19.44, "anchor": "EU"}
           ]
         },
         {
@@ -142,7 +142,7 @@
           "position": 89.93,
           "valuation_portfolio": [
             {"symbol": "GLD", "weight": 90.33, "anchor": "US"},
-            {"symbol": "GLD-EU", "weight": 9.67, "anchor": "EU"}
+            {"symbol": "^GLD-EU", "weight": 9.67, "anchor": "EU"}
           ]
         }
       ]
