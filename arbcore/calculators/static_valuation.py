@@ -195,7 +195,7 @@ class StaticValuationCalculator:
             
             basket_val = calculate_basket_valuation(b_nav, position, c_fx, b_fx, items)
             if basket_val:
-            return basket_val
+                return basket_val
         
         # [AI-2026-07-09] 3. 指数估值公式（无 hedge、无 basket 的兜底）
         # 适用：QDII日本（513000/513520/159866）、QDII亚洲、国内LOF

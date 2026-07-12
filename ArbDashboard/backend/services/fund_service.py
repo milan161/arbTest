@@ -16,16 +16,20 @@ logger = logging.getLogger(__name__)
 # [V11.0] 加载 lof_config.yaml 获取基金配置（rate_type 等字段不在数据库中的）
 _CONFIG_YAML_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'config', 'lof_config.yaml'))
 _FUNDS_WITH_SPOT_RATE: Set[str] = set()
+_FUNDS_SUB_CATEGORY: Dict[str, str] = {}
 try:
     with open(_CONFIG_YAML_PATH, 'r', encoding='utf-8') as f:
         yaml_cfg = yaml.safe_load(f)
         fund_list = yaml_cfg.get('funds', []) if isinstance(yaml_cfg, dict) else yaml_cfg or []
         for item in fund_list:
-            if isinstance(item, dict) and item.get('rate_type') == 'spot':
-                _FUNDS_WITH_SPOT_RATE.add(item['code'])
+            if isinstance(item, dict):
+                if item.get('rate_type') == 'spot':
+                    _FUNDS_WITH_SPOT_RATE.add(item['code'])
+                if 'sub_category' in item:
+                    _FUNDS_SUB_CATEGORY[item['code']] = item['sub_category']
     logger.info(f"[FX] 在岸价基金({len(_FUNDS_WITH_SPOT_RATE)}只): {_FUNDS_WITH_SPOT_RATE}")
 except Exception as e:
-    logger.warning(f"[FX] 读取lof_config.yaml获取rate_type失败: {e}")
+    logger.warning(f"[FX] 读取lof_config.yaml获取rate_type/sub_category失败: {e}")
 
 # [V11.0] 实时在岸价缓存（15秒 TTL）
 _SPOT_FX_CACHE: Dict[str, float] = {'rate': 0.0, 'time': 0.0}
@@ -628,7 +632,7 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
             db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'arb_master.db')
             conn_write = sqlite3.connect(db_path)
             for sym, data in api_results.items():
-                if sym == 'N225' and data.get('price', 0) > 0:
+                if sym in ('N225', '.INX', '.NDX') and data.get('price', 0) > 0:
                     conn_write.execute(
                         "INSERT OR REPLACE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
                         (sym, today_str, data['price'], 'sina')
@@ -1058,7 +1062,7 @@ class FundService:
                     metrics_df = pd.DataFrame()
 
                 metrics = {'price': 0, 'nav': 0, 'static_val': 0, 'static_premium': 0,
-                           'rt_val': None, 'rt_premium': None}
+                           'rt_val': None, 'rt_premium': None, 'sub_category': _FUNDS_SUB_CATEGORY.get(code, '')}
 
                 if not metrics_df.empty:
                     valid_navs = metrics_df[metrics_df['nav'] > 0]
@@ -1783,6 +1787,24 @@ class FundService:
             except Exception as e:
                 logger.warning(f"[FundHistory] 获取ETF历史价格失败 {fund_code}: {e}")
 
+            # [AI] 从 index_history 获取真正的指数数据，覆盖可能被错误写入 SPY 的 index_close
+            real_index_map = {}
+            if trade_etf:
+                try:
+                    idx_rows = conn.execute("SELECT date, close FROM index_history WHERE symbol=? ORDER BY date DESC", (trade_etf,)).fetchall()
+                    if idx_rows:
+                        idx_prices = {r[0]: r[1] for r in idx_rows}
+                        idx_dates = sorted(idx_prices.keys(), reverse=True)
+                        for i in range(len(idx_dates) - 1):
+                            d_curr, d_prev = idx_dates[i], idx_dates[i + 1]
+                            if idx_prices[d_prev] and idx_prices[d_prev] > 0:
+                                chg = (idx_prices[d_curr] / idx_prices[d_prev] - 1) * 100
+                                real_index_map[d_curr] = {'close': idx_prices[d_curr], 'pct': round(chg, 4)}
+                        if len(idx_dates) > 0:
+                            real_index_map[idx_dates[-1]] = {'close': idx_prices[idx_dates[-1]], 'pct': None}
+                except:
+                    pass
+
             data_list = []
             for _, row in df.iterrows():
                 item = {}
@@ -1806,6 +1828,16 @@ class FundService:
                     if idx_data:
                         item['idx_close'] = idx_data['idx_close']
                         item['idx_pct'] = idx_data['idx_pct']
+
+                # [AI] 覆盖真实指数数据
+                if real_index_map and trade_etf:
+                    row_date = str(item.get('date', ''))[:10]
+                    if row_date in real_index_map:
+                        item['index_close'] = real_index_map[row_date]['close']
+                        item['index_pct'] = real_index_map[row_date]['pct']
+                    else:
+                        item['index_close'] = None
+                        item['index_pct'] = None
 
                 # [511520] 附加国债期货数据 + 回测预估净值
                 if fund_code == '511520':

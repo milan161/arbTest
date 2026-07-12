@@ -153,6 +153,9 @@ def _get_all_related_indices() -> List[tuple]:
         # 带 .HI 后缀的港股指数
         elif clean.endswith('.HI'):
             result.append((code, 'hk'))
+        # 美股指数
+        elif clean in ('.INX', '.NDX'):
+            result.append((code, 'us_index'))
         else:
             result.append((code, 'skip'))
     
