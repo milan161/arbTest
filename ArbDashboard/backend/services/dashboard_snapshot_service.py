@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-HIGH_FREQ_CATEGORIES = ["黄金原油", "QDII欧美"]
-NORMAL_FREQ_CATEGORIES = ["QDII亚洲", "国内LOF", "白银", "现金管理"]
+HIGH_FREQ_CATEGORIES = ["黄金原油", "QDII欧美", "QDII日本", "白银"]
+NORMAL_FREQ_CATEGORIES = ["QDII亚洲", "国内LOF", "现金管理"]
 
 
 class DashboardSnapshotService:
@@ -44,10 +44,14 @@ class DashboardSnapshotService:
         # [AI-2026-07-03] 启动时仅刷新高优先级分类，低优先级延迟120s再启动
         await self.refresh_once("黄金原油", None, "黄金原油")
         await self.refresh_once("QDII欧美", None, "QDII欧美")
+        await self.refresh_once("QDII日本", None, "QDII日本")
+        await self.refresh_once("白银", None, "白银")
         self._tasks = [
             asyncio.create_task(self._loop("watchlist", self.high_interval, True, None)),
             asyncio.create_task(self._loop("黄金原油", self.high_interval, False, "黄金原油")),
             asyncio.create_task(self._loop("QDII欧美", self.high_interval, False, "QDII欧美")),
+            asyncio.create_task(self._loop("QDII日本", self.high_interval, False, "QDII日本")),
+            asyncio.create_task(self._loop("白银", self.high_interval, False, "白银")),
             asyncio.create_task(self._delayed_start_low_priority()),
         ]
         logger.info("Dashboard snapshot service started")
