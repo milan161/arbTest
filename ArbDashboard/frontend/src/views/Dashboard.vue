@@ -561,8 +561,8 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 // [AI-2026-07-04] 单ETF基金（魔法公式）显示对冲值
                 ...(hasHedge ? [{ title: '对冲值', key: 'hedge', width: 95, align: 'center', render(row: any) { return row.hedge ? h('span', { class: 'num-cell' }, row.hedge.toFixed(2)) : '-' } }] : []),
               ],
-        // QDII亚洲 / 国内LOF / 指数型基金 专属：指数价 + 指数涨跌
-        ...(['QDII亚洲', '国内LOF'].includes(selectedFund.value?.category || '') || selectedFund.value?.sub_category === '指数' ? [
+        // QDII亚洲 / QDII日本 / 国内LOF / 指数型基金 专属：指数价 + 指数涨跌
+        ...(['QDII亚洲', 'QDII日本', '国内LOF'].includes(selectedFund.value?.category || '') || selectedFund.value?.sub_category?.includes('指数') ? [
             { title: '指数价', key: 'index_close', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.index_close, row.index_close_chg) } },
             { title: '指数涨跌', key: 'index_pct', width: 85, align: 'center', render(row: any) { if (row.index_pct == null) return '-'; return h('span', { style: { color: priceColor(row.index_pct), fontWeight: '500' } }, row.index_pct.toFixed(2) + '%') } },
         ] : []),
@@ -585,11 +585,20 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 }
             }
         }
+        
+        // [AI] 如果是指数类基金，不显示底层的 SPY/QQQ 动态列，只看指数
+        const isIndexFund = selectedFund.value?.sub_category?.includes('指数');
+        
         dynamicKeys.forEach(key => {
+            if (isIndexFund && key.endsWith('_price')) {
+                return; // 跳过指数基金的动态 ETF 列
+            }
+            
             let title = key
             const priceMatch = key.match(/^(.+)_price$/)
             if (priceMatch) {
-                title = priceMatch[1] + '价格'
+                // [AI] 按照用户要求，海外 ETF 应该显示为净值，而不是价格
+                title = priceMatch[1] + '净值'
             }
             baseCols.push({
                 title: title, key: key, width: 95, align: 'center',
