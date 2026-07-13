@@ -497,10 +497,12 @@ export function useValuationCalculator() {
     else if (tradeFutureSym.includes('ES')) multiplier = 50
     else if (tradeFutureSym.toUpperCase().includes('AG')) multiplier = 15
 
-    const displayHedgeValue = etfHedge * calib * multiplier
+    // [AI-2026-07-12] 用四舍五入取整 GLD 股数（Woody 基准），避免浮点漂移
+    const gldSharesPerContract = Math.round(calib * multiplier)
+    const displayHedgeValue = etfHedge * gldSharesPerContract
     if (displayHedgeValue <= 0) return null
 
-    const rawLofQty = (targetLotsFuture.value * displayHedgeValue) / simLofPrice.value
+    const rawLofQty = targetLotsFuture.value * displayHedgeValue
     const finalLofQty = Math.round(rawLofQty / 100) * 100
     const pos = positionRatio.value
     const exposure = finalLofQty * simLofPrice.value * pos
@@ -528,7 +530,9 @@ export function useValuationCalculator() {
     else if (tradeFutureSym.includes('ES')) multiplier = 50
     else if (tradeFutureSym.toUpperCase().includes('AG')) multiplier = 15
 
-    const displayHedgeValue = etfHedge * calib * multiplier
+    // [AI-2026-07-12] 与期货校准保持一致，用四舍五入取整 GLD 股数
+    const gldSharesPerContract = Math.round(calib * multiplier)
+    const displayHedgeValue = etfHedge * gldSharesPerContract
     if (displayHedgeValue <= 0) return null
 
     const finalLofQty = Math.round((targetLotsPureFuture.value * displayHedgeValue) / 100) * 100
@@ -556,8 +560,10 @@ export function useValuationCalculator() {
         depth.source = q.source || ''
         depth.price = q.price || 0
 
-        // [AI-2026-07-08] 修复：LOF 价初始化使用卖一价 (ask[0]) 而非最新成交价
-        if (!isLofPriceInitialized.value && depth.ask[0] > 0) {
+        // [AI-2026-07-13] 修复：LOF 价每次轮询都跟随最新卖一价更新，但用户手动编辑时不覆盖
+        const lofInputEl = document.activeElement as HTMLElement
+        const isLofInputFocused = lofInputEl && lofInputEl.tagName === 'INPUT' && lofInputEl.closest('[data-role="lof-price"]')
+        if (!isLofInputFocused && depth.ask[0] > 0) {
           simLofPrice.value = depth.ask[0]
           isLofPriceInitialized.value = true
         }

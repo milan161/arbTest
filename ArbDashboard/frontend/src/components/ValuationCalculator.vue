@@ -45,10 +45,10 @@
           <template v-if="calc.meta.value?.fund_config?.trade_future">
             <n-divider vertical style="margin: 0" />
             <div style="width: 160px">
-              📊 <strong>{{ calc.meta.value?.fund_config?.trade_future }}结算价</strong>
+              📊 <strong>{{ calc.meta.value?.fund_config?.trade_future }}校准因子</strong>
               <span style="font-family: monospace; color: #d97706">{{
                 calc.meta.value?.base_data?.calibration
-                  ? Number(calc.meta.value.base_data.calibration).toFixed(2)
+                  ? Number(calc.meta.value.base_data.calibration).toFixed(3)
                   : '-'
               }}</span>
             </div>
@@ -114,10 +114,10 @@
           <template v-if="calc.meta.value?.fund_config?.trade_future">
             <n-divider vertical style="margin: 0" />
             <div style="width: 160px">
-              📊 <strong>{{ calc.meta.value?.fund_config?.trade_future }}结算价</strong>
+              📊 <strong>{{ calc.meta.value?.fund_config?.trade_future }}校准因子</strong>
               <span style="font-family: monospace; color: #b45309">{{
                 calc.meta.value?.t1_data?.calibration
-                  ? Number(calc.meta.value.t1_data.calibration).toFixed(2)
+                  ? Number(calc.meta.value.t1_data.calibration).toFixed(3)
                   : '-'
               }}</span>
             </div>
@@ -131,7 +131,7 @@
         >
           <div style="width: 160px">📍 <strong>【实时数据】</strong></div>
           <n-divider vertical style="margin: 0" />
-          <div style="width: 140px; display: flex; align-items: center; gap: 0">
+          <div style="width: 140px; display: flex; align-items: center; gap: 0" data-role="lof-price">
             <strong style="color: #d32f2f; width: 60px; display: inline-block">LOF价</strong>
             <input
               type="number"
@@ -400,7 +400,7 @@
                 {{
                   calc.etfVal.value > 0 && calc.simLofPrice.value > 0
                     ? (calc.derivedEtfPremium.value > 0 ? '+' : '') +
-                      calc.derivedEtfPremium.value.toFixed(2) +
+                      calc.derivedEtfPremium.value.toFixed(3) +
                       '%'
                     : '-'
                 }}
@@ -503,8 +503,8 @@
               {{
                 calc.futCalibVal.value > 0 && calc.simLofPrice.value > 0
                   ? (calc.derivedFutPremium.value > 0 ? '+' : '') +
-                    calc.derivedFutPremium.value.toFixed(2) +
-                    '%'
+                    calc.derivedFutPremium.value.toFixed(3) +
+                      '%'
                   : '-'
               }}
             </span>
@@ -604,8 +604,8 @@
               {{
                 calc.pureFutVal.value > 0 && calc.simLofPrice.value > 0
                   ? (calc.derivedPureFutPremium.value > 0 ? '+' : '') +
-                    calc.derivedPureFutPremium.value.toFixed(2) +
-                    '%'
+                    calc.derivedPureFutPremium.value.toFixed(3) +
+                      '%'
                   : '-'
               }}
             </span>

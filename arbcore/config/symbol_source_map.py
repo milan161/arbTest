@@ -230,11 +230,11 @@ FUTURES_MAP = {
     'IH': 'TDX',  # 上证50
     'IM': 'TDX',  # 中证1000
     
-    # 国际期货（新浪延时数据兜底）
-    'GC': 'SINA',  # COMEX黄金
-    'CL': 'SINA',  # 纽约原油
-    'HG': 'SINA',  # COMEX铜
-    'SI': 'SINA',  # COMEX白银
+    # [AI-2026-07-13] CME 微型期货（新浪 hf_ 延时数据）
+    'MGC': 'SINA', # 微型黄金：10 盎司
+    'MCL': 'SINA', # 微型原油：100 桶
+    'MES': 'SINA', # 微型标普：$5/点
+    'MNQ': 'SINA', # 微型纳指：$2/点
 }
 
 # 指数映射表（从新浪获取）
