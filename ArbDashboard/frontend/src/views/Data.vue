@@ -139,6 +139,28 @@
             </n-button>
           </div>
         </n-card>
+
+        <!-- [AI-2026-07-13] 历史数据导出卡片 -->
+        <n-card :bordered="false" class="shadow-soft" style="margin-top: 16px;">
+          <template #header>
+             <div class="flex-center gap-2" style="flex-wrap: wrap;">
+                <n-icon size="18" color="#64748b"><Database /></n-icon>
+                <span>历史数据导出</span>
+                <n-text depth="3" style="font-size: 11px; color: #94a3b8;">
+                  * 最新 10 天数据，供分享分析
+                </n-text>
+             </div>
+          </template>
+          <div class="p-2 text-center">
+            <n-text depth="2" style="font-size: 13px; display: block; margin-bottom: 12px;">
+              导出 <n-text strong>arb_master_share.db</n-text>，包含近 10 天的基金净值、估值、溢价等完整历史数据。
+            </n-text>
+            <n-button type="success" block @click="handleExportShareDb" :loading="exportShareDbLoading">
+              <template #icon><n-icon><FileDown /></n-icon></template>
+              导出十天数据库
+            </n-button>
+          </div>
+        </n-card>
       </n-gi>
     </n-grid>
 
@@ -252,6 +274,7 @@ const message = useMessage()
 const exportCode = ref('')
 const isPrivateVisible = ref(false)
 const quickCodes = ['162411', '164701', '164824']
+const exportShareDbLoading = ref(false)
 
 // 导入导出状态
 const showImportModal = ref(false)
@@ -526,6 +549,40 @@ const handleExport = async () => {
     const errMsg = e?.response?.data?.message || e?.message || '未知错误'
     console.error('[导出失败]', errMsg)
     message.error(`导出失败: ${errMsg}`)
+  }
+}
+
+const handleExportShareDb = async () => {
+  exportShareDbLoading.value = true
+  try {
+    message.loading('正在生成十天数据库，请稍候...')
+    const res = await client.get('/api/db/export_share', { responseType: 'blob', timeout: 120000 })
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const link = document.createElement('a')
+    link.href = url
+    const filename = res.headers?.['content-disposition']
+      ?.match(/filename=(.+)/)?.[1] || `arb_master_share_${new Date().toISOString().split('T')[0]}.db`
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    message.success('分享库导出成功')
+  } catch (e: any) {
+    const errData = e?.response?.data
+    if (errData instanceof Blob) {
+      try {
+        const text = await errData.text()
+        const json = JSON.parse(text)
+        if (json?.message) {
+          message.error(`导出失败: ${json.message}`)
+          return
+        }
+      } catch { /* ignore */ }
+    }
+    message.error(`导出失败: ${e?.message || '未知错误'}`)
+  } finally {
+    exportShareDbLoading.value = false
   }
 }
 
