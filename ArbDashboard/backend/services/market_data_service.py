@@ -264,11 +264,71 @@ class MarketDataService:
                         self._futu_warn_cooldown[f'futu_err_{symbol}'] = now
             return None # [FIX] 无论如何，美股不能继续往下走A股引擎
         
-        # A股/港股/期货从RealtimeMarketManager获取
+        elif source == 'SINA':
+            # 国际期货（CME 微合约 MGC/MCL/MES/MNQ 等）从新浪 hf_ API 直取
+            import re
+            if re.match(r'^(MGC|MCL|MES|MNQ|GC|CL|SI|HG|ES|NQ)$', symbol):
+                return self._get_sina_futures_quote(symbol)
+            # 其他 SINA 源标的走 RealtimeMarketManager 兜底
+            if symbol not in self.realtime_manager.symbols:
+                self.realtime_manager.subscribe([symbol])
+            return self.realtime_manager.get_quote(symbol)
+
+        # A股/港股从RealtimeMarketManager获取
         if symbol not in self.realtime_manager.symbols:
             self.realtime_manager.subscribe([symbol])
-            
         return self.realtime_manager.get_quote(symbol)
+
+    # [AI-2026-07-13] 新浪 hf_ 期货盘口直取（含微合约兜底）
+    # 微合约新浪不提供直接数据，从母合约取同价（报价单位相同）
+    _MICRO_TO_PARENT = {
+        'MGC': 'GC',
+        'MCL': 'CL',
+        'MES': 'ES',
+        'MNQ': 'NQ',
+    }
+
+    def _get_sina_futures_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """从新浪 hf_ API 获取 CME 期货实时数据（最新价用作 bid/ask）"""
+        try:
+            import requests
+            headers = {'Referer': 'https://finance.sina.com.cn/'}
+
+            # 尝试取目标合约（微合约可能为空，后续从母合约兜底）
+            targets = [symbol]
+            if symbol in self._MICRO_TO_PARENT:
+                targets.append(self._MICRO_TO_PARENT[symbol])
+
+            last_price = 0.0
+            used_symbol = symbol
+            for t in targets:
+                url = f"http://hq.sinajs.cn/list=hf_{t}"
+                r = requests.get(url, headers=headers, timeout=5.0, proxies={"http": None, "https": None})
+                r.encoding = 'gbk'
+                if r.status_code == 200 and '="' in r.text:
+                    parts = r.text.split('"')[1].split(',')
+                    # hf_ 格式: 昨收盘,今开,最高,最低,最新价,成交量,持仓量,结算价,昨结算,涨跌,涨跌幅
+                    if len(parts) >= 8:
+                        price = float(parts[4]) if parts[4] else 0.0
+                        if price > 0:
+                            last_price = price
+                            used_symbol = t
+                            break
+
+            if last_price > 0:
+                source = '新浪 hf_' if used_symbol == symbol else f'新浪 hf_({used_symbol})'
+                logger.info(f"[MDS] {symbol} 最新价 {last_price} (来源 {source})")
+                return {
+                    'symbol': symbol,
+                    'price': last_price,
+                    'bid': last_price,
+                    'ask': last_price,
+                    'source': source
+                }
+            logger.warning(f"[MDS] {symbol} 新浪 hf_ 无有效最新价")
+        except Exception as e:
+            logger.error(f"[MDS] {symbol} 新浪 hf_ 异常: {e}")
+        return None
 
     def get_historical_nav(self, symbol: str, **kwargs) -> List[Dict[str, Any]]:
         """获取历史净值"""

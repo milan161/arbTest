@@ -629,7 +629,8 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
         try:
             today_str = now.strftime('%Y-%m-%d')
             import sqlite3
-            db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'arb_master.db')
+            # [AI-2026-07-13] 修复路径少一层的问题：从 services/ 需往上3层到项目根，再到 database/
+            db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'database', 'arb_master.db')
             conn_write = sqlite3.connect(db_path)
             for sym, data in api_results.items():
                 if sym in ('N225', '.INX', '.NDX') and data.get('price', 0) > 0:
