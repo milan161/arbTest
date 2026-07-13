@@ -654,7 +654,8 @@ class DailyUpdater(BaseApp):
         conn_ufl.close()
         fund_categories = {str(r[0]): (r[1] or '') for r in all_fund_rows if r[0]}
         all_codes = list(fund_categories.keys())
-        T2_CATEGORIES = {'黄金原油', 'QDII欧美'}  # [AI-2026-07-09] 混合跨境已并入QDII欧美
+        # [AI-2026-07-13] 所有基金统一用前1交易日预期（QDII欧美/黄金原油 T+1 发布，无需 T-2）
+        T2_CATEGORIES = {'黄金原油', 'QDII欧美'}
 
         for code in all_codes:
             if not code: continue
@@ -665,14 +666,10 @@ class DailyUpdater(BaseApp):
                 return t
                 
             t_1_date = get_prev_trading_day(datetime.now())
-            t_2_date = get_prev_trading_day(t_1_date)
             
-            # 按分类决定预期净值日期：海外品种T-2最新，国内/亚洲T-1最新
+            # 预期最新净值日期：QDII欧美/黄金原油 T+1 发布，周一可获取上周五净值
             category = fund_categories.get(code, '')
-            if category in T2_CATEGORIES:
-                expected_nav_date = t_2_date.strftime('%Y-%m-%d')
-            else:
-                expected_nav_date = t_1_date.strftime('%Y-%m-%d')
+            expected_nav_date = t_1_date.strftime('%Y-%m-%d')
             
             conn = self.db._get_conn()
             cursor = conn.cursor()
@@ -737,8 +734,11 @@ class DailyUpdater(BaseApp):
                 for _, row in df.iterrows():
                     date_str = row['date'].strftime('%Y-%m-%d')
                     self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=row['close'])
-                    # 同步更新大一统表中的指数价格
+                    # [AI-2026-07-13] 同步更新大一统表中的指数价格（跳过纯指数基金，避免 ETF 价格写入 index_level）
                     for fund in self.config.get('funds', []):
+                        related_index = fund.get('related_index', '')
+                        if related_index.startswith('.'):
+                            continue  # 纯指数（如 .INX/.NDX）的 index_close 应从 index_history 获取
                         for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
                             if sym in str(item.get('symbol', '')):
                                 self.db.save_unified_history(date_str=date_str, fund_code=fund['code'], index_close=row['close'])
@@ -1159,9 +1159,9 @@ class DailyUpdater(BaseApp):
                     if current_idx_close is None:
                         continue
 
-                    # 找基准日：前一个有 nav 和 index_close 的交易日
+                    # [AI-2026-07-13] 找基准日：前一个有 nav 的交易日（prev_idx_close 从 idx_data 获取，与 current_idx_close 同源）
                     cursor.execute(
-                        "SELECT date, nav, index_close FROM unified_fund_history "
+                        "SELECT date, nav FROM unified_fund_history "
                         "WHERE fund_code = ? AND date < ? AND nav IS NOT NULL "
                         "ORDER BY date DESC LIMIT 1",
                         (fund_code, date))
@@ -1169,8 +1169,15 @@ class DailyUpdater(BaseApp):
                     if not prev_row:
                         continue
 
-                    prev_date, prev_nav, prev_idx_close = prev_row
-                    if not prev_nav or float(prev_nav) <= 0 or not prev_idx_close or float(prev_idx_close) <= 0:
+                    prev_date, prev_nav = prev_row
+                    if not prev_nav or float(prev_nav) <= 0:
+                        continue
+
+                    # 从 index_history 获取基准日指数值（与 current_idx_close 同源），避免 step5 写入的 ETF 价格污染
+                    if prev_date not in idx_data:
+                        continue
+                    prev_idx_close = idx_data[prev_date]
+                    if not prev_idx_close or float(prev_idx_close) <= 0:
                         continue
 
                     # 汇率比率
@@ -1205,10 +1212,13 @@ class DailyUpdater(BaseApp):
                     # 静态估值
                     static_val = float(prev_nav) * (1 + pos_ratio * (idx_ratio * fx_ratio - 1))
 
-                    # 溢价率 (用收盘价)
+                    # [AI-2026-07-13] 溢价率：QDII欧美用 T-1 净值（prev_nav），其余用同日净值
                     premium = None
                     if price and float(price) > 0:
-                        premium = (float(price) / float(nav) - 1) * 100
+                        if fx_type == 'usd' and prev_nav and float(prev_nav) > 0:
+                            premium = (float(price) / float(prev_nav) - 1) * 100
+                        elif float(nav) > 0:
+                            premium = (float(price) / float(nav) - 1) * 100
 
                     # 估值误差
                     calibration = (static_val / float(nav) - 1) * 100 if float(nav) > 0 else None

@@ -490,7 +490,9 @@ async def lifespan(app: FastAPI):
         signal_detector.stop()
     auto_trade_runner.stop()
     market_data_service.realtime_manager.stop()
+    # [AI-2026-07-13] 先 stop_polling() 再 disconnect()，防止 polling 线程抢重连
     if market_data_service and market_data_service.ib_reader:
+        market_data_service.ib_reader.stop_polling()
         market_data_service.ib_reader.disconnect_from_ib()
 
 app = FastAPI(title="ArbNext API", version="1.0.0", lifespan=lifespan)
@@ -510,6 +512,102 @@ async def get_health():
 
 # [V6.0] 存储前端传递的最新自选基金列表（用于采样服务过滤）
 # (已在服务初始化前定义)
+
+# [AI-2026-07-13] 导出十天历史数据库（供分享/分析用）
+@app.get("/api/db/export_share")
+async def export_share_db():
+    """生成最新 10 天的 arb_master_share.db 并返回下载"""
+    import sqlite3
+    from datetime import datetime, timedelta
+    import tempfile
+    import shutil
+
+    src = root_db_path
+    if not os.path.exists(src):
+        return JSONResponse(status_code=404, content={"status": "error", "message": "源数据库不存在"})
+
+    cutoff = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+    tmp_path = os.path.join(tempfile.gettempdir(), f"arb_master_share_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+
+    # 日期过滤映射: {表名: (日期列名: str | None)}，None 表示全部复制
+    date_filter_map = {
+        'access_sync_status': 'sync_date',
+        'app_settings': None,
+        'auto_trade_rules': None,
+        'broker_redemption_fees': None,
+        'data_source_config': None,
+        'etf_raw_api_data': None,
+        'etf_rotation_list': None,
+        'exchange_rate': 'date',
+        'fund_basket_weights': 'date',
+        'fund_daily_factors': 'date',
+        'fund_fees': None,
+        'fund_purchase_status': None,        # 全部保留（金额配置）
+        'futures_daily': 'date',
+        'index_history': 'date',
+        'index_realtime_quotes': None,
+        'raw_api_data': 'date',
+        'system_health': None,
+        'unified_fund_history': 'date',
+        'unified_fund_list': None,
+        'usa_etf_daily_prices': 'date',
+        'user_trades': 'trade_date',
+    }
+
+    try:
+        conn_src = sqlite3.connect(src)
+        conn_dst = sqlite3.connect(tmp_path)
+        cur = conn_src.cursor()
+
+        tables = cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        total = 0
+
+        for (t,) in tables:
+            if t == 'sqlite_sequence':
+                continue
+            if t not in date_filter_map:
+                continue
+
+            # 建表
+            sql = cur.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{t}'").fetchone()
+            if not sql or not sql[0]:
+                continue
+            conn_dst.execute(sql[0])
+
+            # 用 PRAGMA table_info 获取列数（避免 cur.description 被前面的查询覆盖）
+            col_info = cur.execute(f"PRAGMA table_info({t})").fetchall()
+            n_cols = len(col_info)
+            placeholders = ','.join(['?'] * n_cols)
+
+            date_col = date_filter_map[t]
+            if date_col is None:
+                rows = cur.execute(f"SELECT * FROM {t}").fetchall()
+                conn_dst.executemany(f"INSERT INTO {t} VALUES ({placeholders})", rows)
+                cnt = len(rows)
+            else:
+                rows = cur.execute(f"SELECT * FROM {t} WHERE {date_col} >= ?", (cutoff,)).fetchall()
+                conn_dst.executemany(f"INSERT INTO {t} VALUES ({placeholders})", rows)
+                cnt = len(rows)
+
+            total += cnt
+            logger.info(f"  {t}: {cnt} rows{' (filtered)' if date_col else ' (all)'}")
+
+        conn_dst.commit()
+        conn_src.close()
+        conn_dst.close()
+
+        logger.info(f"✅ 分享库已生成: {tmp_path} ({total} rows, cutoff={cutoff})")
+
+        # 返回文件下载
+        return FileResponse(
+            tmp_path,
+            media_type="application/octet-stream",
+            filename=f"arb_master_share_{datetime.now().strftime('%Y%m%d')}.db",
+            headers={"Content-Disposition": f"attachment; filename=arb_master_share_{datetime.now().strftime('%Y%m%d')}.db"}
+        )
+    except Exception as e:
+        logger.error(f"❌ 生成分享库失败: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 @app.get("/api/dashboard")
 async def get_dashboard(watchlist: str = None, category: str = None):

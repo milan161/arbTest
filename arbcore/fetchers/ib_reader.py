@@ -139,10 +139,12 @@ class IBReader(EWrapper, EClient):
             return False
 
     def disconnect_from_ib(self):
+        # [AI-2026-07-13] 增加 time.sleep(1) 确保 TCP FIN 包发出后再退出；改用 logger
         if self.isConnected():
             self.disconnect()
             self.connected = False
-            print("[IBReader] [INFO] 已断开连接")
+            time.sleep(1)  # 给 TCP FIN 包传播到 TWS/Gateway 的时间，防止进程立即退出导致连接残留
+            logger.info("[IB] 已断开与 Gateway 的连接")
 
     def fetch_prev_closes_once(self):
         """如果昨收数据为空，则尝试获取一次。"""
