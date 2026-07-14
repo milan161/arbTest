@@ -131,7 +131,7 @@ export function useOrderLogic() {
             action, symbol, quantity, price,
           })
           if (res.data.status === 'ok') {
-            message.success(`IB下单成功: ${res.data.message}`)
+            message.success(`🟢 手动${actionName}IB下单成功: ${res.data.message}`) // [AI-2026-07-14] 增加"手动"前缀区分懒人下单
           } else {
             message.error(`IB下单失败: ${res.data.message}`)
             dialog.error({
