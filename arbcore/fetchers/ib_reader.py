@@ -143,6 +143,8 @@ class IBReader(EWrapper, EClient):
         if self.isConnected():
             self.disconnect()
             self.connected = False
+            self.prices = {}  # [AI-2026-07-15] 断连时清除缓存价格，避免前端误判为 Ready
+            self.last_update_time = None
             time.sleep(1)  # 给 TCP FIN 包传播到 TWS/Gateway 的时间，防止进程立即退出导致连接残留
             logger.info("[IB] 已断开与 Gateway 的连接")
 

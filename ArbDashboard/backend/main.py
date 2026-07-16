@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import threading
 import pandas as pd
 import logging
 from logging.handlers import RotatingFileHandler
@@ -260,6 +261,8 @@ try:
         galaxy_qmt = rt.active_fetchers.get('galaxy')
         guojin_qmt = rt.active_fetchers.get('guojin')
     lazy_trader_instance.inject_drivers(ib_reader=ib_reader, galaxy_qmt=galaxy_qmt, guojin_qmt=guojin_qmt)
+    # [AI-2026-07-15] 注入自动开仓所需服务
+    lazy_trader_instance.inject_services(fund_service=fund_service, trading_service=trading_service)
     logger.info("✅ Lazy Trader plugin loaded.")
 except (ImportError, NameError) as e:
     lazy_trader_instance = None
@@ -676,292 +679,9 @@ async def get_hedge_multipliers():
 
 @app.get("/api/fund/{code}/valuation_meta")
 async def get_fund_valuation_meta(code: str):
+    """估值元数据 — 委托 fund_service.get_valuation_meta() [AI-2026-07-16 消除代码重复]"""
     try:
-        # 1. 获取数据库中的基金信息
-        conn = fund_service.db._get_conn()
-        cursor = conn.cursor()
-        cursor.execute("SELECT fund_name, related_index, pos_ratio FROM unified_fund_list WHERE fund_code=?", (code,))
-        f_row = cursor.fetchone()
-        if not f_row:
-            return {"status": "error", "message": f"Fund {code} not found in database"}
-            
-        trade_future = ""
-        # [AI-2026-07-07] 按 Woody 实盘实践改用微型合约：MCL(100桶)代替CL(1000桶)，MGC(10盎司)代替GC(100盎司)
-        if "原油" in str(f_row[0]) or "USO" in str(f_row[1]): trade_future = "MCL"
-        elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]): trade_future = "MGC"
-        elif "白银" in str(f_row[0]): trade_future = "AG0"
-            
-        fund_cfg = {
-            "code": code,
-            "trade_etf": f_row[1] or '',
-            "position": float(f_row[2] or 0.95) * 100,
-            "trade_future": trade_future
-        }
-        
-        basket_df = pd.read_sql("SELECT underlying_symbol as symbol, weight FROM fund_basket_weights WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)", conn, params=(code, code))
-        if not basket_df.empty:
-            fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
-        
-        # 2. 获取底层的 calculator 基准数据
-        calculator = fund_service._get_calculator()
-        base_data = calculator.get_base_data(code) if calculator else None
-        
-        # 动态推演 Hedge 值（如果数据库里为空）
-        if base_data and (not base_data.get('hedge') or float(base_data.get('hedge', 0)) <= 0):
-            try:
-                trade_etf = fund_cfg.get('trade_etf', '')
-                if trade_etf:
-                    base_etf_price = base_data.get(trade_etf) or base_data.get(f"^{trade_etf}")
-                    base_nav = base_data.get('nav')
-                    base_pos = base_data.get('position')
-                    if base_pos is None or float(base_pos) <= 0:
-                        base_pos = float(fund_cfg.get('position', 95.0)) / 100.0
-                    base_fx = base_data.get('exchange_rate')
-                    if base_etf_price and base_nav and base_pos and base_fx:
-                        calc_hedge = (float(base_etf_price) * float(base_fx)) / (float(base_nav) * float(base_pos))
-                        base_data['hedge'] = calc_hedge
-            except Exception as e:
-                logger.error(f"Failed to calculate missing hedge: {e}")
-        
-        # 3. 获取最新汇率
-        conn = fund_service.db._get_conn()
-        fx_df = pd.read_sql("SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn)
-        latest_fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else 7.0
-        
-        # 4. 获取最新实时行情 (用于标的 ETF 价格和期货价格)
-        portfolio = fund_cfg.get('valuation_portfolio', [])
-        etf_symbols = []
-        for item in portfolio:
-            sym = item.get('symbol', '').replace('^', '')
-            for suffix in ['-EU', '-JP', '-HK']:
-                if sym.endswith(suffix):
-                    sym = sym[:-len(suffix)]
-                    break
-            etf_symbols.append(sym)
-        # basket为空时，用trade_etf兜底（如162411没有basket数据但有XOP）
-        if not etf_symbols and fund_cfg.get('trade_etf'):
-            etf_symbols.append(fund_cfg['trade_etf'])
-            
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        realtime_quotes = {}
-        def _fetch_quote(sym):
-            try:
-                q = market_data_service.get_realtime_quote(sym) if market_data_service else None
-                if q:
-                    return sym, {
-                        'price': q.get('price'),
-                        'bid': q.get('bid'),  # None = 等待数据/非夜盘
-                        'ask': q.get('ask'),
-                        'source': q.get('source', '')
-                    }
-                return sym, None
-            except Exception as e:
-                logger.error(f"Error getting quote for {sym}: {e}")
-                return sym, None
-        with ThreadPoolExecutor(max_workers=min(len(etf_symbols) or 1, 5)) as pool:
-            for sym, result in pool.map(_fetch_quote, etf_symbols):
-                realtime_quotes[sym] = result
-            
-        future_symbol = fund_cfg.get('trade_future', '')
-        future_quote = None
-        if future_symbol:
-            try:
-                q = market_data_service.get_realtime_quote(future_symbol) if market_data_service else None
-                if q:
-                    future_quote = {
-                        'price': q.get('price'),
-                        'bid': q.get('bid') if q.get('bid') is not None else q.get('price'),
-                        'ask': q.get('ask') if q.get('ask') is not None else q.get('price'),
-                        'source': q.get('source', '')
-                    }
-                else:
-                    future_quote = None
-            except Exception as e:
-                logger.error(f"Error getting future quote for {future_symbol}: {e}")
-                future_quote = None
-            
-        # 5. 获取 T-1 估值日数据（最新美股收盘日）
-        t1_data = {}
-        try:
-            cursor = conn.cursor()
-            # T-1 估值日 = 美股最近收盘日（usa_etf_daily_prices 最新日期）
-            cursor.execute("SELECT MAX(date) FROM usa_etf_daily_prices")
-            t1_date_row = cursor.fetchone()
-            if t1_date_row:
-                t1_date = t1_date_row[0]
-            else:
-                t1_date = base_data.get('date', '') if base_data else ''
-
-            if t1_date:
-                # NAV 仍取最新有净值的记录（可能早于 T-1）
-                cursor.execute("""
-                    SELECT COALESCE(h.nav, f.nav) as nav, h.static_val, h.calibration, h.price 
-                    FROM unified_fund_history h
-                    LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
-                    WHERE h.fund_code = ? AND COALESCE(h.nav, f.nav, 0) > 0
-                    ORDER BY h.date DESC LIMIT 1
-                """, (code,))
-                row = cursor.fetchone()
-                # [AI-2026-07-07] T-1 汇率单独查 t1_date 对应行（不从 nav JOIN 行取）
-                # 原来用 nav 所在日期 JOIN 取汇率，导致 07-06 T-1 显示的是 07-03 净值行的汇率 6.8047
-                # 正确做法：按 t1_date 查 exchange_rate，无则往前找最近一条
-                t1_fx = 0.0
-                try:
-                    fx_row = cursor.execute(
-                        "SELECT usd_cny_mid FROM exchange_rate WHERE date <= ? AND usd_cny_mid IS NOT NULL ORDER BY date DESC LIMIT 1",
-                        (t1_date,)
-                    ).fetchone()
-                    if fx_row and fx_row[0] is not None:
-                        t1_fx = float(fx_row[0])
-                except Exception:
-                    pass
-                if row:
-                    t1_data = {
-                        "date": t1_date,
-                        "nav": float(row[0]) if row[0] is not None else 0.0,
-                        "static_val": float(row[1]) if row[1] is not None else 0.0,
-                        "exchange_rate": t1_fx,
-                        "calibration": float(row[2]) if row[2] is not None else 0.0,
-                        "price": float(row[3]) if row[3] is not None else 0.0
-                    }
-                elif base_data:
-                    # 连净值都取不到时，以 T-2 垫底
-                    t1_data = dict(base_data)
-                    t1_data['date'] = t1_date
-                
-                if not t1_data:
-                    # 无任何数据可用，跳过 T-1 处理
-                    pass
-                else:
-                    # 如果没有独立校准值，查找全局期货校准值兜底
-                    if t1_data["calibration"] == 0.0 and future_symbol:
-                        base_fsym = future_symbol
-                        if 'MGC' in future_symbol or 'GC' in future_symbol: base_fsym = 'GC'
-                        elif 'MCL' in future_symbol or 'CL' in future_symbol: base_fsym = 'CL'
-                        elif 'MNQ' in future_symbol or 'NQ' in future_symbol: base_fsym = 'NQ'
-                        elif 'MES' in future_symbol or 'ES' in future_symbol: base_fsym = 'ES'
-                        
-                        cursor.execute("""
-                            SELECT calibration FROM futures_daily 
-                            WHERE symbol = ? AND calibration IS NOT NULL 
-                            ORDER BY date DESC LIMIT 1
-                        """, (base_fsym,))
-                        crow = cursor.fetchone()
-                        if crow:
-                            t1_data["calibration"] = float(crow[0])
-                            if base_data:
-                                base_data['calibration'] = float(crow[0])
-                    
-                    # 获取该 T-1 日期对应的 ETF 收盘价（精确日期优先，缺失则往前找最近一日）
-                    etf_prices = []
-                    for item in portfolio:
-                        symbol = item.get('symbol', '')
-                        if not symbol: continue
-                        alt_symbol = symbol if symbol.startswith('^') else f"^{symbol}"
-                        cursor.execute("""
-                            SELECT COALESCE(NULLIF(netvalue, 0), price) as price 
-                            FROM usa_etf_daily_prices 
-                            WHERE symbol IN (?, ?) AND date = ?
-                        """, (symbol, alt_symbol, t1_date))
-                        p_row = cursor.fetchone()
-                        p_val = float(p_row[0]) if p_row and p_row[0] is not None else 0.0
-                        
-                        # 精确日期没取到，往前找最近一日
-                        if p_val <= 0:
-                            cursor.execute("""
-                                SELECT COALESCE(NULLIF(netvalue, 0), price) as price 
-                                FROM usa_etf_daily_prices 
-                                WHERE symbol IN (?, ?) AND date <= ? AND price > 0
-                                ORDER BY date DESC LIMIT 1
-                            """, (symbol, alt_symbol, t1_date))
-                            fallback_row = cursor.fetchone()
-                            if fallback_row:
-                                p_val = float(fallback_row[0])
-                        
-                        display_symbol = symbol
-                        for suffix in ['-EU', '-JP', '-HK']:
-                            if display_symbol.endswith(suffix) and not display_symbol.startswith('^'):
-                                display_symbol = f"^{display_symbol}"
-                                break
-                        
-                        base_price = 0
-                        if base_data:
-                            base_price = float(base_data.get(display_symbol, base_data.get(symbol, 0)))
-                        
-                        pct_change = 0
-                        if base_price > 0:
-                            pct_change = (p_val / base_price - 1) * 100
-                            
-                        etf_prices.append({
-                            "symbol": display_symbol,
-                            "price": p_val,
-                            "pct_change": pct_change
-                        })
-                    t1_data["etfs_info"] = etf_prices
-                    
-                    # 如果 T-1 的静态估值为 0，则利用 T-2 的基准数据和 T-1 的 ETF 收盘价进行动态推演
-                    if t1_data["static_val"] <= 0 and base_data and calculator:
-                        try:
-                            t1_etfs = {info["symbol"].lstrip('^'): info["price"] for info in etf_prices}
-                            for info in etf_prices:
-                                t1_etfs[info["symbol"]] = info["price"]
-                            
-                            t1_fx = t1_data["exchange_rate"] if t1_data["exchange_rate"] > 0 else base_data.get("exchange_rate", 7.0)
-                            
-                            calc_res = calculator.calculate(fund_cfg, t1_fx, t1_etfs)
-                            if calc_res and calc_res.get('rt_val'):
-                                t1_data["static_val"] = float(calc_res['rt_val'])
-                        except Exception as e:
-                            logger.error(f"Failed to dynamically calculate T-1 static_val: {e}")
-        except Exception as e:
-            logger.warning(f"获取 T-1 估值日数据失败: {e}")
-
-        # 格式化 base_data 以免 JSON 序列化失败
-        formatted_base_data = {}
-        if base_data:
-            import numpy as np
-            for k, v in base_data.items():
-                if pd.isna(v):
-                    formatted_base_data[k] = None
-                elif isinstance(v, (np.integer, int)):
-                    formatted_base_data[k] = int(v)
-                elif isinstance(v, (np.floating, float)):
-                    formatted_base_data[k] = float(v)
-                else:
-                    formatted_base_data[k] = str(v)
-        
-        # [现金管理] 为511880/511360/511520添加估值参数
-        BOND_ETF_CODES = ['511880', '511360', '511520']
-        bond_extra = {}
-        if code in BOND_ETF_CODES:
-            try:
-                from services.bond_etf_valuation import get_bond_etf_valuation
-                bv = get_bond_etf_valuation(conn, market_data_service)
-                val = bv.get_valuation(code)
-                bond_extra = {
-                    "avg_daily_growth": val.get('avg_daily_growth'),
-                    "treasury_index_pct": val.get('treasury_index_pct'),
-                    "estimated_nav": val.get('estimated_nav'),
-                    "latest_nav": val.get('latest_nav'),
-                    "latest_nav_date": val.get('latest_nav_date'),
-                    "futures_pct": val.get('futures_pct'),
-                    "tf_pct": val.get('tf_pct'),
-                    "futures_adjustment": val.get('futures_adjustment'),
-                    "total_adjustment": val.get('total_adjustment'),
-                }
-            except Exception as e:
-                logger.error(f"[BondETF] valuation_meta获取失败 {code}: {e}")
-                    
-        return {
-            "status": "ok",
-            "fund_config": fund_cfg,
-            "base_data": formatted_base_data,
-            "t1_data": t1_data,
-            "latest_exchange_rate": latest_fx,
-            "realtime_quotes": realtime_quotes,
-            "future_quote": future_quote,
-            **bond_extra
-        }
+        return fund_service.get_valuation_meta(code)
     except Exception as e:
         logger.error(f"Error getting valuation meta for {code}: {e}")
         import traceback
@@ -1045,7 +765,6 @@ async def delete_fund_config(code: str):
 async def export_fund_config():
     """导出 lof_config.yaml 为文件下载（带时间戳文件名）"""
     from fastapi.responses import Response
-    from datetime import datetime
     try:
         yaml_content = config_manager_service.export_config()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1403,14 +1122,26 @@ async def lazy_place_order(request: Request):
             etf_quantity = max(1, int(round(lof_quantity / hedge)))
 
         if mode == "peg":
-            results = lazy_trader_instance.place_peg_order(
-                underlying_symbol=underlying_symbol,
-                quantity=etf_quantity,
-                us_ask1=price,
-            )
+            if direction == "close":
+                # [AI-2026-07-16] 加一分排队平仓：IB BUY LMT at bid + 0.01
+                results = lazy_trader_instance.place_peg_close_order(
+                    underlying_symbol=underlying_symbol,
+                    quantity=etf_quantity,
+                    us_bid1=price,
+                )
+            else:
+                results = lazy_trader_instance.place_peg_order(
+                    underlying_symbol=underlying_symbol,
+                    quantity=etf_quantity,
+                    us_ask1=price,
+                )
         elif direction == "close":
-            # ⚠️ 平仓功能暂时禁用，用户手动平仓
-            results = [{"driver": "IB", "success": False, "msg": "平仓功能暂时禁用，请手动操作"}]
+            # [AI-2026-07-16] 立即吃卖一平仓：IB BUY at ask
+            results = lazy_trader_instance.place_close_order(
+                underlying_symbol=underlying_symbol,
+                us_ask1=price,
+                etf_quantity=etf_quantity,
+            )
         else:
             results = lazy_trader_instance.place_open_order(
                 fund_code=fund_code,
@@ -1426,6 +1157,378 @@ async def lazy_place_order(request: Request):
     except Exception as e:
         logger.error(f"[LazyOrder] Error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+# [AI-2026-07-15] AutoOpen: 自动排队开仓 API
+# 流程：POST /queue 排队LOF → 返回 auto_open_id → 前端轮询 /status
+#       → LOF成交后 → POST /execute 自动空ETF（或自动执行）
+_AUTO_OPEN_FILL_CHECKER = None
+_AUTO_OPEN_CHECKER_LOCK = threading.Lock()
+_AUTO_CLOSE_FILL_CHECKER = None
+_AUTO_CLOSE_CHECKER_LOCK = threading.Lock()
+
+def _start_auto_open_fill_checker(lazy_trader_instance):
+    """启动后台线程，轮询持仓检测LOF是否成交"""
+    global _AUTO_OPEN_FILL_CHECKER
+    with _AUTO_OPEN_CHECKER_LOCK:
+        if _AUTO_OPEN_FILL_CHECKER and _AUTO_OPEN_FILL_CHECKER.is_alive():
+            return
+        def _check_loop():
+            logger.info("[AutoOpen] Fill checker started")
+            while True:
+                try:
+                    if lazy_trader_instance:
+                        with lazy_trader_instance._open_lock:
+                            pending_items = list(lazy_trader_instance._pending_opens.items())
+                        for ao_id, pending in pending_items:
+                            if pending["status"] != "queued":
+                                continue
+                            # 轮询持仓变化
+                            fc = pending["fund_code"]
+                            lof_qty = pending["lof_quantity"]
+                            try:
+                                # 尝试从 trading_service 获取持仓
+                                if lazy_trader_instance.trading_service:
+                                    pos_list = lazy_trader_instance.trading_service.get_positions()
+                                    held = 0
+                                    for p in pos_list:
+                                        if p.get("code","") == fc or p.get("code","") == f"{fc}.SZ":
+                                            held = int(p.get("volume", 0) or p.get("available", 0))
+                                            break
+                                    # 如果持仓 ≥ lof_qty，说明已成交
+                                    trade_etf = ""
+                                    etf_qty = 0
+                                    # 从 fund_service 获取 ETF 信息
+                                    if lazy_trader_instance.fund_service:
+                                        meta = lazy_trader_instance.fund_service.get_valuation_meta(fc)
+                                        if meta and isinstance(meta, dict):
+                                            cfg = meta.get("fund_config", {}) or {}
+                                            trade_etf = cfg.get("trade_etf", "") or ""
+                                            # 计算 ETF 股数
+                                            bd = meta.get("base_data", {}) or {}
+                                            hedge = float(bd.get("hedge", 0) or 0)
+                                            if hedge > 0:
+                                                etf_qty = max(1, int(round(lof_qty / hedge)))
+
+                                    if held >= lof_qty and trade_etf and etf_qty > 0:
+                                        # LOF 已成交，自动执行
+                                        min_profit = pending.get("min_profit", 0.25)
+                                        result = lazy_trader_instance.auto_short_if_profitable(
+                                            ao_id, trade_etf, etf_qty, min_profit
+                                        )
+                                        status = result.get("status","")
+                                        if status == "executed":
+                                            logger.info(f"[AutoOpen] ✅ {fc} auto-open executed: {result}")
+                                        elif status == "profit_too_low":
+                                            logger.warning(f"[AutoOpen] ⚠️ {fc} filled but profit too low: {result}")
+                                        elif status == "error":
+                                            logger.error(f"[AutoOpen] ❌ {fc} auto-open failed: {result}")
+                                    elif held >= lof_qty:
+                                        logger.info(f"[AutoOpen] {fc} filled, but no trade_etf/etf_qty found, marking as filled")
+                                        # 即使没有 ETF 信息也标记为已成交
+                                        with lazy_trader_instance._open_lock:
+                                            pending["status"] = "filled"
+                                            pending["filled_at"] = datetime.now().isoformat()
+                                            pending["msg"] = "filled but no ETF info for auto-short"
+                            except Exception as e:
+                                logger.debug(f"[AutoOpen] check {fc} positions: {e}")
+                except Exception as e:
+                    logger.error(f"[AutoOpen] checker error: {e}")
+                time.sleep(3)  # 每3秒轮询
+        _AUTO_OPEN_FILL_CHECKER = threading.Thread(target=_check_loop, daemon=True)
+        _AUTO_OPEN_FILL_CHECKER.start()
+
+def _start_auto_close_fill_checker(lazy_trader_instance):
+    """启动后台线程，轮询持仓检测LOF是否已卖出（平仓）"""
+    global _AUTO_CLOSE_FILL_CHECKER
+    with _AUTO_CLOSE_CHECKER_LOCK:
+        if _AUTO_CLOSE_FILL_CHECKER and _AUTO_CLOSE_FILL_CHECKER.is_alive():
+            return
+        def _check_loop():
+            logger.info("[AutoClose] Fill checker started")
+            while True:
+                try:
+                    if lazy_trader_instance:
+                        with lazy_trader_instance._close_lock:
+                            pending_items = list(lazy_trader_instance._pending_closes.items())
+                        for ac_id, pending in pending_items:
+                            if pending["status"] != "queued":
+                                continue
+                            fc = pending["fund_code"]
+                            lof_qty = pending["lof_quantity"]
+                            initial_pos = pending.get("initial_position", 0)
+                            try:
+                                if lazy_trader_instance.trading_service:
+                                    pos_list = lazy_trader_instance.trading_service.get_positions()
+                                    current_held = initial_pos  # 默认无变化
+                                    for p in pos_list:
+                                        if p.get("code","") == fc or p.get("code","") == f"{fc}.SZ":
+                                            current_held = int(p.get("volume", 0) or p.get("available", 0))
+                                            break
+                                    # 如果持仓减少 >= lof_qty，说明LOF已卖出
+                                    sold_qty = initial_pos - current_held
+                                    if sold_qty >= lof_qty:
+                                        trade_etf = ""
+                                        etf_qty = 0
+                                        if lazy_trader_instance.fund_service:
+                                            meta = lazy_trader_instance.fund_service.get_valuation_meta(fc)
+                                            if meta and isinstance(meta, dict):
+                                                cfg = meta.get("fund_config", {}) or {}
+                                                trade_etf = cfg.get("trade_etf", "") or ""
+                                                bd = meta.get("base_data", {}) or {}
+                                                hedge = float(bd.get("hedge", 0) or 0)
+                                                if hedge > 0:
+                                                    etf_qty = max(1, int(round(lof_qty / hedge)))
+
+                                        if sold_qty >= lof_qty and trade_etf and etf_qty > 0:
+                                            min_profit = pending.get("min_profit", -0.41)
+                                            result = lazy_trader_instance.auto_close_if_profitable(
+                                                ac_id, trade_etf, etf_qty, min_profit
+                                            )
+                                            status = result.get("status","")
+                                            if status == "executed":
+                                                logger.info(f"[AutoClose] ✅ {fc} auto-close executed: {result}")
+                                            elif status == "profit_too_low":
+                                                logger.warning(f"[AutoClose] ⚠️ {fc} sold but profit too low: {result}")
+                                            elif status == "error":
+                                                logger.error(f"[AutoClose] ❌ {fc} auto-close failed: {result}")
+                                        elif sold_qty >= lof_qty:
+                                            logger.info(f"[AutoClose] {fc} sold, but no trade_etf/etf_qty found, marking as filled")
+                                            with lazy_trader_instance._close_lock:
+                                                pending["status"] = "filled"
+                                                pending["filled_at"] = datetime.now().isoformat()
+                                                pending["msg"] = "filled but no ETF info for auto-buy"
+                            except Exception as e:
+                                logger.debug(f"[AutoClose] check {fc} positions: {e}")
+                except Exception as e:
+                    logger.error(f"[AutoClose] checker error: {e}")
+                time.sleep(3)
+        _AUTO_CLOSE_FILL_CHECKER = threading.Thread(target=_check_loop, daemon=True)
+        _AUTO_CLOSE_FILL_CHECKER.start()
+
+@app.post("/api/private/auto_open/queue")
+async def auto_open_queue(request: Request):
+    """
+    自动排队开仓：
+    1. 仅排队 LOF 买一（不操作 ETF）
+    2. 启动后台成交检测
+    3. 返回 auto_open_id 供前端轮询状态
+    """
+    global _AUTO_OPEN_FILL_CHECKER
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
+    try:
+        body = await request.json()
+        fund_code = body.get("fund_code", "")
+        lof_price = float(body.get("lof_price", 0))
+        lof_quantity = int(body.get("lof_quantity", 0))
+        broker = body.get("broker", "yinhe_qmt")
+        min_profit = float(body.get("min_profit", 0.25))
+
+        if not fund_code or lof_price <= 0 or lof_quantity <= 0:
+            return JSONResponse(status_code=400, content={"status": "error", "message": "缺少必要参数"})
+
+        # 获取赎回费率
+        redemption_fee = ledger_service.get_fee_rate(fund_code, broker)
+        if redemption_fee <= 0:
+            redemption_fee = 0.50
+
+        # 获取预期利润（用当前 GLD 买一价算）
+        meta = fund_service.get_valuation_meta(fund_code)
+        rt_val = float((meta or {}).get("rt_val", 0) or 0)
+        premium = (lof_price / rt_val - 1) * 100 if rt_val > 0 else 0
+        expected_profit = round(abs(premium) - redemption_fee, 3)
+
+        # 排队 LOF
+        result = lazy_trader_instance.queue_lof_order(fund_code, lof_price, lof_quantity, broker)
+        if result.get("status") != "ok":
+            return {"status": "error", "message": "LOF下单失败", "detail": result}
+
+        auto_open_id = result["auto_open_id"]
+
+        # 保存 min_profit 到 pending 记录
+        with lazy_trader_instance._open_lock:
+            p = lazy_trader_instance._pending_opens.get(auto_open_id)
+            if p:
+                p["min_profit"] = min_profit
+
+        # 确保后台检测线程已启动
+        _start_auto_open_fill_checker(lazy_trader_instance)
+
+        return {
+            "status": "ok",
+            "auto_open_id": auto_open_id,
+            "expected_profit": expected_profit,
+            "redemption_fee": redemption_fee,
+        }
+    except Exception as e:
+        logger.error(f"[AutoOpen] queue error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+@app.post("/api/private/auto_open/execute")
+async def auto_open_execute(request: Request):
+    """当 LOF 已成交，手动触发或自动触发 ETF 空单执行"""
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
+    try:
+        body = await request.json()
+        auto_open_id = body.get("auto_open_id", "")
+        if not auto_open_id:
+            return JSONResponse(status_code=400, content={"status": "error", "message": "缺少 auto_open_id"})
+
+        pending = lazy_trader_instance.get_auto_open_status(auto_open_id)
+        if pending.get("status") == "not_found":
+            return JSONResponse(status_code=404, content={"status": "error", "message": "auto_open_id 不存在"})
+
+        if pending["status"] != "queued":
+            return {"status": "skipped", "message": f"当前状态 {pending['status']}，无需重复执行"}
+
+        # 获取 ETF 信息
+        fund_code = pending["fund_code"]
+        lof_qty = pending["lof_quantity"]
+        meta = fund_service.get_valuation_meta(fund_code)
+        if not meta or not isinstance(meta, dict):
+            return JSONResponse(status_code=500, content={"status": "error", "message": "无法获取基金信息"})
+        cfg = meta.get("fund_config", {}) or {}
+        trade_etf = cfg.get("trade_etf", "") or ""
+        bd = meta.get("base_data", {}) or {}
+        hedge = float(bd.get("hedge", 0) or 0)
+        etf_qty = max(1, int(round(lof_qty / hedge))) if hedge > 0 else 0
+
+        if not trade_etf or etf_qty <= 0:
+            return JSONResponse(status_code=500, content={"status": "error", "message": "无法计算ETF对冲数量"})
+
+        min_profit = pending.get("min_profit", 0.25)
+        result = lazy_trader_instance.auto_short_if_profitable(
+            auto_open_id, trade_etf, etf_qty, min_profit
+        )
+        return result
+    except Exception as e:
+        logger.error(f"[AutoOpen] execute error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+@app.get("/api/private/auto_open/status/{auto_open_id}")
+async def auto_open_status(auto_open_id: str):
+    """查询排队开仓状态"""
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
+    state = lazy_trader_instance.get_auto_open_status(auto_open_id)
+    if state.get("status") == "not_found":
+        return JSONResponse(status_code=404, content={"status": "error", "message": "auto_open_id 不存在"})
+    return {"status": "ok", "data": state}
+
+@app.get("/api/private/auto_open/positions/{fund_code}")
+async def auto_open_check_position(fund_code: str):
+    """查询当前持仓（用于前端判断 LOF 是否已成交）"""
+    if not trading_service:
+        return {"status": "ok", "held": 0, "msg": "trading_service not available"}
+    try:
+        pos_list = trading_service.get_positions()
+        held = 0
+        for p in pos_list:
+            if p.get("code","") == fund_code or p.get("code","") == f"{fund_code}.SZ":
+                held = int(p.get("volume", 0) or p.get("available", 0))
+                break
+        return {"status": "ok", "held": held}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "held": 0}
+
+# [AI-2026-07-15] AutoClose: 自动排队平仓 API
+@app.post("/api/private/auto_close/queue")
+async def auto_close_queue(request: Request):
+    """
+    自动排队平仓：
+    1. 排队卖出 LOF（不操作 ETF）
+    2. 启动后台成交检测
+    3. 返回 auto_close_id 供前端轮询状态
+    """
+    global _AUTO_CLOSE_FILL_CHECKER
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
+    try:
+        body = await request.json()
+        fund_code = body.get("fund_code", "")
+        lof_price = float(body.get("lof_price", 0))
+        lof_quantity = int(body.get("lof_quantity", 0))
+        broker = body.get("broker", "yinhe_qmt")
+        min_profit = float(body.get("min_profit", -0.41))
+
+        if not fund_code or lof_price <= 0 or lof_quantity <= 0:
+            return JSONResponse(status_code=400, content={"status": "error", "message": "缺少必要参数"})
+
+        # 排队卖出 LOF
+        result = lazy_trader_instance.queue_lof_close_order(fund_code, lof_price, lof_quantity, broker)
+        if result.get("status") != "ok":
+            return {"status": "error", "message": "LOF卖出下单失败", "detail": result}
+
+        auto_close_id = result["auto_close_id"]
+
+        # 保存 min_profit 到 pending 记录
+        with lazy_trader_instance._close_lock:
+            p = lazy_trader_instance._pending_closes.get(auto_close_id)
+            if p:
+                p["min_profit"] = min_profit
+
+        # 确保后台检测线程已启动
+        _start_auto_close_fill_checker(lazy_trader_instance)
+
+        return {
+            "status": "ok",
+            "auto_close_id": auto_close_id,
+        }
+    except Exception as e:
+        logger.error(f"[AutoClose] queue error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+@app.post("/api/private/auto_close/execute")
+async def auto_close_execute(request: Request):
+    """当 LOF 已卖出，手动触发买回 ETF"""
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
+    try:
+        body = await request.json()
+        auto_close_id = body.get("auto_close_id", "")
+        if not auto_close_id:
+            return JSONResponse(status_code=400, content={"status": "error", "message": "缺少 auto_close_id"})
+
+        pending = lazy_trader_instance.get_auto_close_status(auto_close_id)
+        if pending.get("status") == "not_found":
+            return JSONResponse(status_code=404, content={"status": "error", "message": "auto_close_id 不存在"})
+
+        if pending["status"] != "queued":
+            return {"status": "skipped", "message": f"当前状态 {pending['status']}，无需重复执行"}
+
+        fund_code = pending["fund_code"]
+        lof_qty = pending["lof_quantity"]
+        meta = fund_service.get_valuation_meta(fund_code)
+        if not meta or not isinstance(meta, dict):
+            return JSONResponse(status_code=500, content={"status": "error", "message": "无法获取基金信息"})
+        cfg = meta.get("fund_config", {}) or {}
+        trade_etf = cfg.get("trade_etf", "") or ""
+        bd = meta.get("base_data", {}) or {}
+        hedge = float(bd.get("hedge", 0) or 0)
+        etf_qty = max(1, int(round(lof_qty / hedge))) if hedge > 0 else 0
+
+        if not trade_etf or etf_qty <= 0:
+            return JSONResponse(status_code=500, content={"status": "error", "message": "无法计算ETF对冲数量"})
+
+        min_profit = pending.get("min_profit", -0.41)
+        result = lazy_trader_instance.auto_close_if_profitable(
+            auto_close_id, trade_etf, etf_qty, min_profit
+        )
+        return result
+    except Exception as e:
+        logger.error(f"[AutoClose] execute error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+@app.get("/api/private/auto_close/status/{auto_close_id}")
+async def auto_close_status(auto_close_id: str):
+    """查询排队平仓状态"""
+    if not lazy_trader_instance:
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Lazy Trader not loaded"})
+    state = lazy_trader_instance.get_auto_close_status(auto_close_id)
+    if state.get("status") == "not_found":
+        return JSONResponse(status_code=404, content={"status": "error", "message": "auto_close_id 不存在"})
+    return {"status": "ok", "data": state}
 
 @app.get("/api/private/lazy_status")
 async def lazy_status():

@@ -252,6 +252,15 @@ INDEX_MAP = {
     '.SZSC': 'SINA',  # 深证成指
     '.CSI300': 'SINA',  # 沪深300
     '.SH000300': 'SINA',  # 沪深300
+    # [AI-2026-07-15] 港股指数（必须明确映射，否则会被 auto_classify 误判为美股 → FUTU → 订阅失败熔断）
+    'HSCI': 'SINA',    # 恒生综指
+    'HSSI': 'SINA',    # 恒生小型股
+    'HSMI': 'SINA',    # 恒生综合中型股
+    'HSCCI': 'SINA',   # 恒生中国30
+    'HSSCNE': 'SINA',  # 恒生港股通新经济
+    '869': 'SINA',     # HK银行（无TDX，走东财API兜底）
+    '930914': 'SINA',  # 港股通高股息
+    '930917': 'SINA',  # SHS高股息
 }
 
 # Woody 数据源映射表（特定市场收盘时刻的虚拟符号）

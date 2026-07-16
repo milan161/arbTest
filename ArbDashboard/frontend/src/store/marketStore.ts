@@ -53,7 +53,12 @@ export const useMarketStore = defineStore('market', () => {
   )
   const hasFutu = computed(() => {
     const sources = overview.value?.active_sources || []
-    return sources.some((s) => s.includes('富途'))
+    // [AI-2026-07-15] 与 IB 一致：排除 "未运行" 和 "无数据"
+    return sources.some((s) => s.includes('富途') && !s.includes('未运行') && !s.includes('无数据'))
+  })
+  const hasFutuNoData = computed(() => {
+    const sources = overview.value?.active_sources || []
+    return sources.some((s) => s.includes('富途') && !s.includes('未运行') && s.includes('无数据'))
   })
 
   // ---- actions ----
@@ -106,7 +111,7 @@ export const useMarketStore = defineStore('market', () => {
 
   return {
     overview, loading,
-    hasTdx, hasIb, hasIbNotRunning, hasGalaxy, hasGuojin, hasFutu,
+    hasTdx, hasIb, hasIbNotRunning, hasGalaxy, hasGuojin, hasFutu, hasFutuNoData,
     fetchOverview,
     reconnectTdx, reconnectGalaxy, reconnectGuojin, reconnectFutu
   }
