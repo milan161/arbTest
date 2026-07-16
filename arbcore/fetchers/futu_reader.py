@@ -46,6 +46,7 @@ class FutuReader:
         self.subscribed_codes = set()
         self.last_connect_time = 0
         self.last_log_time = 0
+        self.connected = False  # [AI-2026-07-15] 实时连接标志（与 IB 一致），reconnect 成功=True，断开=False
         self.disabled = True  # [V10.0] 启动时不自动连接，用户点击页面"富途"按钮才重连
         self._lock = threading.Lock()  # [V10.13] 多线程并发保护
         
@@ -109,6 +110,7 @@ class FutuReader:
                 self.subscribed_codes = set()
                 logger.info(f"{'='*50}\n[富途] 连接成功 (第 {attempt} 次尝试)\n{'='*50}")
                 self.disabled = False
+                self.connected = True  # [AI-2026-07-15] 跟踪实时连接状态（与 IB 一致）
                 return
             except Exception as e:
                 if attempt < self.max_retries:
@@ -118,6 +120,8 @@ class FutuReader:
                     logger.warning(f"[富途] 连接失败（已尝试 {self.max_retries} 次），已禁用富途读取器。如需启用，请点击页面顶部的'富途'标签重试。")
                     self.disabled = True
                     self.ctx = None
+                    self.connected = False  # [AI-2026-07-15] 与 IB 一致
+                    self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格，避免前端误判为"Ready"
     
     def reconnect(self):
         """
@@ -125,13 +129,17 @@ class FutuReader:
         重置 disabled 标志，重新尝试连接
         返回 (success: bool, message: str)
         """
-        if self.ctx is not None:
-            logger.info("[富途] 已经连接，跳过重复重连")
-            return True, "富途已经连接"
-        logger.info("[富途] 用户手动触发重连...")
-        self.disabled = False
-        self.ctx = None
-        self.last_connect_time = 0  # 清除冷却时间
+        with self._lock:  # [AI-2026-07-15] 加锁防止与 _get_prices_impl 并发冲突
+            # [AI-2026-07-15] 总是先关闭旧连接再重连，避免 ctx 残留导致"已经连接"跳过
+            if self.ctx is not None:
+                try:
+                    self.ctx.close()
+                except:
+                    pass
+                self.ctx = None
+            logger.info("[富途] 用户手动触发重连...")
+            self.disabled = False
+            self.last_connect_time = 0  # 清除冷却时间
         
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -145,6 +153,7 @@ class FutuReader:
                 self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
                 self.subscribed_codes = set()
                 self.disabled = False
+                self.connected = True  # [AI-2026-07-15] 与 IB 一致
                 logger.info(f"[富途] 手动重连成功 (第 {attempt} 次)")
                 return True, f"富途连接成功 (第 {attempt} 次尝试)"
             except Exception as e:
@@ -154,6 +163,8 @@ class FutuReader:
                     time.sleep(1)
         
         self.disabled = True
+        self.connected = False  # [AI-2026-07-15] 与 IB 一致
+        self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
         logger.warning("[富途] 手动重连失败（已尝试 {} 次），请检查富途 OpenD 是否运行".format(self.max_retries))
         return False, f"富途重连失败（已尝试 {self.max_retries} 次），请确认富途 OpenD 已启动"
     
@@ -165,7 +176,8 @@ class FutuReader:
             except:
                 pass
             self.ctx = None
-            logger.info("[富途] 已关闭连接")
+        self.connected = False  # [AI-2026-07-15] 与 IB 一致
+        logger.info("[富途] 已关闭连接")
     
     def get_prices(self, symbols):
         if not FUTU_AVAILABLE:
@@ -196,6 +208,7 @@ class FutuReader:
                         connected = True
                         logger.info(f"[富途] 连接成功 (第 {attempt} 次)")
                         self.disabled = False
+                        self.connected = True  # [AI-2026-07-15] 与 IB 一致
                         break
                     except Exception as connect_err:
                         logger.warning(f"[富途] 连接失败 (第 {attempt}/{self.max_retries} 次): {connect_err}")
@@ -205,6 +218,8 @@ class FutuReader:
                 
                 if not connected:
                     self.disabled = True
+                    self.connected = False  # [AI-2026-07-15] 与 IB 一致
+                    self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
                     return False, f"富途OpenD连接失败（已尝试 {self.max_retries} 次）", self.prices
             
             # 区分美股和港股，并正确添加前缀
@@ -237,12 +252,23 @@ class FutuReader:
             
             # 订阅新增加的股票，指定 Session.ALL 获取盘前盘后夜盘全时段数据
             if new_codes:
-                ret, data = self.ctx.subscribe(new_codes, [SubType.QUOTE], session=Session.ALL)
-                if ret != 0:
-                    logger.warning(f"[富途] 订阅失败: {data}（连接保留，下次重试）")
-                    return False, f"富途API未运行 (订阅失败): {data}", self.prices
-                self.subscribed_codes.update(new_codes)
-                logger.info(f"[富途] 已订阅: {', '.join(new_codes)}")
+                # [AI-2026-07-15] 逐个订阅：单个符号失败（如 HSSI 非交易标的）不销毁整条连接
+                valid_codes = []
+                for code in new_codes:
+                    ret, data = self.ctx.subscribe([code], [SubType.QUOTE], session=Session.ALL)
+                    if ret == 0:
+                        valid_codes.append(code)
+                    else:
+                        logger.warning(f"[富途] 订阅失败 {code}: {data}，跳过该标的")
+                if valid_codes:
+                    self.subscribed_codes.update(valid_codes)
+                    logger.info(f"[富途] 已订阅: {', '.join(valid_codes)}")
+                if not valid_codes and not self.subscribed_codes:
+                    # 没有一个订阅成功且未订阅过任何标的 → 连接可能已断
+                    logger.warning("[富途] 所有标的订阅均失败，清空 ctx")
+                    self.ctx = None
+                    self.connected = False
+                    return False, "富途所有标的订阅均失败", self.prices
             
             # 获取实时报价
             ret, data = self.ctx.get_stock_quote(futu_codes)
@@ -293,6 +319,7 @@ class FutuReader:
                             'ask': ask,
                             'last': last
                         }
+                        self.last_data_time = time.time()  # [AI-2026-07-15] 记录成功获取数据的时间戳
                 
                 # 控制台心跳回显 (每30秒打印一次)
                 current_time = time.time()
@@ -307,7 +334,9 @@ class FutuReader:
                     return False, "非交易时段，无真实盘口数据", self.prices
                 return True, "成功获取富途价格", self.prices
             else:
-                logger.warning(f"[富途] 获取数据失败: {data}（连接保留，下次重试）")
+                logger.warning(f"[富途] 获取数据失败: {data}，清空 ctx 下次可重连")
+                self.ctx = None
+                self.connected = False
                 return False, f"富途API未运行: {data}", self.prices
                 
         except Exception as e:
@@ -316,8 +345,13 @@ class FutuReader:
             if "refused" in err_msg.lower() or "10061" in err_msg:
                 logger.warning("[富途] 无法连接到OpenD，已永久禁用后续自动重试。如需使用请重启系统。")
                 self.disabled = True
+                self.connected = False  # [AI-2026-07-15] 与 IB 一致
+                self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
                 return False, "富途API未运行 (连接被拒绝)", self.prices
-            logger.error(f"[富途] 异常: {err_msg}")
+            # [AI-2026-07-15] 非"refused"异常（如连接断开）→ 标记断开，让 reconnect 可以重试
+            logger.error(f"[富途] 异常: {err_msg} → 标记为断开，下次点击可重连")
+            self.connected = False
+            self.ctx = None
             return False, f"富途接口异常: {err_msg}", self.prices
     
     def get_price(self, symbol):

@@ -15,7 +15,7 @@ US_SYMBOL_PATTERN = re.compile(r'^[A-Z]{2,6}$')
 
 class MarketDataService:
     # [V10.1] 熔断器：连续失败 N 次后自动 disabled
-    CIRCUIT_BREAKER_THRESHOLD = 5
+    CIRCUIT_BREAKER_THRESHOLD = 2
 
     def __init__(self, db_manager):
         self.db = db_manager
@@ -179,8 +179,9 @@ class MarketDataService:
             
             # 2. 富途兜底（全时段可用）
             if self.futu_reader:
-                if self._circuit_is_tripped('富途'):
-                    logger.debug(f"🔴 富途已熔断，跳过兜底 {symbol}")
+                if self._circuit_is_tripped('富途') or getattr(self.futu_reader, 'disabled', False):
+                    # [AI-2026-07-15] 熔断或禁用状态直接跳过，避免调 get_prices 返回"禁用"产生刷屏 WARNING
+                    logger.debug(f"🔴 富途已熔断/禁用，跳过兜底 {symbol}")
                     return None
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
@@ -199,14 +200,17 @@ class MarketDataService:
                             'source': '富途'
                         }
                     else:
-                        self._circuit_record_failure('富途')
+                        # [AI-2026-07-15] 禁用状态不计数（用户未手动连接）
+                        if not getattr(self.futu_reader, 'disabled', False):
+                            self._circuit_record_failure('富途')
                         now = time.time()
                         last_warn = self._futu_warn_cooldown.get(symbol, 0)
                         if now - last_warn > 300:
                             logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
                             self._futu_warn_cooldown[symbol] = now
                 except Exception as e:
-                    self._circuit_record_failure('富途')
+                    if not getattr(self.futu_reader, 'disabled', False):
+                        self._circuit_record_failure('富途')
                     logger.error(f"⚠️ 富途兜底获取{symbol}异常: {e}")
             
             # 3. 都拿不到数据：区分原因返回
@@ -225,8 +229,9 @@ class MarketDataService:
                     
         elif source == 'FUTU':
             # [V10.1] 熔断检查
-            if self._circuit_is_tripped('富途'):
-                logger.debug(f"🔴 富途已熔断，跳过 {symbol}")
+            # [AI-2026-07-15] 增加 disabled 检查，避免禁用状态下调 get_prices 产生刷屏 WARNING
+            if self._circuit_is_tripped('富途') or getattr(self.futu_reader, 'disabled', False):
+                logger.debug(f"🔴 富途已熔断/禁用，跳过 {symbol}")
                 return None
             # 直接走富途通道
             if self.futu_reader:
@@ -247,7 +252,9 @@ class MarketDataService:
                             'source': '富途'
                         }
                     else:
-                        self._circuit_record_failure('富途')
+                        # [AI-2026-07-15] 禁用状态不计数（用户未手动连接）
+                        if not getattr(self.futu_reader, 'disabled', False):
+                            self._circuit_record_failure('富途')
                         # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
                         now = time.time()
                         last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
@@ -255,7 +262,8 @@ class MarketDataService:
                             logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
                             self._futu_warn_cooldown[f'futu_{symbol}'] = now
                 except Exception as e:
-                    self._circuit_record_failure('富途')
+                    if not getattr(self.futu_reader, 'disabled', False):
+                        self._circuit_record_failure('富途')
                     # [V10.1] 异常也加去重
                     now = time.time()
                     last_err = self._futu_warn_cooldown.get(f'futu_err_{symbol}', 0)
@@ -368,18 +376,18 @@ class MarketDataService:
             sources.append("IB (Ready)")
         else:
             sources.append("IB (未运行)")
-        # 实时检测富途 OpenD 端口的真实连接状态（避免因 IB 优先级高未触发富途连接而导致状态不显示的问题）
+        # 检测富途真实数据状态：使用 connected 标志（与 IB 一致），避免旧缓存误标为 Ready
         if self.futu_reader is not None and not any("富途" in s for s in sources):
-            import socket
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.1)
-                is_futu_online = (sock.connect_ex((self.futu_reader.host, self.futu_reader.port)) == 0)
-                sock.close()
-                if is_futu_online:
+            if getattr(self.futu_reader, 'disabled', False):
+                pass  # 已禁用，不加入列表 → 前端显示灰色
+            elif getattr(self.futu_reader, 'connected', False):
+                futu_prices = getattr(self.futu_reader, 'prices', {})
+                if futu_prices and len(futu_prices) > 0:
                     sources.append("富途 (Ready)")
-            except:
-                pass
+                else:
+                    sources.append("富途 (无数据)")
+            else:
+                sources.append("富途 (未运行)")
         return sources
     
     # [AI-2026-07-03] 修复 SI 实时估值公式：对齐 Woody — 将 SI 转 CNY/kg 后与 AG0 昨结算比，而非直接用 SI 百分比涨跌幅

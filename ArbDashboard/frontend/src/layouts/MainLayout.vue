@@ -62,10 +62,10 @@
             银河QMT
           </n-tag>
            <n-tag :type="hasFutu ? 'success' : 'warning'" size="small" round
-             :style="{ fontWeight: 'bold', cursor: hasFutu ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
-             @click="reconnectWithGuard(hasFutu, '富途', reconnectFutu)">
-             <template #icon><n-icon><Zap /></n-icon></template>
-             富途
+              :style="{ fontWeight: 'bold', cursor: 'pointer', width: '100%', justifyContent: 'center' }"
+              @click="reconnectFutu()">
+              <template #icon><n-icon><Zap /></n-icon></template>
+              富途
            </n-tag>
           <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
             :style="{ fontWeight: 'bold', cursor: hasGuojin ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
@@ -138,7 +138,7 @@ const appStore = useAppStore()
 const marketStore = useMarketStore()
 
 const { engineRunning } = storeToRefs(appStore)
-const { hasTdx, hasIb, hasGalaxy, hasGuojin, hasFutu } = storeToRefs(marketStore)
+const { hasTdx, hasIb, hasGalaxy, hasGuojin, hasFutu, hasFutuNoData } = storeToRefs(marketStore)
 
 // ===== Reconnect 引擎状态 =====
 const refreshStatus = () => marketStore.fetchOverview()
@@ -210,6 +210,9 @@ const fetchNavAlert = async () => {
 onMounted(() => {
   fetchNavAlert()
   setInterval(fetchNavAlert, 300000)
+  // [AI-2026-07-15] 定期刷新数据源连接状态，避免 IB/富途退出后标签仍显示绿色
+  marketStore.fetchOverview()
+  setInterval(() => marketStore.fetchOverview(), 30000)
 })
 
 onUnmounted(() => {

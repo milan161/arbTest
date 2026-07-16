@@ -736,7 +736,7 @@ class DailyUpdater(BaseApp):
                     self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=row['close'])
                     # [AI-2026-07-13] 同步更新大一统表中的指数价格（跳过纯指数基金，避免 ETF 价格写入 index_level）
                     for fund in self.config.get('funds', []):
-                        related_index = fund.get('related_index', '')
+                        related_index = str(fund.get('related_index', '') or '')
                         if related_index.startswith('.'):
                             continue  # 纯指数（如 .INX/.NDX）的 index_close 应从 index_history 获取
                         for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):

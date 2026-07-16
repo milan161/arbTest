@@ -271,7 +271,7 @@ class DataFetcher:
                     # 解析新浪返回的数据格式
                     values = text.split('"')[1].split(',')
                     if len(values) >= 18:
-                        time = values[0]              # 更新时间
+                        update_time = values[0]        # 更新时间
                         spot_rate = float(values[1])   # 实时在岸价（第2个字段）
                         high_rate = float(values[2])   # 最高价
                         low_rate = float(values[3])    # 最低价
@@ -281,10 +281,10 @@ class DataFetcher:
                         currency_pair = values[9]      # 货币对
                         date = values[17]              # 日期
                         
-                        logger.info(f"API接口 - 人民币在岸价: {spot_rate} (更新时间: {time})")
+                        logger.info(f"API接口 - 人民币在岸价: {spot_rate} (更新时间: {update_time})")
                         result = {
                             '日期': date,
-                            '时间': time,
+                            '时间': update_time,
                             '人民币在岸价': spot_rate,
                             '最高价': high_rate,
                             '最低价': low_rate,

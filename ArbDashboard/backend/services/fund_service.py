@@ -4,6 +4,7 @@ import json
 import time
 import threading
 import functools
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pandas as pd
 from typing import List, Dict, Any, Optional, Set
@@ -97,6 +98,8 @@ class DashboardCache:
         self._cache.clear()
 
 _dashboard_cache = DashboardCache()
+# [AI-2026-07-16] valuation_meta 缓存（5秒 TTL），避免首次冷启动超时
+_valuation_meta_cache = DashboardCache(ttl=5.0)
 
 # [V10.1] 日内不变数据 — 启动时加载一次，当天不再查库
 _daily_snapshot = {
@@ -1937,6 +1940,10 @@ class FundService:
         估值元数据（深度分析页用）
         从 main.py 路由内联逻辑迁移至 Service 层
         """
+        # [AI-2026-07-16] 5秒缓存，避免首次冷启动超时
+        cached = _valuation_meta_cache.get(code)
+        if cached is not None:
+            return cached
         import traceback
         conn = self.db._get_conn()
         try:
@@ -2034,24 +2041,27 @@ class FundService:
             if code not in etf_symbols:
                 etf_symbols.append(code)
 
+            # [AI-2026-07-16] 并行获取行情，避免顺序等待导致超时
             realtime_quotes = {}
-            for sym in etf_symbols:
+            def _fetch_quote(sym):
                 try:
                     q = self.market_data_service.get_realtime_quote(sym) if self.market_data_service else None
                     if q:
-                        realtime_quotes[sym] = {
+                        return sym, {
                             'price': q.get('price'),
-                            'bid': q.get('bid'),  # None = 等待数据/非夜盘
+                            'bid': q.get('bid'),
                             'ask': q.get('ask'),
                             'bid_size': q.get('bid_size', 0),
                             'ask_size': q.get('ask_size', 0),
                             'source': q.get('source', '')
                         }
-                    else:
-                        realtime_quotes[sym] = None
+                    return sym, None
                 except Exception as e:
                     logger.error(f"Error getting quote for {sym}: {e}")
-                    realtime_quotes[sym] = None
+                    return sym, None
+            with ThreadPoolExecutor(max_workers=min(len(etf_symbols) or 1, 5)) as pool:
+                for sym, result in pool.map(_fetch_quote, etf_symbols):
+                    realtime_quotes[sym] = result
 
             future_symbol = fund_cfg.get('trade_future', '')
             future_quote = None
@@ -2136,6 +2146,17 @@ class FundService:
                         """, (symbol, alt_symbol, row[0]))
                         p_row = cursor.fetchone()
                         p_val = float(p_row[0]) if p_row and p_row[0] is not None else 0.0
+                        # [AI-2026-07-16] 精确日期未取到，往前找最近一日
+                        if p_val <= 0:
+                            cursor.execute("""
+                                SELECT COALESCE(NULLIF(netvalue, 0), price) as price
+                                FROM usa_etf_daily_prices
+                                WHERE symbol IN (?, ?) AND date <= ? AND price > 0
+                                ORDER BY date DESC LIMIT 1
+                            """, (symbol, alt_symbol, row[0]))
+                            fb_row = cursor.fetchone()
+                            if fb_row:
+                                p_val = float(fb_row[0])
 
                         display_symbol = symbol
                         for suffix in ['-EU', '-JP', '-HK']:
@@ -2211,7 +2232,7 @@ class FundService:
                 except Exception as e:
                     logger.error(f"[BondETF] 估值元数据获取失败 {code}: {e}")
             
-            return {
+            result = {
                 "status": "ok",
                 "fund_config": fund_cfg,
                 "base_data": formatted_base_data,
@@ -2221,6 +2242,8 @@ class FundService:
                 "future_quote": future_quote,
                 **bond_extra
             }
+            _valuation_meta_cache.set(code, result)
+            return result
         except Exception as e:
             logger.error(f"Error getting valuation meta for {code}: {e}")
             logger.error(traceback.format_exc())
