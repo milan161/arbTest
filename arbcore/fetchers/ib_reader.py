@@ -290,14 +290,28 @@ class IBReader(EWrapper, EClient):
                     # [AI-2026-07-07] 用 TRADES 获取夜盘最近成交价，替代 BID（低流动性标的无连续盘口）
                     c_snap.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
                     c_snap.currency = "USD"
-                    self.req_events[req_id_snap] = threading.Event()
-                    self.reqHistoricalData(req_id_snap, c_snap, "", "1800 S", "1 min", "TRADES", 0, 1, False, [])
-                    
-                    self.req_events[req_id_snap].wait(timeout=3.0)
-                    price = self.req_data.get(req_id_snap)
+                    # [AI-2026-07-17] 先尝试 BID 获取盘口价（修复 07-07 改动：TRADES 不含买卖盘口）
+                    price = None
+                    req_id_bid = self._get_next_req_id()
+                    self.req_events[req_id_bid] = threading.Event()
+                    self.reqHistoricalData(req_id_bid, c_snap, "", "1800 S", "1 min", "BID", 0, 1, False, [])
+                    self.req_events[req_id_bid].wait(timeout=3.0)
+                    if self.req_data.get(req_id_bid):
+                        price = self.req_data[req_id_bid]
+                    else:
+                        # BID 不可用时降级到 TRADES（低流动性标的正如 INDA）
+                        req_id_trades = self._get_next_req_id()
+                        self.req_events[req_id_trades] = threading.Event()
+                        self.reqHistoricalData(req_id_trades, c_snap, "", "1800 S", "1 min", "TRADES", 0, 1, False, [])
+                        self.req_events[req_id_trades].wait(timeout=3.0)
+                        if self.req_data.get(req_id_trades):
+                            price = self.req_data[req_id_trades]
                     if price:
                         if sym not in self.prices or not isinstance(self.prices[sym], dict):
                             self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'last': 0.0, 'bid_size': 0, 'ask_size': 0}
+                        # BID 来源写入 bid/ask，TRADES 来源写入 last
+                        self.prices[sym]['bid'] = price
+                        self.prices[sym]['ask'] = price
                         self.prices[sym]['last'] = price
                         self.sources[sym] = "安全快照"
                         self.last_update_time = datetime.now()
