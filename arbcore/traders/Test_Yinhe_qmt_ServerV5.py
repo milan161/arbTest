@@ -1,8 +1,9 @@
 # encoding: gbk
 # =================================================================
-# Test_Yinhe_qmt_ServerV5.py (QMT策略) v5.1.3
-# 日期: 2026-06-16
+# Test_Yinhe_qmt_ServerV5.py (QMT策略) v5.2.0
+# 日期: 2026-07-17
 # 变更日志:
+#   v5.2.0 (2026-07-17) - DEAL成交广播 + ORDER状态广播 + QUERY_POSITION命令 + position cache
 #   v5.1.3 (2026-06-16) - position/account回调静默, 日志只显示下单/成交/错误
 #   v5.1.2 (2026-06-16) - position_callback: 60s时间去重(解决同代码多行仓位互相覆盖刷屏)
 #   v5.0   (2026-06-15) - rewrite from v4.3, main-thread queue mode, QMT thread compliant
@@ -13,12 +14,17 @@
 #   Main thread drain -> passorder (safe, no message bus blocking)
 #   quote_push timer(1s) -> main thread get_full_tick -> broadcast TICK
 #
-# External protocol (v4 compatible, trade_manager.py unchanged):
-#   BUY,code,volume,price          -> OK\n
-#   SELL,code,volume,price         -> OK\n
+# External protocol (v5.2 — [AI-2026-07-17] added QUERY_POSITION + DEAL/ORDER broadcast):
+#   BUY,code,volume,price          -> OK\n                        (下单)
+#   SELL,code,volume,price         -> OK\n                        (卖券)
 #   QUERY_TICK,code                -> TICK_RESULT,code,lastPrice,preClose\n
+#   QUERY_POSITION,code            -> POSITION_RESULT,code,vol,price\n
 #   SUBSCRIBE,code1,code2,...      -> SUBSCRIBE_OK\n
 #   PING                           -> PONG\n
+# Server broadcast (all connected clients receive):
+#   DEAL,code,vol,price\n           (deal_callback 成交广播)
+#   ORDER,code,sysid,status\n       (order_callback 状态广播)
+#   TICK,code,...\n                 (quote_push 行情广播)
 #
 # Ref: Jiang_big_qmt_trader_server.py v3.6.0
 # - builtins for cross-namespace shared state
@@ -32,7 +38,7 @@ import threading
 import time
 
 # ==================== 版本 ====================
-SERVER_VERSION = '5.1.3 (2026-06-16)'
+SERVER_VERSION = '5.2.0 (2026-07-17)'
 
 # ==================== 共享状态（builtins）====================
 # QMT对每个回调赋予独立命名空间，模块级全局变量在各空间中不同
@@ -57,6 +63,8 @@ def _S():
         'subscribed_stocks': set(),
         'latest_ticks': {},           # QUERY_TICK reads from here, no C++ call
         'ticks_lock': threading.Lock(),
+        'latest_positions': {},       # [AI-2026-07-17] position_callback 缓存，供 QUERY_POSITION 读取
+        'positions_lock': threading.Lock(),
         'socket_gen': [0],            # bumped by init(); old threads check gen mismatch and exit
         'push_count': [0],
     }
@@ -187,6 +195,16 @@ def client_handler(conn, addr):
                     last_price = tick.get('lastPrice', 0)
                     pre_close = tick.get('lastClose', 0)
                     resp = f"TICK_RESULT,{code},{last_price},{pre_close}\n"
+                    _safe_send(conn, resp.encode('utf-8'))
+
+                elif action == 'QUERY_POSITION' and len(parts) >= 2:
+                    # [AI-2026-07-17] 从 position_callback 缓存读取，不调用 C++ API
+                    code = parts[1].strip()
+                    with s['positions_lock']:
+                        pos = s['latest_positions'].get(code, {})
+                    vol = pos.get('volume', 0)
+                    price = pos.get('price', 0.0)
+                    resp = f"POSITION_RESULT,{code},{vol},{price}\n"
                     _safe_send(conn, resp.encode('utf-8'))
 
                 elif action == 'SHUTDOWN':
@@ -353,22 +371,26 @@ def handlebar(ContextInfo):
     time.sleep(0.001)
 
 def order_callback(ContextInfo, orderInfo):
-    """order status update"""
+    """order status update — broadcasts ORDER to socket clients"""
     try:
         status = getattr(orderInfo, 'm_nOrderStatus', None)
         sysid = getattr(orderInfo, 'm_strOrderSysID', '') or ''
         code = getattr(orderInfo, 'm_strInstrumentID', '') or ''
         print(f"[QMTv5][order] code={code} sysid={sysid} status={status}")
+        # [AI-2026-07-17] 广播订单状态到所有 socket 客户端
+        _broadcast(f"ORDER,{code},{sysid},{status}\n")
     except Exception:
         pass
 
 def deal_callback(ContextInfo, dealInfo):
-    """deal/trade callback"""
+    """deal/trade callback — broadcasts DEAL to socket clients"""
     try:
         code = getattr(dealInfo, 'm_strInstrumentID', '')
         price = getattr(dealInfo, 'm_dPrice', 0.0)
         vol = getattr(dealInfo, 'm_nVolume', 0)
         print(f"[QMTv5][deal] {code} {vol}@{price}")
+        # [AI-2026-07-17] 广播成交到所有 socket 客户端，SmartOpenMonitor 据此实时检测
+        _broadcast(f"DEAL,{code},{vol},{price}\n")
     except Exception:
         pass
 
@@ -380,28 +402,24 @@ def orderError_callback(ContextInfo, passOrderInfo, msg):
     except Exception:
         pass
 
-_last_pos_key = '_qmt_v5_last_pos_time'
-
 def position_callback(ContextInfo, positionInfo):
-    """position update (60s dedup, only loud when needed)"""
-    # User requested silence: only [place]/[order]/[deal]/[error] logs matter.
-    # Uncomment the block below to re-enable position logging.
-    # try:
-    #     code = getattr(positionInfo, 'm_strInstrumentID', '') or ''
-    #     vol = getattr(positionInfo, 'm_nVolume', 0) or 0
-    #     price = getattr(positionInfo, 'm_dOpenPrice', 0.0) or 0.0
-    #     if vol <= 0:
-    #         return
-    #     pos_times = getattr(builtins, _last_pos_key, {})
-    #     now = time.time()
-    #     last_time = pos_times.get(code, 0)
-    #     if now - last_time >= 60:
-    #         pos_times[code] = now
-    #         setattr(builtins, _last_pos_key, pos_times)
-    #         print(f"[QMTv5][position] {code} {vol}@{price}")
-    # except Exception:
-    #     pass
-    pass
+    """position update — caches to 'latest_positions' for QUERY_POSITION; console silent"""
+    # [AI-2026-07-17] 重写：不再静默无视，改为更新缓存供 QUERY_POSITION 读取。
+    # 不打印日志保持控制台清爽。
+    try:
+        code = getattr(positionInfo, 'm_strInstrumentID', '') or ''
+        vol = getattr(positionInfo, 'm_nVolume', 0) or 0
+        price = getattr(positionInfo, 'm_dOpenPrice', 0.0) or 0.0
+        if not code:
+            return
+        s = _S()
+        with s['positions_lock']:
+            if vol > 0:
+                s['latest_positions'][code] = {'volume': vol, 'price': price}
+            else:
+                s['latest_positions'].pop(code, None)
+    except Exception:
+        pass
 
 _last_cash_key = '_qmt_v5_last_cash'
 

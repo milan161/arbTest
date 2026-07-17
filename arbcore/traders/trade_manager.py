@@ -37,6 +37,12 @@ class TradeManager:
         self.xt_account = None
         self.xtconstant = None
 
+        # [AI-2026-07-17] 银河 QMT 成交监听（方案 A：实时广播 + 方案 B：轮询保底）
+        self._deal_listeners = []      # list[callable(code, vol, price)]
+        self._listener_running = False
+        self._listener_thread = None
+        self._listener_sock = None
+
         # 启动时自动初始化可用通道
         self._init_tdx()
         # [V9.1] 国金QMT初始化放后台线程，不阻塞 uvicorn 启动
@@ -201,3 +207,113 @@ class TradeManager:
                 return False, f"通达信下单异常: {str(e)}"
                 
         return False, f"未知的通道标识: {broker}"
+
+    # ==================== [AI-2026-07-17] 银河 QMT 成交监听与持仓查询 ====================
+
+    def on_deal(self, callback):
+        """注册成交回调。callback(code, vol, price) — 方案 A：实时 DEAL 广播"""
+        self._deal_listeners.append(callback)
+
+    def query_position(self, code):
+        """方案 B：查询单只持仓（短连接，超时 3s）。
+        返回 dict {code, volume, price} 或 None"""
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(3.0)
+            client.connect(('127.0.0.1', 8888))
+            client.sendall(f"QUERY_POSITION,{code}\n".encode('utf-8'))
+            client.settimeout(1.5)
+            resp = client.recv(1024).decode('utf-8').strip()
+            client.close()
+            # POSITION_RESULT,code,vol,price
+            if resp.startswith('POSITION_RESULT'):
+                parts = resp.split(',')
+                if len(parts) >= 4:
+                    return {
+                        'code': parts[1],
+                        'volume': int(parts[2]),
+                        'price': float(parts[3]),
+                    }
+            return None
+        except socket.timeout:
+            return None
+        except ConnectionRefusedError:
+            return None
+        except Exception as e:
+            logger.warning(f"[TradeManager] query_position 异常: {e}")
+            return None
+
+    def start_deal_listener(self):
+        """启动持久连接监听 DEAL 广播（方案 A：实时推送）"""
+        if self._listener_running:
+            return
+        self._listener_running = True
+        self._listener_thread = threading.Thread(target=self._deal_listener_loop, daemon=True)
+        self._listener_thread.start()
+        logger.info("[TradeManager] 已启动银河QMT成交监听线程")
+
+    def stop_deal_listener(self):
+        """停止成交监听"""
+        self._listener_running = False
+        if self._listener_sock:
+            try:
+                self._listener_sock.close()
+            except Exception:
+                pass
+            self._listener_sock = None
+
+    def _deal_listener_loop(self):
+        """持久连接接收 DEAL 广播的后台线程"""
+        while self._listener_running:
+            try:
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.settimeout(5.0)
+                client.connect(('127.0.0.1', 8888))
+                self._listener_sock = client
+                buffer = ''
+                # 进入阻塞读循环
+                client.settimeout(None)
+                while self._listener_running:
+                    try:
+                        data = client.recv(4096).decode('utf-8')
+                        if not data:
+                            break  # 连接断开，重连
+                        buffer += data
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            line = line.strip()
+                            if line:
+                                self._dispatch_deal_line(line)
+                    except socket.timeout:
+                        continue
+                    except Exception:
+                        break
+            except ConnectionRefusedError:
+                logger.info("[TradeManager] 银河QMT 8888 未就绪，5s后重试")
+                time.sleep(5)
+            except Exception as e:
+                logger.warning(f"[TradeManager] 监听线程异常: {e}")
+                time.sleep(5)
+            finally:
+                self._listener_sock = None
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    def _dispatch_deal_line(self, line):
+        """解析收到的消息行，分发 DEAL 给已注册回调"""
+        if line.startswith('DEAL,'):
+            parts = line.split(',')
+            if len(parts) >= 4:
+                code = parts[1]
+                try:
+                    vol = int(parts[2])
+                    price = float(parts[3])
+                    for cb in self._deal_listeners:
+                        try:
+                            cb(code, vol, price)
+                        except Exception as e:
+                            logger.warning(f"[TradeManager] deal回调异常: {e}")
+                except (ValueError, IndexError):
+                    pass

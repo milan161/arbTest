@@ -156,6 +156,8 @@ export function useValuationCalculator() {
   })
 
   /** 外盘数据源文本 */
+  // [AI-2026-07-17] 修复：不再 fallback 到 future_quote.source（期货数据源误标为外盘源）
+  // 只检查估值标的（非基金自身代码）的实时行情来源
   const foreignSource = computed(() => {
     if (!meta.value) return '等待行情...'
     if (fundCode.value === '161226') {
@@ -164,13 +166,16 @@ export function useValuationCalculator() {
     const quotes = meta.value.realtime_quotes
     if (quotes) {
       for (const key in quotes) {
+        if (key === fundCode.value) continue  // 跳过基金自身代码（A股来源）
         if (quotes[key] && quotes[key].source) {
           return quotes[key].source
         }
       }
-    }
-    if (meta.value.future_quote && meta.value.future_quote.source) {
-      return meta.value.future_quote.source
+      // 有外盘标的key但全无数据 → 获取中
+      for (const key in quotes) {
+        if (key === fundCode.value) continue
+        return '等待数据...'
+      }
     }
     return '未连接 IB/富途'
   })

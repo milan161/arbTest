@@ -10,8 +10,8 @@ funds:
   name: 南方原油
   category: 黄金原油
   holdings:
-    equity_ratio: 88.89
-    cash_ratio: 11.11
+    equity_ratio: 89.69
+    cash_ratio: 10.31
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -22,17 +22,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 67.14
+    weight: 62.88
     anchor: EU
-  - symbol: USO-JP
-    weight: 16.45
-    anchor: JP
   - symbol: USO
-    weight: 16.41
+    weight: 19.8
     anchor: US
+  - symbol: USO-JP
+    weight: 17.32
+    anchor: JP
   trade_etf: USO
   trade_future: MCL
-  position: 88.89
+  position: 89.69
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -41,8 +41,8 @@ funds:
   name: 嘉实原油
   category: 黄金原油
   holdings:
-    equity_ratio: 87.55
-    cash_ratio: 12.45
+    equity_ratio: 87.97
+    cash_ratio: 12.03
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -88,17 +88,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 63.68
+    weight: 61.65
     anchor: EU
   - symbol: USO
-    weight: 34.99
+    weight: 36.33
     anchor: US
   - symbol: USO-JP
-    weight: 1.34
+    weight: 2.02
     anchor: JP
   trade_etf: USO
   trade_future: MCL
-  position: 87.55
+  position: 87.97
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -107,8 +107,8 @@ funds:
   name: 易方达原油
   category: 黄金原油
   holdings:
-    equity_ratio: 90.31
-    cash_ratio: 9.69
+    equity_ratio: 90.86
+    cash_ratio: 9.14
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -149,17 +149,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 59.23
+    weight: 57.01
     anchor: EU
   - symbol: USO
-    weight: 29.8
+    weight: 30.97
     anchor: US
   - symbol: USO-HK
-    weight: 10.97
+    weight: 12.02
     anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 90.31
+  position: 90.86
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -170,22 +170,22 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 94.26
-    cash_ratio: 5.74
+    equity_ratio: 110.77
+    cash_ratio: -10.77
   valuation_portfolio:
   - symbol: GLD
-    weight: 72.03
-    anchor: US
-  - symbol: SLV
-    weight: 17.6
+    weight: 85.21
     anchor: US
   - symbol: USO
-    weight: 10.36
+    weight: 9.63
+    anchor: US
+  - symbol: SLV
+    weight: 5.15
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 94.26
+  position: 110.77
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -196,17 +196,17 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 76.25
-    cash_ratio: 23.75
+    equity_ratio: 75.68
+    cash_ratio: 24.32
   valuation_portfolio:
   - symbol: GLD
-    weight: 55.0
+    weight: 55.91
     anchor: US
   - symbol: USO-EU
-    weight: 32.96
+    weight: 42.42
     anchor: EU
   - symbol: USO
-    weight: 12.04
+    weight: 1.68
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
@@ -223,7 +223,7 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 76.25
+  position: 75.68
   sub_category: 黄金
   woody_supported: true
   data_source: woody

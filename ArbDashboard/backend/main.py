@@ -286,6 +286,19 @@ except (ImportError, NameError) as e:
     rule_engine = None
     logger.info(f"RuleEngine not found: {e}")
 
+# [AI-2026-07-17] SmartOpenMonitor（智能开仓/平仓监控器）
+try:
+    from private.smart_open_monitor import start_monitor as _smart_start, stop_monitor as _smart_stop, get_monitor_status as _smart_status
+    # 注入依赖的全局实例
+    _smart_mds = market_data_service
+    _smart_fs = fund_service
+    _smart_ts = trading_service
+    _smart_lt = lazy_trader_instance
+    logger.info("✅ SmartOpenMonitor loaded.")
+except (ImportError, NameError) as e:
+    _smart_start = _smart_stop = _smart_status = None
+    logger.info(f"SmartOpenMonitor not loaded: {e}")
+
 try:
     from services.signal_detector import signal_detector
     signal_detector.inject(
@@ -1544,6 +1557,47 @@ async def lazy_status():
             "guojin_qmt_exists": lazy_trader_instance.guojin_qmt is not None,
         }
     }
+
+# --- SmartOpenMonitor API (智能开仓/平仓监控) ---
+@app.post("/api/private/smart_monitor/start")
+async def smart_monitor_start(request: Request):
+    if not _smart_start:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "SmartOpenMonitor not loaded"})
+    data = await request.json()
+    fund_code = data.get("fund_code", "")
+    direction = data.get("direction", "open")
+    target_premium = data.get("target_premium", 0)
+    lof_quantity = data.get("lof_quantity", 0)
+    trade_etf = data.get("trade_etf", "")
+    lof_broker = data.get("lof_broker", "yinhe_qmt")
+    if not fund_code or not trade_etf or not lof_quantity:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "缺少必要参数(fund_code/trade_etf/lof_quantity)"})
+    success, msg = _smart_start(
+        fund_code, direction, target_premium, lof_quantity, trade_etf, lof_broker,
+        lazy_trader=_smart_lt, fund_service=_smart_fs,
+        market_data_service=_smart_mds, trading_service=_smart_ts,
+        trade_manager=getattr(_smart_ts, 'trade_manager', None) if _smart_ts else None,
+    )
+    if success:
+        return {"status": "ok", "message": msg}
+    return JSONResponse(status_code=400, content={"status": "error", "message": msg})
+
+@app.post("/api/private/smart_monitor/stop")
+async def smart_monitor_stop(request: Request):
+    if not _smart_stop:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "SmartOpenMonitor not loaded"})
+    data = await request.json()
+    fund_code = data.get("fund_code", "")
+    success, msg = _smart_stop(fund_code)
+    if success:
+        return {"status": "ok", "message": msg}
+    return JSONResponse(status_code=400, content={"status": "error", "message": msg})
+
+@app.get("/api/private/smart_monitor/status")
+async def smart_monitor_status():
+    if not _smart_status:
+        return {"status": "error", "message": "SmartOpenMonitor not loaded"}
+    return _smart_status()
 
 # --- Lazy Simulator API (weekend mock data) ---
 @app.get("/api/private/lazy_simulate/status")
