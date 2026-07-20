@@ -44,7 +44,8 @@ export function useValuationCalculator() {
   const showPureFut = ref(false)
 
   // LOF 买入股数（Analysis.vue 原名 targetCapitalEtf, LazyMode.vue 原名 targetLofQty）
-  const targetLofQty = ref(60000)
+  // [AI-2026-07-20] 默认改为 100 股（实盘测试用小单，避免误下大单）
+  const targetLofQty = ref(100)
   const targetLotsFuture = ref(1)
   const targetLotsPureFuture = ref(1)
 
@@ -101,8 +102,8 @@ export function useValuationCalculator() {
       }
       return result
     }
-    // Priority 2: realtime_quotes keys
-    const rqKeys = Object.keys(meta.value?.realtime_quotes || {})
+    // Priority 2: realtime_quotes keys (过滤掉基金自身代码—它是A股价格，不是估值标的)
+    const rqKeys = Object.keys(meta.value?.realtime_quotes || {}).filter((sym) => sym !== fundCode.value)
     if (rqKeys.length > 0) {
       return rqKeys.map((sym) => ({ symbol: sym.toUpperCase(), currency: 'USD' }))
     }

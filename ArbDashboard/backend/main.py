@@ -1199,10 +1199,18 @@ def _start_auto_open_fill_checker(lazy_trader_instance):
                             fc = pending["fund_code"]
                             lof_qty = pending["lof_quantity"]
                             try:
-                                # 尝试从 trading_service 获取持仓
-                                if lazy_trader_instance.trading_service:
-                                    pos_list = lazy_trader_instance.trading_service.get_positions()
-                                    held = 0
+                                # [AI-2026-07-20] 优先用 trade_manager.query_position()（8888 短连接，
+                                # 银河/国金/通达信脚本均支持），避免 get_positions() 仅走通达信导致
+                                # 银河渠道下永远查不到持仓、自动对冲永不触发。
+                                held = 0
+                                _ts = lazy_trader_instance.trading_service
+                                _tm = getattr(_ts, 'trade_manager', None) if _ts else None
+                                if _tm and hasattr(_tm, 'query_position'):
+                                    _pos = _tm.query_position(fc)
+                                    if isinstance(_pos, dict) and _pos.get('volume'):
+                                        held = int(_pos.get('volume', 0) or 0)
+                                if held == 0 and _ts:
+                                    pos_list = _ts.get_positions()
                                     for p in pos_list:
                                         if p.get("code","") == fc or p.get("code","") == f"{fc}.SZ":
                                             held = int(p.get("volume", 0) or p.get("available", 0))
@@ -1270,9 +1278,17 @@ def _start_auto_close_fill_checker(lazy_trader_instance):
                             lof_qty = pending["lof_quantity"]
                             initial_pos = pending.get("initial_position", 0)
                             try:
-                                if lazy_trader_instance.trading_service:
-                                    pos_list = lazy_trader_instance.trading_service.get_positions()
-                                    current_held = initial_pos  # 默认无变化
+                                # [AI-2026-07-20] 优先用 trade_manager.query_position()（8888 短连接），
+                                # 避免 get_positions() 仅走通达信导致银河渠道下查不到持仓、自动平仓对冲不触发。
+                                current_held = initial_pos  # 默认无变化
+                                _ts = lazy_trader_instance.trading_service
+                                _tm = getattr(_ts, 'trade_manager', None) if _ts else None
+                                if _tm and hasattr(_tm, 'query_position'):
+                                    _pos = _tm.query_position(fc)
+                                    if isinstance(_pos, dict) and _pos.get('volume'):
+                                        current_held = int(_pos.get('volume', 0) or 0)
+                                if current_held == initial_pos and _ts:
+                                    pos_list = _ts.get_positions()
                                     for p in pos_list:
                                         if p.get("code","") == fc or p.get("code","") == f"{fc}.SZ":
                                             current_held = int(p.get("volume", 0) or p.get("available", 0))
@@ -1445,6 +1461,31 @@ async def auto_open_check_position(fund_code: str):
     except Exception as e:
         return {"status": "error", "message": str(e), "held": 0}
 
+# [AI-2026-07-20] 新增：前端 preview 显示当前持仓。
+# 直接走 trade_manager.query_position（8888 短连接，银河/国金/通达信脚本均支持），
+# 不依赖 get_positions() 的通达信登录，确保银河渠道下能正确显示底仓（如 161116 持有 66800 股）。
+@app.get("/api/private/position/{fund_code}")
+async def get_fund_position(fund_code: str):
+    """查询单只基金当前持仓（优先 8888 短连接，降级 get_positions）"""
+    if not trading_service:
+        return {"status": "ok", "held": 0, "msg": "trading_service not available"}
+    try:
+        tm = getattr(trading_service, 'trade_manager', None)
+        held = 0
+        if tm and hasattr(tm, 'query_position'):
+            pos = tm.query_position(fund_code)
+            if isinstance(pos, dict) and pos.get('volume'):
+                held = int(pos.get('volume', 0) or 0)
+        if held == 0:
+            pos_list = trading_service.get_positions()
+            for p in pos_list:
+                if p.get("code", "") == fund_code or p.get("code", "") == f"{fund_code}.SZ":
+                    held = int(p.get("volume", 0) or p.get("available", 0))
+                    break
+        return {"status": "ok", "held": held}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "held": 0}
+
 # [AI-2026-07-15] AutoClose: 自动排队平仓 API
 @app.post("/api/private/auto_close/queue")
 async def auto_close_queue(request: Request):
@@ -1570,10 +1611,14 @@ async def smart_monitor_start(request: Request):
     lof_quantity = data.get("lof_quantity", 0)
     trade_etf = data.get("trade_etf", "")
     lof_broker = data.get("lof_broker", "yinhe_qmt")
+    # [AI-2026-07-20] 前端算好的各档溢价率（与盘口表 tag 同源），后端直接使用不再自算
+    bid_premiums = data.get("bid_premiums", None)
+    ask_premiums = data.get("ask_premiums", None)
     if not fund_code or not trade_etf or not lof_quantity:
         return JSONResponse(status_code=400, content={"status": "error", "message": "缺少必要参数(fund_code/trade_etf/lof_quantity)"})
     success, msg = _smart_start(
         fund_code, direction, target_premium, lof_quantity, trade_etf, lof_broker,
+        bid_premiums=bid_premiums, ask_premiums=ask_premiums,
         lazy_trader=_smart_lt, fund_service=_smart_fs,
         market_data_service=_smart_mds, trading_service=_smart_ts,
         trade_manager=getattr(_smart_ts, 'trade_manager', None) if _smart_ts else None,
