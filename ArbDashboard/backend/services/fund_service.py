@@ -18,16 +18,26 @@ logger = logging.getLogger(__name__)
 _CONFIG_YAML_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'config', 'lof_config.yaml'))
 _FUNDS_WITH_SPOT_RATE: Set[str] = set()
 _FUNDS_SUB_CATEGORY: Dict[str, str] = {}
+# [AI-2026-07-20] YAML 中的 trade_etf（用于实时估值，如 SPY/QQQ，区别于 related_index .INX/.NDX）
+_YAML_TRADE_ETF: Dict[str, str] = {}
+# [AI-2026-07-20] YAML 中的 valuation_portfolio（数据库 unified_fund_list 没有此列）
+_YAML_VALUATION_PORTFOLIO: Dict[str, list] = {}
 try:
     with open(_CONFIG_YAML_PATH, 'r', encoding='utf-8') as f:
         yaml_cfg = yaml.safe_load(f)
         fund_list = yaml_cfg.get('funds', []) if isinstance(yaml_cfg, dict) else yaml_cfg or []
         for item in fund_list:
             if isinstance(item, dict):
+                code = item.get('code', '')
                 if item.get('rate_type') == 'spot':
-                    _FUNDS_WITH_SPOT_RATE.add(item['code'])
+                    _FUNDS_WITH_SPOT_RATE.add(code)
                 if 'sub_category' in item:
-                    _FUNDS_SUB_CATEGORY[item['code']] = item['sub_category']
+                    _FUNDS_SUB_CATEGORY[code] = item['sub_category']
+                # [AI-2026-07-20] 缓存 trade_etf 和 valuation_portfolio（数据库无这些列）
+                if item.get('trade_etf'):
+                    _YAML_TRADE_ETF[code] = item['trade_etf']
+                if item.get('valuation_portfolio'):
+                    _YAML_VALUATION_PORTFOLIO[code] = item['valuation_portfolio']
     logger.info(f"[FX] 在岸价基金({len(_FUNDS_WITH_SPOT_RATE)}只): {_FUNDS_WITH_SPOT_RATE}")
 except Exception as e:
     logger.warning(f"[FX] 读取lof_config.yaml获取rate_type/sub_category失败: {e}")
@@ -1259,11 +1269,11 @@ class FundService:
 
 
                     # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子且无trade_etf的基金使用简化指数估值
-                    # [FIX] 只有美股ETF（如162411→XOP）才跳过简化指数估值，港股/A股指数应正常走此路径
+                    # [AI-2026-07-20] 有 YAML trade_etf（如161125→SPY, 161130→QQQ）的基金跳过指数估值，走3.3 ETF实时估值
                     rel_idx = fund.get('related_index', '')
                     idx_category, _ = _classify_index_symbol(rel_idx)
                     is_us_etf = (idx_category == 'skip')  # 美股ETF在_classify_index_symbol中返回'skip'
-                    if not metrics.get('rt_val') and code not in funds_with_basket and not is_us_etf:
+                    if not metrics.get('rt_val') and code not in funds_with_basket and not is_us_etf and not _YAML_TRADE_ETF.get(code, ''):
                         nav_home = float(metrics.get('nav', 0))
                         if rel_idx and rel_idx != '-' and nav_home > 0:
                             idx_data = index_changes_map.get(rel_idx)
@@ -1291,9 +1301,12 @@ class FundService:
                     calculator = self._get_calculator() if not metrics.get('rt_val') else None
                     if calculator:
                         # 获取基金配置(动态从数据库构建，彻底废弃 yaml)
+                        # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），YAML 无值时降级用 related_index（.INX）
+                        yaml_trade_etf = _YAML_TRADE_ETF.get(code, '')
+                        resolved_trade_etf = yaml_trade_etf or fund.get('related_index', '')
                         fund_cfg = {
                             "code": code,
-                            "trade_etf": fund.get('related_index', ''),
+                            "trade_etf": resolved_trade_etf,
                             "holdings": {"equity_ratio": float(fund.get('pos_ratio') or 0.95) * 100},
                             "trade_future": "CL" if "原油" in str(fund.get('fund_name')) else ("GC" if "金" in str(fund.get('fund_name')) else ("AG0" if "白银" in str(fund.get('fund_name')) else ""))
                         }
@@ -1302,8 +1315,8 @@ class FundService:
                             if not basket_df.empty:
                                 fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
                             else:
-                                # [AI-2026-06-28] basket为空时，从 YAML 配置回退 valuation_portfolio（如 513350/159518/159502 纯ETF基金）
-                                yaml_portfolio = fund.get('valuation_portfolio') or fund.get('hedging_portfolio')
+                                # [AI-2026-07-20] valuation_portfolio 优先从 YAML 加载（数据库无此列），再降级到 hedging_portfolio
+                                yaml_portfolio = _YAML_VALUATION_PORTFOLIO.get(code) or fund.get('valuation_portfolio') or fund.get('hedging_portfolio')
                                 if yaml_portfolio:
                                     fund_cfg["valuation_portfolio"] = yaml_portfolio
                         except:
@@ -1354,7 +1367,10 @@ class FundService:
                                             logger.debug(f"[{code}] 跳过 {raw_sym}（{ex} 今日休市）")
                                             continue
                                         q = self.market_data_service.get_realtime_quote(sym_base)
-                                        if q and q.get('price'):
+                                        # [AI-2026-07-20] 实时估值必须用买一价 bid，禁止用成交价 price（见 AGENTS.md 7.3.4）
+                                        if q and q.get('bid') and q['bid'] > 0:
+                                            current_etfs[sym_base] = q['bid']
+                                        elif q and q.get('price'):
                                             current_etfs[sym_base] = q['price']
                                     # [AI-2026-07-06] 篮子基金所有ETF组件均无实时行情时标记
                                     if portfolio and not current_etfs:
@@ -1380,10 +1396,16 @@ class FundService:
                                     if get_symbol_source(trade_etf) == 'SINA':
                                         pass  # 指数符号不加入实时行情查询
                                     else:
+                                        # [AI-2026-07-20] 实时估值用买一价 bid，无 bid 时降级用成交价 price
                                         try:
                                             q = self.market_data_service.get_realtime_quote(trade_etf)
-                                            if q and q.get('price') and q['price'] > 0:
+                                            etf_price = 0
+                                            if q and q.get('bid') and q['bid'] > 0:
+                                                etf_price = q['bid']
+                                            elif q and q.get('price') and q['price'] > 0:
                                                 etf_price = q['price']
+                                            # ⬇️ 估值计算：bid/price 取到后统一加载 base_data 计算，防止 bid 分支漏算
+                                            if etf_price > 0:
                                                 base_data = calculator.get_base_data(code)
                                                 if base_data:
                                                     b_nav = float(base_data.get('nav', 0) or 0)
@@ -1964,9 +1986,10 @@ class FundService:
             elif "白银" in str(f_row[0]):
                 trade_future = "AG0"
 
+            # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），避免用 related_index（.INX/.NDX）
             fund_cfg = {
                 "code": code,
-                "trade_etf": f_row[1] or '',
+                "trade_etf": _YAML_TRADE_ETF.get(code) or f_row[1] or '',
                 "position": float(f_row[2] or 0.95) * 100,
                 "trade_future": trade_future
             }
@@ -1979,11 +2002,9 @@ class FundService:
             if not basket_df.empty:
                 fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
             else:
-                # [AI-2026-06-28] basket为空时，从 YAML 配置回退 valuation_portfolio
-                # [AI-2026-07-02] 修复：fund 变量未定义导致 NameError，此处暂时跳过 YAML 回退
-                # yaml_portfolio is fetched from config_service/lof_config.yaml if needed
+                # [AI-2026-07-20] valuation_portfolio 优先从模块级 YAML dict 加载，再尝试 config_service
                 try:
-                    yaml_portfolio = self.config_service.get_fund_config(code).get('valuation_portfolio', None) if self.config_service else None
+                    yaml_portfolio = _YAML_VALUATION_PORTFOLIO.get(code) or (self.config_service.get_fund_config(code).get('valuation_portfolio', None) if self.config_service else None)
                     if yaml_portfolio:
                         fund_cfg["valuation_portfolio"] = yaml_portfolio
                 except Exception:
