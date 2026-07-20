@@ -170,22 +170,22 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 110.77
-    cash_ratio: -10.77
+    equity_ratio: 95.41
+    cash_ratio: 4.59
   valuation_portfolio:
   - symbol: GLD
-    weight: 85.21
-    anchor: US
-  - symbol: USO
-    weight: 9.63
+    weight: 73.94
     anchor: US
   - symbol: SLV
-    weight: 5.15
+    weight: 15.54
+    anchor: US
+  - symbol: USO
+    weight: 10.51
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 110.77
+  position: 95.41
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -232,8 +232,8 @@ funds:
   name: 嘉实黄金
   category: 黄金原油
   holdings:
-    equity_ratio: 96.71
-    cash_ratio: 3.29
+    equity_ratio: 96.37
+    cash_ratio: 3.63
   holdings_portfolio:
   - symbol: GLD
     weight: 19.02
@@ -274,14 +274,14 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 53.56
+    weight: 52.6
     anchor: US
   - symbol: GLD-EU
-    weight: 46.44
+    weight: 47.4
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 96.71
+  position: 96.37
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -427,8 +427,8 @@ funds:
   name: 中信保诚
   category: 黄金原油
   holdings:
-    equity_ratio: 98.33
-    cash_ratio: 1.67
+    equity_ratio: 98.45
+    cash_ratio: 1.55
   holdings_portfolio: []
   future_hedging:
   - symbol: MGC
@@ -439,17 +439,17 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 87.61
+    weight: 86.92
     anchor: US
   - symbol: GLD-EU
-    weight: 10.26
+    weight: 10.56
     anchor: EU
   - symbol: GLD-JP
-    weight: 2.13
+    weight: 2.52
     anchor: JP
   trade_etf: GLD
   trade_future: MGC
-  position: 98.33
+  position: 98.45
   sub_category: 黄金
   woody_supported: true
   data_source: woody
