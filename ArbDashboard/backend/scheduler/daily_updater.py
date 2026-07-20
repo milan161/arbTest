@@ -103,8 +103,9 @@ class DailyUpdater(BaseApp):
             
             for remote_file in sorted(target_files):
                 # 从文件名提取日期 (woody_2026-05-31.json -> 2026-05-31)
+                # [AI-2026-07-20] 修复：不能用 split('_')[1]（etf_nav_*.json 前缀有下划线会解析为'nav'）
                 try:
-                    file_date = remote_file.split('_')[1].split('.json')[0]
+                    file_date = remote_file[len(data_type)+1:].replace('.json', '')
                 except Exception:
                     continue
 
@@ -597,7 +598,7 @@ class DailyUpdater(BaseApp):
                     fixed_count += 1
                     self.logger.info(f"  ✅ [{code}] 修复历史价格")
                 else:
-                    self.logger.info(f"  ⏭️ [{code}] 价格正确，无需修复")
+                    self.logger.debug(f"  ⏭️ [{code}] 价格正确，无需修复")
             except Exception as e:
                 self.logger.error(f"  ❌ [{code}] 修复失败: {e}")
         
@@ -734,18 +735,91 @@ class DailyUpdater(BaseApp):
                 for _, row in df.iterrows():
                     date_str = row['date'].strftime('%Y-%m-%d')
                     self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=row['close'])
-                    # [AI-2026-07-13] 同步更新大一统表中的指数价格（跳过纯指数基金，避免 ETF 价格写入 index_level）
-                    for fund in self.config.get('funds', []):
-                        related_index = str(fund.get('related_index', '') or '')
-                        if related_index.startswith('.'):
-                            continue  # 纯指数（如 .INX/.NDX）的 index_close 应从 index_history 获取
-                        for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
-                            if sym in str(item.get('symbol', '')):
-                                self.db.save_unified_history(date_str=date_str, fund_code=fund['code'], index_close=row['close'])
+                    # [AI-2026-07-20] 已删除：禁止将新浪价格写入 index_close（曾导致 ETF 价格冒充净值的假象）
+                    # index_close 只能通过 step11（从 index_history）或 step5b（从 VPS Yahoo NAV）写入
                 self.logger.info(f"✅ [海外/指数] {sym} 行情同步完成")
 
         self.db.mark_access_synced(today_str, source='usa_etf_data')
         self.logger.info(f"✅ [海外/指数] 步骤五完成，已标记防刷")
+
+    # [AI-2026-07-20] 新增：从 VPS 同步 Yahoo 指数收盘价（N225 → index_history）
+    def step5b_sync_vps_index_data(self):
+        """从 VPS 同步 Yahoo 指数收盘价（如 N225），写入 index_history"""
+        self.logger.info("=== 步骤五B：从VPS同步Yahoo指数收盘价 (N225) ===")
+        today_str = datetime.now().strftime('%Y-%m-%d')
+
+        vps_data = self._try_sync_all_from_vps('index')
+        if not vps_data:
+            self.logger.info("⏭️ [VPS-INDEX] 无待同步的指数数据")
+            return
+
+        self.logger.info(f"🔄 [VPS-INDEX] 发现 {len(vps_data)} 份指数数据，正在同步入库...")
+        for item in vps_data:
+            file_date = item['date']
+            content = item['content']
+            try:
+                symbol = content.get('symbol')
+                close_price = content.get('close')
+                trade_date = content.get('trade_date', file_date)
+
+                if symbol and close_price is not None:
+                    self.db.upsert_index_history(
+                        symbol=symbol,
+                        date=trade_date,
+                        close=close_price
+                    )
+                    self.logger.info(f"   ✅ [VPS-INDEX] {symbol} {trade_date} -> close={close_price}")
+                else:
+                    self.logger.warning(f"   ⚠️ [VPS-INDEX] {file_date} 数据不完整: {content}")
+
+                self.db.mark_access_synced(file_date, 'index_vps_sync')
+            except Exception as e:
+                self.logger.error(f"   ❌ [VPS-INDEX] 解析 {file_date} 出错: {e}")
+
+        self.logger.info(f"✅ [VPS-INDEX] 指数数据同步完成")
+
+    # [AI-2026-07-20] 新增：从 VPS 同步 Yahoo ETF 净值（^XOP-IV → usa_etf_daily_prices.netvalue）
+    def step5c_sync_vps_etf_nav(self):
+        """从 VPS 同步 Yahoo ETF 净值（^XOP-IV, ^SPY-IV 等），写入 usa_etf_daily_prices.netvalue"""
+        self.logger.info("=== 步骤五C：从VPS同步Yahoo ETF净值 (^XOP-IV 等) ===")
+
+        vps_data = self._try_sync_all_from_vps('etf_nav')
+        if not vps_data:
+            self.logger.info("⏭️ [VPS-NAV] 无待同步的ETF净值数据")
+            return
+
+        self.logger.info(f"🔄 [VPS-NAV] 发现 {len(vps_data)} 份净值数据，正在同步入库...")
+        updated_count = 0
+        for item in vps_data:
+            file_date = item['date']
+            content = item['content']
+            try:
+                # [AI-2026-07-20] Yahoo NAV 为前一美东交易日收盘，必须用 VPS 返回的 trade_date 入库，否则净值日期错移一天
+                sync_date = content.get('trade_date') or file_date
+                nav_data = content.get('nav_data', {})
+                for sym, nav_value in nav_data.items():
+                    # 跳过 N225（走 index 同步路径）
+                    if sym == 'N225':
+                        continue
+                    # 跳过非数值类型（如 dict 格式的 N225 数据）
+                    if not isinstance(nav_value, (int, float)):
+                        continue
+                    if nav_value is not None and float(nav_value) > 0:
+                        # 使用 upsert_usa_etf_netvalue 只更新净值和创建行，不覆盖 price
+                        self.db.upsert_usa_etf_netvalue(
+                            date=sync_date,
+                            symbol=sym,
+                            netvalue=float(nav_value)
+                        )
+                        updated_count += 1
+
+                self.db.mark_access_synced(sync_date, 'etf_nav_vps_sync')
+                if updated_count > 0:
+                    self.logger.info(f"   ✅ [VPS-NAV] {sync_date}: 更新 {updated_count} 条净值")
+            except Exception as e:
+                self.logger.error(f"   ❌ [VPS-NAV] 解析 {file_date} 出错: {e}")
+
+        self.logger.info(f"✅ [VPS-NAV] ETF净值同步完成，共更新 {updated_count} 条")
 
     def step6_fetch_woody_regional_etfs(self):
         """步骤六：抓取 Woody 特有的区域变种虚拟 ETF (如 ^GLD-EU) 历史行情"""
@@ -1306,6 +1380,8 @@ class DailyUpdater(BaseApp):
         self._step4_fix_holiday_prices()
         self.step4_5_sync_fund_purchase_status()
         self.step5_fetch_usa_market_data()
+        self.step5b_sync_vps_index_data()
+        self.step5c_sync_vps_etf_nav()
         self.step7_fetch_extra_calibrations()
         self.step8_fetch_sina_futures_from_vps()
         self.step9_fetch_jsl_shares_from_vps()

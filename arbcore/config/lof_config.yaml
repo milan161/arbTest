@@ -1749,6 +1749,22 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
+- code: '513880'
+  name: 华安日经225
+  category: QDII日本
+  trade_etf: ''
+  trade_future: NK
+  holdings:
+    equity_ratio: 97
+  valuation_portfolio:
+  - symbol: NKY
+    weight: 100
+    anchor: US
+  redemption_fee_rate: 0.5
+  commission_rate: 0
+  valuation_method: ''
+  rate_type: spot
+  related_index: N225
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
 future_oil_calibration: .nan

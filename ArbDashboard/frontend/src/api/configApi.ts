@@ -63,14 +63,14 @@ export function postIbCoreSymbols(symbols: string[]) {
   return client.post('/api/config/ib_core_symbols', { symbols })
 }
 
-/** 获取是否跳过QDII亚洲/国内LOF指数实时抓取 */
-export function getSkipQdiiAsiaIndex() {
-  return client.get('/api/config/app_settings/skip_qdii_asia_index')
+/** 获取暂停的分类列表 */
+export function getPausedCategories() {
+  return client.get('/api/config/app_settings/paused_categories')
 }
 
-/** 更新跳过QDII亚洲/国内LOF指数设置 */
-export function postSkipQdiiAsiaIndex(data: { skip: boolean }) {
-  return client.post('/api/config/app_settings/skip_qdii_asia_index', data)
+/** 更新暂停的分类列表 */
+export function postPausedCategories(paused: string[]) {
+  return client.post('/api/config/app_settings/paused_categories', { paused })
 }
 
 /** 回补缺失指数历史数据 */

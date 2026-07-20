@@ -130,8 +130,14 @@ class DatabaseManager:
                 value TEXT NOT NULL DEFAULT '',
                 updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
             )''')
-            # 种子数据：默认跳过QDII亚洲/国内LOF指数（1=跳过=默认不开启实时抓取）
+            # [AI-2026-07-20] 种子数据：默认暂停 QDII亚洲/国内LOF/现金管理
             cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM app_settings WHERE key='paused_categories'")
+            if cursor.fetchone()[0] == 0:
+                conn.execute("""
+                    INSERT INTO app_settings (key, value) VALUES ('paused_categories', '["QDII亚洲","国内LOF","现金管理"]')
+                """)
+            # 旧的 skip_qdii_asia_index 种子（向后兼容）
             cursor.execute("SELECT COUNT(*) FROM app_settings WHERE key='skip_qdii_asia_index'")
             if cursor.fetchone()[0] == 0:
                 conn.execute("""
@@ -308,6 +314,8 @@ class DatabaseManager:
     def upsert_hkd_exchange_rate(self, *args, **kwargs): return self.market.upsert_hkd_exchange_rate(*args, **kwargs)
     def upsert_futures_daily(self, *args, **kwargs): return self.market.upsert_futures_daily(*args, **kwargs)
     def upsert_usa_etf_price(self, *args, **kwargs): return self.market.upsert_usa_etf_price(*args, **kwargs)
+    def upsert_usa_etf_netvalue(self, *args, **kwargs): return self.market.upsert_usa_etf_netvalue(*args, **kwargs)
+    def upsert_index_history(self, *args, **kwargs): return self.market.upsert_index_history(*args, **kwargs)
 
     def get_latest_usa_etf_date(self, *args, **kwargs): return self.market.get_latest_usa_etf_date(*args, **kwargs)
     def get_latest_futures_price(self, *args, **kwargs): return self.market.get_latest_futures_price(*args, **kwargs)

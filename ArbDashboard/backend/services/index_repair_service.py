@@ -36,6 +36,9 @@ A_SHARE_SH_PREFIX = {'000905','000869','000852'}
 # 港股指数
 HK_INDICES = {'HSI','HSCEI','HSCCI','HSTECH','HSCI','HSSI','HSMI','HSSCNE'}
 
+# 日本指数
+JP_INDICES = {'N225', 'NKY', 'NIKKEI'}
+
 
 # ============================================================
 # TDX 方式
@@ -156,6 +159,9 @@ def _get_all_related_indices() -> List[tuple]:
         # 美股指数
         elif clean in ('.INX', '.NDX'):
             result.append((code, 'us_index'))
+        # 日本指数(N225等) — 通过新浪全球指数接口获取
+        elif clean in JP_INDICES:
+            result.append((code, 'jp_index'))
         else:
             result.append((code, 'skip'))
     
@@ -268,6 +274,75 @@ def _fetch_qq_a_share(symbol: str, market: str, days: int = 30) -> list:
         return []
 
 
+def _fetch_sina_global_index(symbol: str, days: int = 30) -> list:
+    """
+    [AI-2026-07-20] 从新浪全球指数接口获取海外指数日线数据（日经225等）。
+
+    尝试以下途径获取历史数据：
+    1. 新浪 US_MinKService 日线 API（可能支持 N225）
+    2. 新浪实时接口 int_nikkei（仅最新收盘价，兜底）
+
+    Args:
+        symbol: 指数代码，如 'N225'
+        days: 获取最近多少天（仅对支持历史数据的 API 有效）
+
+    Returns: [(date_str, close_price), ...] 按日期升序
+    """
+    result = []
+
+    # 1. 尝试新浪 US_MinKService 日线 API（美股日线接口，部分海外指数也可用）
+    try:
+        # N225 在新浪 US 接口中可能的 symbol 格式
+        alt_symbols = ['n225', 'nikkei', '^n225']
+        for alt_sym in alt_symbols:
+            url = f"https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getDailyK?symbol={alt_sym}"
+            resp = requests.get(url, headers={
+                'Referer': 'https://finance.sina.com.cn/',
+                'User-Agent': 'Mozilla/5.0'
+            }, timeout=10)
+            if resp.status_code == 200 and resp.text and resp.text != 'null':
+                data = resp.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    for d in data:
+                        date_str = d.get('d', '')
+                        close = d.get('c', 0)
+                        if date_str and close:
+                            try:
+                                result.append((date_str, float(close)))
+                            except (ValueError, TypeError):
+                                pass
+                    if result:
+                        logger.info(f"[SINA-GLOBAL] {symbol} 通过 US_MinKService({alt_sym}) 获取到 {len(result)} 条历史数据")
+                        return sorted(result, key=lambda x: x[0])
+    except Exception as e:
+        logger.debug(f"[SINA-GLOBAL] US_MinKService 获取 {symbol} 失败: {e}")
+
+    # 2. 兜底：使用新浪实时接口 int_nikkei 获取最新收盘价
+    try:
+        sina_code = 'int_nikkei'
+        url = f"http://hq.sinajs.cn/list={sina_code}"
+        resp = requests.get(url, headers={
+            'Referer': 'https://finance.sina.com.cn/',
+            'User-Agent': 'Mozilla/5.0'
+        }, timeout=5)
+        resp.encoding = 'gbk'
+        if '="' in resp.text:
+            parts = resp.text.split('"')[1].split(',')
+            if len(parts) >= 4:
+                price = float(parts[1])
+                if price > 0:
+                    # 实时接口返回的是当前价格，我们记录为今天的日期
+                    from datetime import date
+                    today_str = date.today().strftime('%Y-%m-%d')
+                    result = [(today_str, price)]
+                    logger.info(f"[SINA-GLOBAL] {symbol} 从 int_nikkei 获取到实时价格: {price}")
+                    return result
+    except Exception as e:
+        logger.warning(f"[SINA-GLOBAL] int_nikkei 实时获取 {symbol} 失败: {e}")
+
+    return []
+
+
 def _get_existing_dates(symbol: str) -> set:
     """获取数据库中已有的日期"""
     conn = sqlite3.connect(DB_PATH)
@@ -355,6 +430,9 @@ def repair_with_sina(days_back: int = 30) -> dict:
             if not rows:
                 # 也试试不带 hk 前缀
                 rows = _fetch_qq_hk_index(clean, days_back)
+        elif category == 'jp_index':
+            # 日本指数(N225等)通过新浪全球指数接口补采
+            rows = _fetch_sina_global_index(clean, days_back)
         
         if not rows:
             details.append(f"  {raw_code} → 无数据")
