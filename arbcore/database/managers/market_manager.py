@@ -63,6 +63,29 @@ class MarketManager(BaseManager):
             conn.commit()
             conn.close()
 
+    # [AI-2026-07-20] VPS Yahoo 同步用：写入指数收盘价到 index_history
+    def upsert_index_history(self, symbol: str, date: str, close: float):
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
+                (symbol, date, close, 'yahoo_vps')
+            )
+            conn.commit()
+            conn.close()
+
+    # [AI-2026-07-20] 只更新 netvalue（从 VPS Yahoo 同步），不覆盖 price
+    def upsert_usa_etf_netvalue(self, date: str, symbol: str, netvalue: float):
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE usa_etf_daily_prices SET netvalue = ?, updated_at = (datetime('now', 'localtime')) WHERE date = ? AND symbol = ?", (netvalue, date, symbol))
+            if cursor.rowcount == 0:
+                cursor.execute("INSERT INTO usa_etf_daily_prices (date, symbol, netvalue) VALUES (?, ?, ?)", (date, symbol, netvalue))
+            conn.commit()
+            conn.close()
+
     def get_latest_usa_etf_date(self, symbol: str) -> str:
         conn = self._get_conn()
         query = "SELECT MAX(date) FROM usa_etf_daily_prices WHERE symbol = ?"

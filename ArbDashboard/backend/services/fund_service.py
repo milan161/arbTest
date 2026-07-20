@@ -616,6 +616,11 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
             closed = now.hour >= 15
         elif ex == 'XHKG':
             closed = now.hour >= 16
+        elif ex == 'JPX':
+            # [AI-2026-07-20] 日本指数(N225)通过新浪全球指数API获取 int_nikkei，24/7返回最新收盘价
+            # 日本股市 08:00-14:00 CST (09:00-15:00 JST)，但收盘后新浪仍有当日收盘数据
+            # 设为始终可API获取，用于写入 index_history 供 T-1 静态估值使用
+            closed = False
         else:
             # 其他交易所（如美股指数）默认不在此API获取
             closed = True
@@ -776,6 +781,11 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         tencent_requests.add(tc_req)
         tc_to_syms.setdefault(ret_code, []).append(sym)
         sina_to_syms.setdefault(ret_code, []).append(sym)
+        # [AI-2026-07-20] 全球指数（sina_req != ret_code）额外注册 sina_req 键
+        # 新浪响应变量名（如 int_nikkei）经解析后提取的是 sina_req，不是 ret_code
+        # 例如 N225: ret_code="N225", sina_req="int_nikkei", 新浪返回 hq_str_int_nikkei
+        if sina_req and sina_req != ret_code:
+            sina_to_syms.setdefault(sina_req, []).append(sym)
 
     res = {}
     
@@ -992,6 +1002,21 @@ class FundService:
                 _dashboard_cache.set(cache_key, [])
                 return []
 
+            # [AI-2026-07-20] 从结果中剔除暂停分类的基金（不生成快照、不占 CPU）
+            # 注意：paused_set 可能在本方法前面已定义（指数过滤处），也可能未定义
+            if 'paused_set' not in dir():
+                try:
+                    import json
+                    raw = self.db.get_app_setting('paused_categories', None)
+                    paused_set = set(json.loads(raw)) if raw else set()
+                except Exception:
+                    paused_set = set()
+            if paused_set:
+                before = len(funds_df)
+                funds_df = funds_df[~funds_df['category'].isin(paused_set)]
+                if len(funds_df) < before:
+                    logger.info(f"[DASHBOARD-FILTER] 过滤暂停分类，{before} -> {len(funds_df)} 只基金")
+
             # ── 2. 批量获取 fund_purchase_status 状态费率（AKShare 日更）──
             status_df = pd.read_sql_query(
                 "SELECT fund_code, purchase_status, redemption_status, purchase_fee, redemption_fee, purchase_limit FROM fund_purchase_status",
@@ -1026,15 +1051,18 @@ class FundService:
             hist_grouped = hist_df.groupby('fund_code') if not hist_df.empty else {}
 
             # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅
-            # [AI-2026-07-07] 根据 app_settings 过滤：跳过 QDII亚洲/国内LOF 指数
-            skip_flag = self.db.get_app_setting('skip_qdii_asia_index', '1')
-            if skip_flag == '1':
-                # 只保留黄金原油 + QDII欧美 + 白银的 related_index
-                keep_categories = {'黄金原油', 'QDII欧美', '白银'}
-                filtered_funds = funds_df[funds_df['category'].isin(keep_categories)]
+            # [AI-2026-07-20] 根据 paused_categories 过滤：暂停的分类不抓指数
+            try:
+                import json
+                raw = self.db.get_app_setting('paused_categories', None)
+                paused_set = set(json.loads(raw)) if raw else set()
+            except Exception:
+                paused_set = {'QDII亚洲', '国内LOF', '现金管理'}
+            if paused_set:
+                filtered_funds = funds_df[~funds_df['category'].isin(paused_set)]
                 indices_to_fetch = filtered_funds['related_index'].dropna().tolist()
                 if indices_to_fetch:
-                    logger.info(f"[INDEX-SKIP] skip_qdii_asia_index=1，仅抓取 {len(indices_to_fetch)} 个指数（跳过QDII亚洲/国内LOF）")
+                    logger.info(f"[INDEX-FILTER] 暂停分类 {sorted(paused_set)}，仅抓取 {len(indices_to_fetch)} 个指数")
                 else:
                     indices_to_fetch = []
             else:
@@ -1068,6 +1096,20 @@ class FundService:
             result = []
             for _, fund in funds_df.iterrows():
                 code = fund['fund_code']
+                category = fund.get('category', '')
+
+                # [AI-2026-07-20] 暂停分类 ❌ 直接跳过，不计算实时估值、不产生 WARNING 日志
+                if category in paused_set:
+                    result.append({
+                        'fund_code': code,
+                        'fund_name': fund.get('fund_name', ''),
+                        'category': category,
+                        'price': 0, 'nav': 0,
+                        'static_val': 0, 'static_premium': 0,
+                        'rt_val': None, 'rt_premium': None,
+                        'sub_category': _FUNDS_SUB_CATEGORY.get(code, ''),
+                    })
+                    continue
 
                 # ── 3a. 从批量历史数据中提取该基金的 metrics ──
                 if not hist_df.empty and code in hist_grouped.groups:
@@ -1793,19 +1835,19 @@ class FundService:
                     if sym and sym not in etf_symbols:
                         etf_symbols.append(sym)
 
-                # 3) 逐个查询价格（仅查 usa_etf_daily_prices 里存在的）
+                # 3) 逐个查询净值（仅 netvalue，禁止兜底 price）
                 for sym in etf_symbols:
                     etf_rows = conn.execute(
-                        "SELECT date, price FROM usa_etf_daily_prices WHERE symbol=? ORDER BY date DESC",
+                        "SELECT date, netvalue FROM usa_etf_daily_prices WHERE symbol=? AND netvalue IS NOT NULL AND netvalue > 0 ORDER BY date DESC",
                         (sym,)
                     ).fetchall()
                     if etf_rows:
-                        prices = {r[0]: r[1] for r in etf_rows}
+                        prices = {r[0]: r[1] for r in etf_rows if r[1] is not None}
                         dates_sorted = sorted(prices.keys(), reverse=True)
                         etf_chg = {}
                         for i in range(len(dates_sorted) - 1):
                             d_curr, d_prev = dates_sorted[i], dates_sorted[i + 1]
-                            if prices[d_prev] and prices[d_prev] > 0:
+                            if prices[d_prev] and prices[d_prev] > 0 and prices[d_curr] and prices[d_curr] > 0:
                                 etf_chg[d_curr] = (prices[d_curr] / prices[d_prev] - 1) * 100
                         etf_price_map[sym] = {
                             d: {'price': prices[d], 'chg': etf_chg.get(d)} for d in prices
@@ -1830,6 +1872,29 @@ class FundService:
                             real_index_map[idx_dates[-1]] = {'close': idx_prices[idx_dates[-1]], 'pct': None}
                 except:
                     pass
+
+            # [AI-2026-07-20] 从 usa_etf_daily_prices.netvalue 获取ETF真实NAV（XOP/GLD等）
+            # real_index_map 为空说明 index_history 无该 ETF 数据，从 usa_etf_daily_prices 补充
+            usa_netvalue_map = {}
+            yaml_trade_etf = _YAML_TRADE_ETF.get(fund_code, '')
+            if yaml_trade_etf and not real_index_map:
+                try:
+                    nv_rows = conn.execute(
+                        "SELECT date, netvalue FROM usa_etf_daily_prices WHERE symbol=? AND netvalue IS NOT NULL AND netvalue > 0 ORDER BY date DESC",
+                        (yaml_trade_etf,)
+                    ).fetchall()
+                    if nv_rows:
+                        nv_dict = {r[0]: r[1] for r in nv_rows}
+                        nv_dates = sorted(nv_dict.keys(), reverse=True)
+                        for i in range(len(nv_dates) - 1):
+                            d_curr, d_prev = nv_dates[i], nv_dates[i + 1]
+                            if nv_dict[d_prev] and nv_dict[d_prev] > 0:
+                                chg = (nv_dict[d_curr] / nv_dict[d_prev] - 1) * 100
+                                usa_netvalue_map[d_curr] = {'close': nv_dict[d_curr], 'pct': round(chg, 4)}
+                        if len(nv_dates) > 0:
+                            usa_netvalue_map[nv_dates[-1]] = {'close': nv_dict[nv_dates[-1]], 'pct': None}
+                except Exception as e:
+                    logger.warning(f"[FundHistory] usa_netvalue_map 构建失败 {yaml_trade_etf}: {e}")
 
             data_list = []
             for _, row in df.iterrows():
@@ -1864,6 +1929,13 @@ class FundService:
                     else:
                         item['index_close'] = None
                         item['index_pct'] = None
+
+                # [AI-2026-07-20] 从 usa_etf_daily_prices.netvalue 补充ETF真实NAV
+                if item.get('index_close') is None and usa_netvalue_map:
+                    row_date = str(item.get('date', ''))[:10]
+                    if row_date in usa_netvalue_map:
+                        item['index_close'] = usa_netvalue_map[row_date]['close']
+                        item['index_pct'] = usa_netvalue_map[row_date]['pct']
 
                 # [511520] 附加国债期货数据 + 回测预估净值
                 if fund_code == '511520':

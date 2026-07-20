@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -9,8 +10,11 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-HIGH_FREQ_CATEGORIES = ["黄金原油", "QDII欧美", "QDII日本", "白银"]
-NORMAL_FREQ_CATEGORIES = ["QDII亚洲", "国内LOF", "现金管理"]
+# 【AI-2026-07-20】分类优先级管理：改为从 app_settings 读取暂停列表
+# HIGH_FREQ_CATEGORIES 是系统支持的全部分类（每分类独立 3s 快照循环）
+ALL_CATEGORIES = ["黄金原油", "QDII欧美", "QDII日本", "白银", "QDII亚洲", "国内LOF", "现金管理"]
+# 默认暂停（用户不关心的分类）
+DEFAULT_PAUSED = ["QDII亚洲", "国内LOF", "现金管理"]
 
 
 class DashboardSnapshotService:
@@ -18,6 +22,11 @@ class DashboardSnapshotService:
 
     API handlers should read this service instead of calculating dashboard data
     inline. If a refresh fails, the last successful snapshot is kept.
+
+    [AI-2026-07-20] 分类优先级管理：
+    - 只有「未暂停」的分类才会启动独立快照循环（3s 刷新）
+    - 暂停的分类完全不生成快照、不抓指数、无日志噪音
+    - 支持运行时修改暂停列表（sync_paused_categories）
     """
 
     def __init__(
@@ -36,32 +45,57 @@ class DashboardSnapshotService:
         self._last_errors: Dict[str, str] = {}
         self._running = False
         self._tasks: List[asyncio.Task] = []
+        # [AI-2026-07-20] 从 db 读取暂停分类列表
+        self._paused_categories: set = set()
+
+    def _load_paused(self) -> set:
+        """从 app_settings 读取暂停分类列表"""
+        try:
+            db = getattr(self.fund_service, 'db', None)
+            if db:
+                raw = db.get_app_setting('paused_categories', None)
+                if raw:
+                    return set(json.loads(raw))
+        except Exception:
+            pass
+        return set(DEFAULT_PAUSED)
+
+    def _is_paused(self, category: Optional[str]) -> bool:
+        """检查分类是否已暂停"""
+        if not category:
+            return False
+        return category in self._paused_categories
+
+    def sync_paused_categories(self, paused_list: List[str]):
+        """运行时重新加载暂停分类列表（由 API 调用）"""
+        self._paused_categories = set(paused_list)
+        logger.info(f"[SNAPSHOT] 暂停分类已更新: {paused_list}")
 
     async def start(self):
         if self._running:
             return
         self._running = True
-        # [AI-2026-07-03] 启动时仅刷新高优先级分类，低优先级延迟120s再启动
-        await self.refresh_once("黄金原油", None, "黄金原油")
-        await self.refresh_once("QDII欧美", None, "QDII欧美")
-        await self.refresh_once("QDII日本", None, "QDII日本")
-        await self.refresh_once("白银", None, "白银")
+        self._paused_categories = self._load_paused()
+        logger.info(f"[SNAPSHOT] 暂停分类: {sorted(self._paused_categories)}")
+
+        # 只对「未暂停」的分类启动独立快照循环（3s 刷新）
+        active_categories = [c for c in ALL_CATEGORIES if c not in self._paused_categories]
+        logger.info(f"[SNAPSHOT] 活跃分类: {active_categories}")
+
+        # 启动时先刷新一次所有活跃分类
+        for cat in active_categories:
+            await self.refresh_once(cat, None, cat)
+
+        # watchlist 始终运行
         self._tasks = [
             asyncio.create_task(self._loop("watchlist", self.high_interval, True, None)),
-            asyncio.create_task(self._loop("黄金原油", self.high_interval, False, "黄金原油")),
-            asyncio.create_task(self._loop("QDII欧美", self.high_interval, False, "QDII欧美")),
-            asyncio.create_task(self._loop("QDII日本", self.high_interval, False, "QDII日本")),
-            asyncio.create_task(self._loop("白银", self.high_interval, False, "白银")),
-            asyncio.create_task(self._delayed_start_low_priority()),
         ]
-        logger.info("Dashboard snapshot service started")
-
-    async def _delayed_start_low_priority(self, delay: float = 120.0):
-        """延迟启动低优先级分类（QDII亚洲/国内LOF/白银/现金管理）和全量快照，
-        给 daily_updater 留出完成时间，避免网络/CPU竞争。"""
-        await asyncio.sleep(delay)
-        await self.refresh_once("all", None, None)
-        await self._normal_loop()
+        # 每个未暂停的分类启动独立循环
+        for cat in active_categories:
+            self._tasks.append(
+                asyncio.create_task(self._loop(cat, self.high_interval, False, cat))
+            )
+        logger.info(f"Dashboard snapshot service started ({len(active_categories)} active categories)")
 
     async def stop(self):
         self._running = False
@@ -77,22 +111,16 @@ class DashboardSnapshotService:
 
     async def _loop(self, key: str, interval: float, use_db_watchlist: bool, category: Optional[str]):
         while self._running:
+            # [AI-2026-07-20] 运行时检查：如果分类被暂停，跳过本轮
+            if self._is_paused(category):
+                await asyncio.sleep(5.0)
+                continue
             started = time.monotonic()
             try:
                 await self.refresh_once(key, None, category, use_db_watchlist=use_db_watchlist)
             except Exception as exc:
                 logger.warning("Dashboard snapshot loop failed for %s: %s", key, exc)
             await asyncio.sleep(max(0.2, interval - (time.monotonic() - started)))
-
-    async def _normal_loop(self):
-        while self._running:
-            started = time.monotonic()
-            for category in NORMAL_FREQ_CATEGORIES:
-                try:
-                    await self.refresh_once(category, None, category)
-                except Exception as exc:
-                    logger.warning("Dashboard normal snapshot failed for %s: %s", category, exc)
-            await asyncio.sleep(max(1.0, self.normal_interval - (time.monotonic() - started)))
 
     def _source_status(self) -> Dict[str, Any]:
         if not self.market_data_service:
@@ -162,19 +190,45 @@ class DashboardSnapshotService:
             return "watchlist"
         if category:
             return category
-        return "all"
+        # [AI-2026-07-20] 不再生成"all"全量快照，改由合并各分类快照
+        return "_combined"
 
     def get_snapshot(self, watchlist: Optional[List[str]] = None, category: Optional[str] = None) -> Dict[str, Any]:
         key = self._snapshot_key(watchlist, category)
         with self._lock:
-            snapshot = self._snapshots.get(key) or self._snapshots.get("all")
-            if snapshot:
-                result = dict(snapshot)
-                if watchlist:
+            if category:
+                # 请求特定分类
+                snapshot = self._snapshots.get(category)
+                if snapshot:
+                    return dict(snapshot)
+            elif watchlist:
+                snapshot = self._snapshots.get("watchlist")
+                if snapshot:
+                    result = dict(snapshot)
                     allowed = set(watchlist)
                     result["data"] = [item for item in result.get("data", []) if item.get("fund_code") in allowed]
                     result["key"] = "watchlist_request"
-                return result
+                    return result
+            else:
+                # 无分类/无 watchlist → 合并所有非暂停分类的快照数据
+                combined_data = []
+                latest_updated = None
+                for cat in ALL_CATEGORIES:
+                    snap = self._snapshots.get(cat)
+                    if snap and snap.get("data"):
+                        combined_data.extend(snap["data"])
+                        if snap.get("updated_at") and (not latest_updated or snap["updated_at"] > latest_updated):
+                            latest_updated = snap["updated_at"]
+                if combined_data:
+                    return {
+                        "data": combined_data,
+                        "updated_at": latest_updated,
+                        "stale": False,
+                        "source_status": self._source_status(),
+                        "compute_ms": None,
+                        "error": None,
+                        "key": "_combined",
+                    }
         return {
             "data": [],
             "updated_at": None,

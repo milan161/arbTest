@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import subprocess
 import threading
 import pandas as pd
@@ -867,22 +868,47 @@ async def update_ib_core_symbols(request: Request):
         return {"status": "error", "message": str(e)}
 
 # --- [AI-2026-07-07] App-level toggle settings ---
-@app.get("/api/config/app_settings/skip_qdii_asia_index")
-async def get_skip_qdii_asia_index():
-    """获取是否跳过QDII亚洲/国内LOF指数实时抓取"""
-    val = db_manager.get_app_setting('skip_qdii_asia_index', '1')
-    return {"status": "ok", "data": int(val)}
+# 分类暂停管理（替换旧的 skip_qdii_asia_index 单一开关）
+ALL_CATEGORIES = ["黄金原油", "QDII欧美", "QDII日本", "白银", "QDII亚洲", "国内LOF", "现金管理"]
+DEFAULT_PAUSED_CATEGORIES = ["QDII亚洲", "国内LOF", "现金管理"]
 
-@app.post("/api/config/app_settings/skip_qdii_asia_index")
-async def update_skip_qdii_asia_index(request: Request):
-    """设置是否跳过QDII亚洲/国内LOF指数实时抓取"""
+@app.get("/api/config/app_settings/paused_categories")
+async def get_paused_categories():
+    """获取已暂停的分类列表（暂停的分类不再生成快照/抓指数/显示在 Dashboard）"""
+    raw = db_manager.get_app_setting('paused_categories', None)
+    if raw is None:
+        # 首次读取：迁移旧的 skip_qdii_asia_index 设置
+        old_skip = db_manager.get_app_setting('skip_qdii_asia_index', '1')
+        if old_skip == '1':
+            paused = DEFAULT_PAUSED_CATEGORIES
+        else:
+            paused = []
+        db_manager.set_app_setting('paused_categories', json.dumps(paused))
+        return {"status": "ok", "data": paused}
+    try:
+        return {"status": "ok", "data": json.loads(raw)}
+    except Exception:
+        return {"status": "ok", "data": DEFAULT_PAUSED_CATEGORIES}
+
+@app.post("/api/config/app_settings/paused_categories")
+async def update_paused_categories(request: Request):
+    """设置暂停的分类列表"""
     try:
         data = await request.json()
-        skip = 1 if data.get('skip', True) else 0
-        db_manager.set_app_setting('skip_qdii_asia_index', str(skip))
-        return {"status": "ok", "data": skip, "message": "设置已保存"}
+        paused = data.get('paused', DEFAULT_PAUSED_CATEGORIES)
+        # 校验：只接受合法分类名
+        valid = [c for c in paused if c in ALL_CATEGORIES]
+        db_manager.set_app_setting('paused_categories', json.dumps(valid))
+        # 同步更新旧的 skip_qdii_asia_index（向后兼容）
+        asia_paused = "QDII亚洲" in valid
+        dom_paused = "国内LOF" in valid
+        old_skip = '1' if (asia_paused and dom_paused) else '0'
+        db_manager.set_app_setting('skip_qdii_asia_index', old_skip)
+        # 通知快照服务重新加载暂停配置
+        dashboard_snapshot_service.sync_paused_categories(valid)
+        return {"status": "ok", "data": valid, "message": "分类优先级已更新"}
     except Exception as e:
-        logger.error(f"更新 skip_qdii_asia_index 失败: {e}")
+        logger.error(f"更新 paused_categories 失败: {e}")
         return {"status": "error", "message": str(e)}
 
 # [AI-2026-07-07] 回补缺失指数历史
