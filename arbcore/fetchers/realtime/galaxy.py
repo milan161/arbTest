@@ -23,6 +23,9 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         self.recv_thread = None
         self.lock = threading.RLock()
         self.quotes = {}
+        # [AI-2026-07-20] 下单同步回执：recv_loop 收到 OK 后放入，send_order 等待
+        import queue as _queue_mod
+        self._ack_queue = _queue_mod.Queue()
         
         # [V10.0] 连接控制：启动时不自动连接，用户点击页面"银河QMT"按钮才重连
         self.disabled = True
@@ -133,6 +136,13 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         logger.warning("[QMT银河] 接收循环已退出")
 
     def _process_message(self, msg: str):
+        # [AI-2026-07-20] 下单同步回执：脚本对 BUY/SELL 回 "OK"，放入队列供 send_order 等待
+        if msg == "OK":
+            try:
+                self._ack_queue.put_nowait(True)
+            except Exception:
+                pass
+            return
         if msg.startswith("TICK,"):
             parts = msg.split(',')
             symbol_full = parts[1]
@@ -209,10 +219,10 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
 
     def send_order(self, action: str, code: str, price: float, volume: int) -> tuple:
         """
-        通过 QMT Socket 发送买卖指令
+        通过 QMT Socket 发送买卖指令，并同步等待脚本回执确认。
         Args:
             action: 'BUY' 或 'SELL'
-            code: 股票代码（如 162411.SZ）
+            code: 股票代码（如 162411 或 162411.SZ，内部统一去后缀）
             price: 委托价格
             volume: 委托数量（股）
         Returns:
@@ -222,13 +232,26 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
             return False, "银河QMT 未连接"
         if action not in ('BUY', 'SELL'):
             return False, f"无效指令: {action}"
+        # [AI-2026-07-20] passorder 市场参数(1101/1102)已指定市场，带 .SZ/.SH 后缀会被拒单，统一去后缀
+        qmt_code = code.split('.')[0]
         try:
-            qmt_code = self.normalize_symbol(code)
+            # 清空过期回执，避免读到上一次的 OK
+            while not self._ack_queue.empty():
+                try:
+                    self._ack_queue.get_nowait()
+                except Exception:
+                    break
             cmd = f"{action},{qmt_code},{price},{volume}\n"
             with self.lock:
                 self.sock.sendall(cmd.encode('utf-8'))
             logger.info(f"✅ [QMT银河] 指令已发送: {action} {qmt_code} {volume}股 @ {price}")
-            return True, f"指令已发送: {action} {qmt_code} {volume}股 @ {price}"
+            # [AI-2026-07-20] 同步等待脚本回执 OK（入队确认）。超时=未收到，视为失败
+            try:
+                self._ack_queue.get(timeout=3.0)
+            except Exception:
+                logger.error(f"❌ [QMT银河] 下单后未收到回执(OK)，可能通道异常: {action} {qmt_code}")
+                return False, f"下单指令已发送但未收到银河回执(OK)，下单可能未生效"
+            return True, f"指令已发送并确认: {action} {qmt_code} {volume}股 @ {price}"
         except Exception as e:
             logger.error(f"❌ [QMT银河] 下单失败: {e}")
             return False, f"下单失败: {e}"

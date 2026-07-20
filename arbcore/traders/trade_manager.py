@@ -137,14 +137,18 @@ class TradeManager:
                     resp = client.recv(1024).decode('utf-8').strip()
                     if resp == 'OK':
                         client.close()
+                        logger.info(f"[TradeManager] 银河QMT下单 {action} {symbol} {volume}@{price} → 回执OK")
                         return True, "银河QMT下单成功 (回执确认)"
                     client.close()
+                    logger.info(f"[TradeManager] 银河QMT下单 {action} {symbol} {volume}@{price} → 已发送(回执:{resp})")
                     return True, f"银河QMT下单指令已发送 (回执: {resp})"
                 except socket.timeout:
                     client.close()
+                    logger.info(f"[TradeManager] 银河QMT下单 {action} {symbol} {volume}@{price} → 已发送(fire-and-forget)")
                     return True, "银河QMT下单指令已发送 (fire-and-forget)"
                 except Exception:
                     client.close()
+                    logger.info(f"[TradeManager] 银河QMT下单 {action} {symbol} {volume}@{price} → 已发送(读回执异常)")
                     return True, "银河QMT下单指令已发送"
 
             except ConnectionRefusedError:
