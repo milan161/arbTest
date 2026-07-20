@@ -273,7 +273,7 @@ import client from '../api/client'
 const message = useMessage()
 const exportCode = ref('')
 const isPrivateVisible = ref(false)
-const quickCodes = ['162411', '164701', '164824']
+const quickCodes = ['162411', '164701', '164824', '161116']
 const exportShareDbLoading = ref(false)
 
 // 导入导出状态
