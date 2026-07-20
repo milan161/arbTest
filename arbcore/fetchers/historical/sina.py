@@ -81,11 +81,13 @@ class SinaHistoricalFetcher(BaseHistoricalFetcher):
 
     def _fetch_index(self, symbol: str, start_date, end_date) -> pd.DataFrame:
         """获取指数历史价格"""
-        # 转换符号 (如 .INX -> gb_inx)
+        # [AI-2026-07-20] 美股指数 .NDX/.INX 新浪认原样带点符号（如 .ndx），
+        # 不再转 gb_ 前缀（gb_ndx 新浪返回空，导致 .NDX/.INX 历史长期停更）。
+        # 实测 https://stock.finance.sina.com.cn/usstock/api/json_v2.php/
+        #        US_MinKService.getDailyK?symbol=.ndx 可正常返回多日历史。
         sina_code = symbol.lstrip('.')
         if sina_code in ['INX', 'NDX', 'DJI', 'IXIC']:
-            sina_code = f"gb_{sina_code.lower()}"
-            return self._fetch_us_share(sina_code, start_date, end_date)
+            return self._fetch_us_share(symbol.lower(), start_date, end_date)
         elif sina_code == 'SSEC':
             return self._fetch_a_share('000001', start_date, end_date, 'sh')
         elif sina_code == 'SZSC':
