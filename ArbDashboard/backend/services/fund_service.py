@@ -20,6 +20,8 @@ _FUNDS_WITH_SPOT_RATE: Set[str] = set()
 _FUNDS_SUB_CATEGORY: Dict[str, str] = {}
 # [AI-2026-07-20] YAML 中的 trade_etf（用于实时估值，如 SPY/QQQ，区别于 related_index .INX/.NDX）
 _YAML_TRADE_ETF: Dict[str, str] = {}
+# [AI-2026-07-20] YAML 中的 trade_future（纯期货/期货校准对冲标的，如 NK/MNQ/MES/MGC）
+_YAML_TRADE_FUTURE: Dict[str, str] = {}
 # [AI-2026-07-20] YAML 中的 valuation_portfolio（数据库 unified_fund_list 没有此列）
 _YAML_VALUATION_PORTFOLIO: Dict[str, list] = {}
 try:
@@ -33,9 +35,11 @@ try:
                     _FUNDS_WITH_SPOT_RATE.add(code)
                 if 'sub_category' in item:
                     _FUNDS_SUB_CATEGORY[code] = item['sub_category']
-                # [AI-2026-07-20] 缓存 trade_etf 和 valuation_portfolio（数据库无这些列）
+                # [AI-2026-07-20] 缓存 trade_etf / trade_future / valuation_portfolio（数据库无这些列）
                 if item.get('trade_etf'):
                     _YAML_TRADE_ETF[code] = item['trade_etf']
+                if item.get('trade_future'):
+                    _YAML_TRADE_FUTURE[code] = item['trade_future']
                 if item.get('valuation_portfolio'):
                     _YAML_VALUATION_PORTFOLIO[code] = item['valuation_portfolio']
     logger.info(f"[FX] 在岸价基金({len(_FUNDS_WITH_SPOT_RATE)}只): {_FUNDS_WITH_SPOT_RATE}")
@@ -2050,13 +2054,17 @@ class FundService:
             if not f_row:
                 return {"status": "error", "message": f"Fund {code} not found in database"}
 
-            trade_future = ""
-            if "原油" in str(f_row[0]) or "USO" in str(f_row[1]):
-                trade_future = "CL"
-            elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]):
-                trade_future = "GC"
-            elif "白银" in str(f_row[0]):
-                trade_future = "AG0"
+            # [AI-2026-07-20] trade_future 优先从 YAML 读取（NK/MNQ/MES/MGC 等），
+            # 名字推断仅作兜底（原油→CL / 金→GC / 白银→AG0）。
+            # 修复：QDII日本/纳指等原硬编码推断全落到空串，导致纯期货/期货校准功能失效。
+            trade_future = _YAML_TRADE_FUTURE.get(code, '')
+            if not trade_future:
+                if "原油" in str(f_row[0]) or "USO" in str(f_row[1]):
+                    trade_future = "CL"
+                elif "金" in str(f_row[0]) or "GLD" in str(f_row[1]):
+                    trade_future = "GC"
+                elif "白银" in str(f_row[0]):
+                    trade_future = "AG0"
 
             # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），避免用 related_index（.INX/.NDX）
             fund_cfg = {

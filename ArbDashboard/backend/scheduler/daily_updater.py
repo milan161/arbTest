@@ -722,12 +722,21 @@ class DailyUpdater(BaseApp):
             return
 
         symbols = set()
+        # [AI-2026-07-20] 美股指数符号白名单：这些是从新浪拉历史、且必须写入 index_history 的指数
+        # （.NDX/.INX 是 QDII欧美基金的 related_index，不在任何篮子/对冲组合里，
+        #  原先的 symbols 收集循环漏掉了它们，导致 index_history 里 .NDX/.INX 停更。
+        #  VPS 只提供当天数据，美股指数多天历史只能由新浪补，故此处补回。）
+        us_index_whitelist = {'.NDX', '.INX'}
         for fund in self.config.get('funds', []):
             for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
                 sym = str(item.get('symbol', '')).replace('^', '').split('-')[0]
                 # 港股代码(5位纯数字如00700)允许通过，其他纯数字跳过
                 if sym and (not sym.isdigit() or len(sym) == 5):
                     symbols.add(sym)
+            # 把基金的 related_index 美股指数也纳入回采（仅 .NDX/.INX）
+            ri = str(fund.get('related_index', '') or '').strip()
+            if ri and ri.upper() in us_index_whitelist:
+                symbols.add(ri)
 
         for sym in symbols:
             df = self.hist_manager.get_prices(sym, source="sina", start_date=start_date)
@@ -735,8 +744,11 @@ class DailyUpdater(BaseApp):
                 for _, row in df.iterrows():
                     date_str = row['date'].strftime('%Y-%m-%d')
                     self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=row['close'])
-                    # [AI-2026-07-20] 已删除：禁止将新浪价格写入 index_close（曾导致 ETF 价格冒充净值的假象）
-                    # index_close 只能通过 step11（从 index_history）或 step5b（从 VPS Yahoo NAV）写入
+                    # [AI-2026-07-20] 美股指数（.NDX/.INX）本身就是要写入 index_history 的指数，
+                    # 与"ETF 价格冒充净值"是两码事——ETF(XOP/GLD)只写 usa_etf_daily_prices，绝不写 index_history；
+                    # 美股指数只写 index_history（供 step11 静态估值读取），不写 usa_etf_daily_prices。
+                    if sym.upper() in us_index_whitelist:
+                        self.db.upsert_index_history(symbol=sym, date=date_str, close=row['close'])
                 self.logger.info(f"✅ [海外/指数] {sym} 行情同步完成")
 
         self.db.mark_access_synced(today_str, source='usa_etf_data')
@@ -1219,14 +1231,15 @@ class DailyUpdater(BaseApp):
                     if not nav or float(nav) <= 0:
                         continue
 
-                    # 回写 index_close（如果缺失）
+                    # [AI-2026-07-20] 始终用 index_history 的最新值覆盖 index_close，
+                    # 不再仅在为空时回写。这样手动修正 index_history 后重跑 step11 即可生效，
+                    # 无需额外 SQL 同步（旧逻辑若 index_close 已非空会跳过回写，导致修正不生效）。
                     if date in idx_data:
                         current_idx_close = idx_data[date]
-                        if existing_idx_close is None:
-                            cursor.execute(
-                                "UPDATE unified_fund_history SET index_close = ? "
-                                "WHERE fund_code = ? AND date = ?",
-                                (current_idx_close, fund_code, date))
+                        cursor.execute(
+                            "UPDATE unified_fund_history SET index_close = ? "
+                            "WHERE fund_code = ? AND date = ?",
+                            (current_idx_close, fund_code, date))
                     else:
                         current_idx_close = existing_idx_close
 

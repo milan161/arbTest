@@ -275,8 +275,9 @@ class MarketDataService:
         elif source == 'SINA':
             # 国际期货（CME 微合约 MGC/MCL/MES/MNQ 等）从新浪 hf_ API 直取
             import re
-            if re.match(r'^(MGC|MCL|MES|MNQ|GC|CL|SI|HG|ES|NQ)$', symbol):
-                return self._get_sina_futures_quote(symbol)
+        # [AI-2026-07-20] 加 NK（日经225期货）：新浪 hf_NK 有延期行情，富途无期货、IB 期货行情暂未购买
+        if re.match(r'^(MGC|MCL|MES|MNQ|GC|CL|SI|HG|ES|NQ|NK)$', symbol):
+            return self._get_sina_futures_quote(symbol)
             # 其他 SINA 源标的走 RealtimeMarketManager 兜底
             if symbol not in self.realtime_manager.symbols:
                 self.realtime_manager.subscribe([symbol])

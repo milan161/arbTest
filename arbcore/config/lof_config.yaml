@@ -1705,12 +1705,13 @@ funds:
   redemption_fee_rate: 0.5
   commission_rate: 0
 - code: '513000'
-  name: 易方达日经225
+  name: 易方达日经225ETF
   category: QDII日本
   rate_type: spot
   related_index: N225
   trade_etf: NKY
   trade_future: NK
+  data_source: woody
   holdings:
     equity_ratio: 93
   valuation_portfolio:
@@ -1720,12 +1721,13 @@ funds:
   redemption_fee_rate: 0.5
   commission_rate: 0
 - code: '159866'
-  name: 工银日经225
+  name: 华安日经225ETF
   category: QDII日本
   rate_type: spot
   related_index: N225
   trade_etf: NKY
   trade_future: NK
+  data_source: woody
   holdings:
     equity_ratio: 100
   valuation_portfolio:
@@ -1735,12 +1737,13 @@ funds:
   redemption_fee_rate: 0.5
   commission_rate: 0
 - code: '513520'
-  name: 华夏日经225
+  name: 工银日经225ETF
   category: QDII日本
   rate_type: spot
   related_index: N225
   trade_etf: NKY
   trade_future: NK
+  data_source: woody
   holdings:
     equity_ratio: 97
   valuation_portfolio:
@@ -1750,12 +1753,13 @@ funds:
   redemption_fee_rate: 0.5
   commission_rate: 0
 - code: '513880'
-  name: 华安日经225
+  name: 华安日经225ETF
   category: QDII日本
-  trade_etf: ''
+  trade_etf: NKY
   trade_future: NK
+  data_source: woody
   holdings:
-    equity_ratio: 97
+    equity_ratio: 91
   valuation_portfolio:
   - symbol: NKY
     weight: 100
