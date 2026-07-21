@@ -10,8 +10,8 @@ funds:
   name: 南方原油
   category: 黄金原油
   holdings:
-    equity_ratio: 89.69
-    cash_ratio: 10.31
+    equity_ratio: 89.5
+    cash_ratio: 10.5
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -22,17 +22,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 62.88
+    weight: 60.1
     anchor: EU
   - symbol: USO
-    weight: 19.8
+    weight: 24.17
     anchor: US
   - symbol: USO-JP
-    weight: 17.32
+    weight: 15.73
     anchor: JP
   trade_etf: USO
   trade_future: MCL
-  position: 89.69
+  position: 89.5
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -41,8 +41,8 @@ funds:
   name: 嘉实原油
   category: 黄金原油
   holdings:
-    equity_ratio: 87.97
-    cash_ratio: 12.03
+    equity_ratio: 87.53
+    cash_ratio: 12.47
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -88,17 +88,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 61.65
+    weight: 56.96
     anchor: EU
   - symbol: USO
-    weight: 36.33
+    weight: 42.79
     anchor: US
   - symbol: USO-JP
-    weight: 2.02
+    weight: 0.25
     anchor: JP
   trade_etf: USO
   trade_future: MCL
-  position: 87.97
+  position: 87.53
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -107,8 +107,8 @@ funds:
   name: 易方达原油
   category: 黄金原油
   holdings:
-    equity_ratio: 90.86
-    cash_ratio: 9.14
+    equity_ratio: 90.56
+    cash_ratio: 9.44
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -149,17 +149,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 57.01
+    weight: 52.43
     anchor: EU
   - symbol: USO
-    weight: 30.97
+    weight: 38.63
     anchor: US
   - symbol: USO-HK
-    weight: 12.02
+    weight: 8.94
     anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 90.86
+  position: 90.56
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -196,17 +196,17 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 75.68
-    cash_ratio: 24.32
+    equity_ratio: 75.46
+    cash_ratio: 24.54
   valuation_portfolio:
   - symbol: GLD
-    weight: 55.91
+    weight: 55.83
     anchor: US
   - symbol: USO-EU
-    weight: 42.42
+    weight: 43.0
     anchor: EU
   - symbol: USO
-    weight: 1.68
+    weight: 1.17
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
@@ -223,7 +223,7 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 75.68
+  position: 75.46
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -737,19 +737,19 @@ funds:
   trade_etf: XLE
   trade_future: ''
   holdings:
-    equity_ratio: 91.21
-    cash_ratio: 8.79
+    equity_ratio: 91.83
+    cash_ratio: 8.17
   valuation_portfolio:
   - symbol: XLE
-    weight: 89.58
+    weight: 90.01
     anchor: US
   - symbol: USO
-    weight: 10.42
+    weight: 9.99
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 91.21
+  position: 91.83
   sub_category: 黄金原油
   woody_supported: true
   data_source: woody
@@ -760,43 +760,43 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 90.0
-    cash_ratio: 10.0
+    equity_ratio: 94.0
+    cash_ratio: 6.0
   valuation_portfolio:
-  - symbol: TSM
-    weight: 14.79
-    anchor: US
-  - symbol: NVDA
-    weight: 14.73
+  - symbol: MU
+    weight: 13.61
     anchor: US
   - symbol: SNDK
-    weight: 13.94
+    weight: 13.48
     anchor: US
-  - symbol: MU
-    weight: 12.19
+  - symbol: 01888
+    weight: 13.3
     anchor: US
-  - symbol: '00700'
-    weight: 10.71
-    anchor: HK
-  - symbol: GOOGL
-    weight: 9.26
+  - symbol: 00992
+    weight: 11.96
+    anchor: US
+  - symbol: 00148
+    weight: 11.41
+    anchor: US
+  - symbol: 03690
+    weight: 9.25
     anchor: US
   - symbol: 09988
-    weight: 7.63
+    weight: 8.79
     anchor: US
-  - symbol: 00883
-    weight: 6.44
+  - symbol: NVDA
+    weight: 7.28
     anchor: US
-  - symbol: AVGO
-    weight: 5.68
+  - symbol: TSM
+    weight: 6.41
     anchor: US
-  - symbol: ASML
-    weight: 4.64
+  - symbol: AMD
+    weight: 4.52
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 90.0
+  position: 94.0
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -807,19 +807,19 @@ funds:
   trade_etf: SOXX
   trade_future: ''
   holdings:
-    equity_ratio: 89.56
-    cash_ratio: 10.44
+    equity_ratio: 90.41
+    cash_ratio: 9.59
   valuation_portfolio:
   - symbol: SOXX
-    weight: 77.11
+    weight: 76.48
     anchor: US
   - symbol: SZ159560
-    weight: 22.89
+    weight: 23.52
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 89.56
+  position: 90.41
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody

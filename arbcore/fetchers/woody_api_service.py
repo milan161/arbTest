@@ -148,7 +148,17 @@ class WoodyAPIService:
         today_str = datetime.now().strftime('%Y-%m-%d')
         if not isinstance(api_data, dict):
             return None
-            
+
+        # [AI-2026-07-21] 预加载基金类别映射，用于 CNYest 路由到正确汇率列
+        _fund_cats = {}
+        try:
+            _conn = db._get_conn()
+            for _fc, _cat in _conn.execute("SELECT fund_code, category FROM unified_fund_list").fetchall():
+                _fund_cats[_fc] = _cat
+            _conn.close()
+        except Exception:
+            pass
+
         for sym, f_data in api_data.items():
             if not isinstance(f_data, dict): continue
 
@@ -193,11 +203,19 @@ class WoodyAPIService:
                 except (ValueError, TypeError) as e:
                     logger.warning(f"⚠️ 解析 position 失败 {fund_code}: raw={raw_pos}, err={e}")
             
-            # 保存 Woody 提供的估值日汇率 (CNYest) 到汇率表 (可选的增强)
+            # [AI-2026-07-21] 保存 Woody 提供的估值日汇率 (CNYest) 到汇率表
+            # 修复：写入正确的汇率列——JPY基金→jpy_cny_mid, HKD基金→hkd_cny_mid, 其余→usd_cny_mid
+            # 旧bug：所有CNYest都写入usd_cny_mid，JPY基金的日元汇率覆盖了美元汇率
             if e_date and f_data.get('CNYest'):
                 try:
                     cny_est = float(f_data['CNYest'])
-                    db.upsert_exchange_rate(e_date, usd_cny_mid=cny_est)
+                    fc = _fund_cats.get(fund_code, '')
+                    if fc == 'QDII日本':
+                        db.upsert_exchange_rate(e_date, jpy_cny_mid=cny_est)
+                    elif fc == 'QDII亚洲':
+                        db.upsert_exchange_rate(e_date, hkd_cny_mid=cny_est)
+                    else:
+                        db.upsert_exchange_rate(e_date, usd_cny_mid=cny_est)
                 except Exception:
                     pass
             

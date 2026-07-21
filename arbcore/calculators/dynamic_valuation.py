@@ -124,9 +124,16 @@ class DynamicValuationCalculator:
                 except Exception as e:
                     logger.warning(f"获取 hedge 兜底数据失败 ({fund_code}): {e}")
             
-            # 补充底层 ETF 基准价格（精确日期优先，取不到则往前找最近一日）
+            # [AI-2026-07-21] 补充底层 ETF 基准价格：查询 fund_basket_weights 判断基金会是否为多篮子
+            # 有 basket 条目的基金（如161116→GLD+^GLD-EU）必须取 price（市场价格），矩阵公式需要真实价格变化率
+            # 无 basket 的单主ETF（如162411→XOP）取 netvalue（净值），因为 hedge 魔术公式不直接使用 base_price
+            basket_count = conn.execute(
+                "SELECT COUNT(*) FROM fund_basket_weights WHERE fund_code=?",
+                (fund_code,)
+            ).fetchone()[0]
+            _price_col = 'price' if basket_count > 0 else 'netvalue'
             etf_df = pd.read_sql(
-                "SELECT symbol, COALESCE(NULLIF(netvalue, 0), price) as price, date "
+                f"SELECT symbol, {_price_col} as price, date "
                 "FROM usa_etf_daily_prices WHERE date = ?", 
                 conn, params=(base_date,)
             )
@@ -138,33 +145,7 @@ class DynamicValuationCalculator:
                         base_row[sym[1:]] = r['price']
                     else:
                         base_row['^' + sym] = r['price']
-            # 兜底：对仍然缺失的 known ETF 取最近一条记录
-            try:
-                known_etfs = [s.strip() for s in (
-                    'XLE,USO,GLD,XOP,SPY,QQQ,INDA,XBI,XLK,SLV,AGG,BOTZ,ARKK,ARKG,'
-                    'SMH,SOXX,TLT,IWM,EEM,EWJ,HYG,LQD,GDX,GDXJ,^XLE-EU,^XLE-JP,'
-                    '^XLE-HK,^USO-EU,^USO-JP,^USO-HK,^GLD-EU,^GLD-JP,^GLD-HK,'
-                    '^INDA-EU,^INDA-JP,^INDA-HK'
-                ).split(',') if s and s not in base_row]
-                if known_etfs:
-                    placeholders = ','.join('?' for _ in known_etfs)
-                    fallback_df = pd.read_sql(
-                        f"SELECT symbol, COALESCE(NULLIF(netvalue, 0), price) as price, MAX(date) as md "
-                        f"FROM usa_etf_daily_prices "
-                        f"WHERE symbol IN ({placeholders}) AND price > 0 AND date <= ? "
-                        f"GROUP BY symbol",
-                        conn, params=(*known_etfs, base_date)
-                    )
-                    for _, r in fallback_df.iterrows():
-                        sym = r['symbol']
-                        if sym not in base_row or not base_row.get(sym):
-                            base_row[sym] = r['price']
-                            if sym.startswith('^'):
-                                base_row[sym[1:]] = r['price']
-                            else:
-                                base_row['^' + sym] = r['price']
-            except Exception:
-                pass
+            # [AI-2026-07-21 用户要求] 不兜底静默填充，数据缺失就让其缺失，真实暴露
 
             self._base_data_cache[fund_code] = base_row
             self._cache_timestamp[fund_code] = time.time()
