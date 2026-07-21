@@ -597,8 +597,10 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
             let title = key
             const priceMatch = key.match(/^(.+)_price$/)
             if (priceMatch) {
-                // [AI] 按照用户要求，海外 ETF 应该显示为净值，而不是价格
-                title = priceMatch[1] + '净值'
+                // [AI-2026-07-21] 单主ETF基金（如162411→XOP）显示净值；多篮子基金（如161116→GLD+^GLD-EU）显示价格
+                const firstRow = fundHistory.value.length > 0 ? fundHistory.value[0] : null
+                const isSingleEtf = firstRow !== null && 'is_single_etf' in firstRow ? firstRow.is_single_etf : true  // 旧后端无此字段时兼容
+                title = priceMatch[1] + (isSingleEtf ? '净值' : '价格')
             }
             baseCols.push({
                 title: title, key: key, width: 95, align: 'center',

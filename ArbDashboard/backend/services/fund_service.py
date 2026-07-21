@@ -1821,7 +1821,10 @@ class FundService:
                 except Exception as e:
                     logger.warning(f"[BondETF] 获取国债期货历史数据失败: {e}")
 
-            # [通用] 获取该基金跟踪的ETF历史价格（如162411→XOP，160719→GLD+^GLD-EU，501225→SOXX）
+            # [AI-2026-07-21] 获取该基金跟踪的ETF历史价格
+            # 单主ETF基金（如162411→XOP）显示净值（netvalue），列名"XOP净值"
+            # 多篮子基金（如161116→GLD+^GLD-EU）显示价格（price），列名"GLD价格/^GLD-EU价格"
+            yaml_trade_etf = _YAML_TRADE_ETF.get(fund_code, '')
             etf_price_map = {}  # {symbol: {date: {price, chg}}}
             try:
                 # 1) 从 related_index 获取主 ETF
@@ -1839,10 +1842,14 @@ class FundService:
                     if sym and sym not in etf_symbols:
                         etf_symbols.append(sym)
 
-                # 3) 逐个查询净值（仅 netvalue，禁止兜底 price）
+                # 判断：单主ETF（有yaml_trade_etf且仅此一个symbol）→ 显示净值；否则显示价格
+                is_single_etf = bool(yaml_trade_etf) and len(etf_symbols) == 1 and etf_symbols[0] == yaml_trade_etf
+                col_name = 'netvalue' if is_single_etf else 'price'
+
+                # 3) 逐个查询
                 for sym in etf_symbols:
                     etf_rows = conn.execute(
-                        "SELECT date, netvalue FROM usa_etf_daily_prices WHERE symbol=? AND netvalue IS NOT NULL AND netvalue > 0 ORDER BY date DESC",
+                        f"SELECT date, {col_name} FROM usa_etf_daily_prices WHERE symbol=? AND {col_name} IS NOT NULL AND {col_name} > 0 ORDER BY date DESC",
                         (sym,)
                     ).fetchall()
                     if etf_rows:
@@ -1880,7 +1887,6 @@ class FundService:
             # [AI-2026-07-20] 从 usa_etf_daily_prices.netvalue 获取ETF真实NAV（XOP/GLD等）
             # real_index_map 为空说明 index_history 无该 ETF 数据，从 usa_etf_daily_prices 补充
             usa_netvalue_map = {}
-            yaml_trade_etf = _YAML_TRADE_ETF.get(fund_code, '')
             if yaml_trade_etf and not real_index_map:
                 try:
                     nv_rows = conn.execute(
@@ -1970,6 +1976,7 @@ class FundService:
                             item[f'{etf_sym}_price'] = ed['price']
                             item[f'{etf_sym}_price_chg'] = ed.get('chg')
 
+                item['is_single_etf'] = is_single_etf
                 data_list.append(item)
 
             return data_list

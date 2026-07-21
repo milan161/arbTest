@@ -505,6 +505,9 @@ class DataFetcher:
     def fetch_jpy_cny_rate(self):
         """从新浪财经获取 JPY/CNY 日元兑人民币实时汇率
         
+        [AI-2026-07-21] 修复：Sina 返回每1日元汇率（如 0.0416），
+        乘以100转换为每100日元单位（如 4.16），与 VPS 数据和 DB 惯例一致。
+        
         Returns:
             dict { '日期', '日元汇率', '来源' } 或 None
         """
@@ -520,9 +523,9 @@ class DataFetcher:
             if response.status_code == 200 and 'hq_str_fx_sjpycny' in response.text:
                 values = response.text.split('"')[1].split(',')
                 if len(values) >= 18:
-                    rate = float(values[1])  # 第2个字段 = 实时汇率
+                    rate = float(values[1]) * 100  # [AI-2026-07-21] ×100 转为每100日元单位
                     date = values[17]
-                    logger.info(f"JPY/CNY 日元汇率: {rate} (日期: {date})")
+                    logger.info(f"JPY/CNY 日元汇率: {rate} (每100日元, 日期: {date})")
                     return {
                         '日期': date,
                         'jpy_cny_rate': rate,
