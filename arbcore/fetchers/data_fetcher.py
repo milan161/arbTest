@@ -14,19 +14,29 @@ import os
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # 导入Woody网页爬虫
 try:
-    # 当作为模块被外部调用时使用相对导入
-    from .woody_web_crawler import WoodyWebCrawler
-except ImportError:
-    # 当直接运行当前文件进行测试时，退回绝对导入
-    from woody_web_crawler import WoodyWebCrawler
+    try:
+        from .woody_web_crawler import WoodyWebCrawler
+    except (ImportError, ValueError):
+        try:
+            from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
+        except ImportError:
+            from woody_web_crawler import WoodyWebCrawler
+except ImportError as e:
+    logger.warning(f"⚠️ 无法导入woody_web_crawler: {e}")
+    logger.warning("   网页爬虫功能将不可用，但基础数据获取功能正常")
+    class WoodyWebCrawler:
+        def __init__(self, *args, **kwargs):
+            logger.warning("⚠️ WoodyWebCrawler未安装，相关功能不可用")
+        def get_data(self, *args, **kwargs):
+            return None
 
 # 禁用urllib3的警告
 requests.packages.urllib3.disable_warnings()
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 class DataFetcher:
@@ -568,31 +578,38 @@ class DataFetcher:
         try:
             nav_headers = {'Referer': 'http://fundf10.eastmoney.com/'}
             nav_count = 0
-            
-            # 只需获取第1页(最近100个交易日)，足够覆盖30天的日更需求
-            for page in range(1, 2):
+
+            # [修复] 循环获取所有页面的数据，确保获取最新净值
+            page = 1
+            while True:
                 nav_url = f"http://api.fund.eastmoney.com/f10/lsjz?fundCode={fund_code}&pageIndex={page}&pageSize=100"
                 try:
                     nav_response = requests.get(nav_url, headers=nav_headers, timeout=10, verify=False, proxies={"http": None, "https": None})
                     nav_data = nav_response.json()
-                    
+
                     if nav_data.get('Data') and nav_data['Data'].get('LSJZList'):
                         nav_list = nav_data['Data']['LSJZList']
                         if not nav_list:
                             break  # 数据已取完
-                            
+
                         for item in nav_list:
                             date = item.get('FSRQ')
                             nav = item.get('DWJZ')
                             if date and nav:
                                 nav_dict[date] = float(nav)
                                 nav_count += 1
+
+                        # [修复] 如果这一页数据少于100条，说明已经是最后一页
+                        if len(nav_list) < 100:
+                            break
                     else:
                         break
+
+                    page += 1  # 继续获取下一页
                 except Exception as e:
                     logger.error(f"第 {page} 页获取净值失败: {e}")
                     break
-                    
+
             logger.info(f"成功获取到 {nav_count} 条净值记录！")
         except Exception as e:
             logger.error(f"获取净值数据时出错: {e}")
