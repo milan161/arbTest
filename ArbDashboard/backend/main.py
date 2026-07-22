@@ -289,7 +289,7 @@ except (ImportError, NameError) as e:
 
 # [AI-2026-07-17] SmartOpenMonitor（智能开仓/平仓监控器）
 try:
-    from private.smart_open_monitor import start_monitor as _smart_start, stop_monitor as _smart_stop, get_monitor_status as _smart_status
+    from private.smart_open_monitor import start_monitor as _smart_start, stop_monitor as _smart_stop, get_monitor_status as _smart_status, update_monitor_target as _smart_update_target
     # 注入依赖的全局实例
     _smart_mds = market_data_service
     _smart_fs = fund_service
@@ -1669,6 +1669,21 @@ async def smart_monitor_status():
     if not _smart_status:
         return {"status": "error", "message": "SmartOpenMonitor not loaded"}
     return _smart_status()
+
+# [AI-2026-07-21] 运行时更新目标溢价率（不重启 Monitor）
+@app.patch("/api/private/smart_monitor/update_target")
+async def smart_monitor_update_target(request: Request):
+    if not _smart_update_target:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "SmartOpenMonitor not loaded"})
+    data = await request.json()
+    fund_code = data.get("fund_code", "")
+    new_premium = data.get("target_premium", None)
+    if new_premium is None:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "缺少 target_premium"})
+    success, msg = _smart_update_target(fund_code, float(new_premium))
+    if success:
+        return {"status": "ok", "message": msg}
+    return JSONResponse(status_code=400, content={"status": "error", "message": msg})
 
 # --- Lazy Simulator API (weekend mock data) ---
 @app.get("/api/private/lazy_simulate/status")

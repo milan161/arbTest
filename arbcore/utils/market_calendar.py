@@ -24,12 +24,16 @@ logger = logging.getLogger(__name__)
 # exchange_calendars 延迟加载（首次使用才初始化）
 # ---------------------------------------------------------------------------
 _HAS_EXCHANGE_CALENDARS = False
+_CAL_CHECK_DONE = False   # 【AI-2026-07-22】防止缺失依赖时每次调用都重新尝试并刷日志
 _cal_cache: dict = {}
 
 def _ensure_exchange_calendars():
-    global _HAS_EXCHANGE_CALENDARS
+    global _HAS_EXCHANGE_CALENDARS, _CAL_CHECK_DONE
     if _HAS_EXCHANGE_CALENDARS:
         return
+    if _CAL_CHECK_DONE:
+        return  # 已尝试过（成功或失败），不再重复
+    _CAL_CHECK_DONE = True
     try:
         import exchange_calendars as ec
         # 验证核心交易所可用

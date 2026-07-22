@@ -660,7 +660,7 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
                         "INSERT OR REPLACE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
                         (sym, today_str, data['price'], 'sina')
                     )
-                    logger.info(f"[INDEX-HISTORY] 写入 {sym} {today_str} close={data['price']}")
+                    logger.debug(f"[INDEX-HISTORY] 写入 {sym} {today_str} close={data['price']}")
             conn_write.commit()
             conn_write.close()
         except Exception as e:
@@ -859,7 +859,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                                 for original_sym in sina_to_syms[code]:
                                     if original_sym not in res:
                                         res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                        logger.info(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                        logger.debug(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
                     # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
                     elif var_name.startswith('var hq_str_int_'):
                         code = var_name.replace('var hq_str_', '')
@@ -868,7 +868,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                                 if original_sym not in res:
                                     if len(parts) >= 4:
                                         res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                        logger.info(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                        logger.debug(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
         except Exception as e:
             logger.warning(f"预取新浪指数兜底异常: {e}")
 
@@ -1019,7 +1019,7 @@ class FundService:
                 before = len(funds_df)
                 funds_df = funds_df[~funds_df['category'].isin(paused_set)]
                 if len(funds_df) < before:
-                    logger.info(f"[DASHBOARD-FILTER] 过滤暂停分类，{before} -> {len(funds_df)} 只基金")
+                    logger.debug(f"[DASHBOARD-FILTER] 过滤暂停分类，{before} -> {len(funds_df)} 只基金")
 
             # ── 2. 批量获取 fund_purchase_status 状态费率（AKShare 日更）──
             status_df = pd.read_sql_query(
@@ -1066,7 +1066,7 @@ class FundService:
                 filtered_funds = funds_df[~funds_df['category'].isin(paused_set)]
                 indices_to_fetch = filtered_funds['related_index'].dropna().tolist()
                 if indices_to_fetch:
-                    logger.info(f"[INDEX-FILTER] 暂停分类 {sorted(paused_set)}，仅抓取 {len(indices_to_fetch)} 个指数")
+                    logger.debug(f"[INDEX-FILTER] 暂停分类 {sorted(paused_set)}，仅抓取 {len(indices_to_fetch)} 个指数")
                 else:
                     indices_to_fetch = []
             else:
@@ -1547,7 +1547,7 @@ class FundService:
                         fund_dict[k] = None
 
                 result.append(fund_dict)
-            logger.info(f"Dashboard数据生成完成，共 {len(result)} 只基金")
+            logger.debug(f"Dashboard数据生成完成，共 {len(result)} 只基金")
             _dashboard_cache.set(cache_key, result)
             return result
         except Exception as e:
