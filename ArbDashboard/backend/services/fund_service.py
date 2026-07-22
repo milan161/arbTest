@@ -78,11 +78,38 @@ def _get_realtime_spot_fx() -> float:
         return _SPOT_FX_CACHE['rate']
     return 0.0
 
+# [修复] 确保服务和项目根目录在Python路径中（解决 woody_web_crawler / bond_etf_valuation 等模块导入失败）
+_current_file = os.path.abspath(__file__)
+_services_dir = os.path.dirname(_current_file)
+_backend_dir = os.path.dirname(_services_dir)
+_project_dir = os.path.dirname(_backend_dir)
+_arbcore_parent = os.path.dirname(_project_dir)
+
+for _path in [_services_dir, _backend_dir, _project_dir, _arbcore_parent]:
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
 # [债券ETF] 引入债券ETF估值服务
-from services.bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
+try:
+    try:
+        from .bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
+    except (ImportError, ValueError):
+        try:
+            from services.bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
+        except ImportError:
+            from bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
+except ImportError as e:
+    logger.error(f"❌ 无法导入 bond_etf_valuation: {e}")
+    BOND_ETF_META = {}
+    def get_bond_etf_valuation(*args, **kwargs):
+        logger.warning("⚠️ bond_etf_valuation 未加载，相关功能不可用")
+        return None
 
 # 债券ETF代码集合
-BOND_ETF_CODES = set(BOND_ETF_META.keys())
+try:
+    BOND_ETF_CODES = set(BOND_ETF_META.keys())
+except:
+    BOND_ETF_CODES = set()
 
 # ============================================================
 # [V8.1] 轻量级 Dashboard 缓存（5秒 TTL）
@@ -1166,12 +1193,17 @@ class FundService:
                     # 不能是 iloc[0]（当日最新价，与现价相同会导致涨跌幅≈0 或错乱）。
                     # valid_prices 按日期降序（iloc[0]=当日），昨收取 iloc[1]，不足则用 iloc[0] 兜底。
                     if not valid_prices.empty:
+                        # [修复] prev_close 取前一交易日收盘价(iloc[1])；历史最新价(iloc[0])用于兜底 price
+                        metrics['price'] = valid_prices.iloc[0]['price']  # 最新价格（历史最新一天）
                         if len(valid_prices) >= 2:
-                            metrics['prev_close'] = valid_prices.iloc[1]['price']
+                            metrics['prev_close'] = valid_prices.iloc[1]['price']  # 前一交易日收盘
                         else:
                             metrics['prev_close'] = valid_prices.iloc[0]['price']
                     else:
                         metrics['prev_close'] = 0
+
+                    # [修复] 确保 prev_close 不会被后面的实时价格覆盖
+                    _temp_prev_close = metrics.get('prev_close', 0)
 
                 # ── 4. 实时价格（从预取的 quotes_dict 取，避免逐只序列调用） ──
                 if self.market_data_service and code in quotes_dict:
@@ -1188,6 +1220,10 @@ class FundService:
                                 metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
                     except Exception as e:
                         logger.error(f"Error getting realtime quote for {code}: {e}")
+
+                # [修复] 恢复 prev_close（防止被实时价格逻辑意外覆盖）
+                if _temp_prev_close > 0:
+                    metrics['prev_close'] = _temp_prev_close
 
                 # ── [债券ETF] 511880/511360/511520 估值 ──
                 if code in BOND_ETF_CODES:
