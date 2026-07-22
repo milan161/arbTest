@@ -1,9 +1,10 @@
 # encoding: gbk
 # =================================================================
-# Test_Yinhe_qmt_ServerV5.py (QMT策略) v5.2.0
+# Test_Yinhe_qmt_ServerV5.py (QMT策略) v5.2.1
 # 日期: 2026-07-17
 # 变更日志:
 #   v5.2.0 (2026-07-17) - DEAL成交广播 + ORDER状态广播 + QUERY_POSITION命令 + position cache
+#   v5.2.1 (2026-07-21) - CANCEL,sysid 外部撤单命令（SmartMonitor 撤单重下用）
 #   v5.1.3 (2026-06-16) - position/account回调静默, 日志只显示下单/成交/错误
 #   v5.1.2 (2026-06-16) - position_callback: 60s时间去重(解决同代码多行仓位互相覆盖刷屏)
 #   v5.0   (2026-06-15) - rewrite from v4.3, main-thread queue mode, QMT thread compliant
@@ -38,7 +39,7 @@ import threading
 import time
 
 # ==================== 版本 ====================
-SERVER_VERSION = '5.2.0 (2026-07-17)'
+SERVER_VERSION = '5.2.1 (2026-07-21)'
 
 # ==================== 共享状态（builtins）====================
 # QMT对每个回调赋予独立命名空间，模块级全局变量在各空间中不同
@@ -212,6 +213,14 @@ def client_handler(conn, addr):
                     _broadcast("SHUTDOWN\n")
                     # bump socket_gen to make old threads exit
                     s['socket_gen'][0] += 1
+
+                elif action == 'CANCEL' and len(parts) >= 2:
+                    # [AI-2026-07-21] 撤单：CANCEL,sysid → enqueue, main thread executes cancel()
+                    _enqueue({
+                        'kind': 'cancel',
+                        'sysid': parts[1].strip(),
+                    })
+                    _safe_send(conn, b'OK\n')
 
                 elif action == 'SUBSCRIBE' and len(parts) > 1:
                     new_codes = [p.strip() for p in parts[1:] if p.strip()]

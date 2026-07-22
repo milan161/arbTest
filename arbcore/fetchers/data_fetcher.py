@@ -281,7 +281,7 @@ class DataFetcher:
                         currency_pair = values[9]      # 货币对
                         date = values[17]              # 日期
                         
-                        logger.info(f"API接口 - 人民币在岸价: {spot_rate} (更新时间: {update_time})")
+                        logger.debug(f"API接口 - 人民币在岸价: {spot_rate} (更新时间: {update_time})")
                         result = {
                             '日期': date,
                             '时间': update_time,
@@ -383,7 +383,7 @@ class DataFetcher:
         
         返回: dict { '日期', '离岸价', '来源' } 或 None
         """
-        logger.info("从新浪财经获取离岸人民币 CNH 汇率")
+        logger.debug("从新浪财经获取离岸人民币 CNH 汇率")
         try:
             url = "https://hq.sinajs.cn/list=fx_susdcnh"
             headers = {
@@ -419,7 +419,7 @@ class DataFetcher:
         
         返回: dict { 'date', 'price', 'prev_settle', 'settle', 'vwap', 'volume', '持仓量', '来源' } 或 None
         """
-        logger.info("从新浪获取 AG0 期货实时数据")
+        logger.debug("从新浪获取 AG0 期货实时数据")
         try:
             url = "http://hq.sinajs.cn/list=nf_AG0"
             headers = {
@@ -454,7 +454,7 @@ class DataFetcher:
         
         返回: dict { 'date', 'price', 'prev_close', '来源' } 或 None
         """
-        logger.info("从新浪获取 SI 期货实时数据")
+        logger.debug("从新浪获取 SI 期货实时数据")
         try:
             url = "http://hq.sinajs.cn/list=hf_SI"
             headers = {
@@ -481,7 +481,7 @@ class DataFetcher:
         
         返回: dict { 'date', 'rate', '来源' } 或 None
         """
-        logger.info("从新浪获取 CNH 汇率实时数据")
+        logger.debug("从新浪获取 CNH 汇率实时数据")
         try:
             url = "http://hq.sinajs.cn/list=fx_susdcnh"
             headers = {

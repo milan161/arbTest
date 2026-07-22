@@ -39,6 +39,8 @@ class TradeManager:
 
         # [AI-2026-07-17] 银河 QMT 成交监听（方案 A：实时广播 + 方案 B：轮询保底）
         self._deal_listeners = []      # list[callable(code, vol, price)]
+        # [AI-2026-07-21] 订单状态回调（ORDER 广播），供 SmartMonitor 捕获 QMT sysid 用于撤单
+        self._order_listeners = []     # list[callable(code, sysid, status)]
         self._listener_running = False
         self._listener_thread = None
         self._listener_sock = None
@@ -218,6 +220,38 @@ class TradeManager:
         """注册成交回调。callback(code, vol, price) — 方案 A：实时 DEAL 广播"""
         self._deal_listeners.append(callback)
 
+    def on_order(self, callback):
+        """注册订单状态回调。callback(code, sysid, status) — ORDER 广播，用于捕获 QMT sysid 供撤单使用"""
+        self._order_listeners.append(callback)
+
+    def cancel_order(self, broker: str, sysid: str) -> tuple[bool, str]:
+        """按 QMT sysid 撤单。返回 (success, message)"""
+        if broker != 'yinhe_qmt':
+            return False, f"cancel_order 暂不支持 {broker}"
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(3.0)
+            client.connect(('127.0.0.1', 8888))
+            client.sendall(f"CANCEL,{sysid}\n".encode('utf-8'))
+            try:
+                client.settimeout(1.5)
+                resp = client.recv(1024).decode('utf-8').strip()
+                client.close()
+                if resp == 'OK':
+                    logger.info(f"[TradeManager] 银河QMT撤单 sysid={sysid} → 回执OK")
+                    return True, "撤单指令已发送 (回执OK)"
+                client.close()
+                logger.warning(f"[TradeManager] 银河QMT撤单 sysid={sysid} → 回执:{resp}，撤单可能未生效")
+                return False, f"撤单可能未生效 (回执:{resp})"
+            except socket.timeout:
+                client.close()
+                logger.info(f"[TradeManager] 银河QMT撤单 sysid={sysid} → 已发送(fire-and-forget)")
+                return True, "撤单指令已发送 (fire-and-forget)"
+        except ConnectionRefusedError:
+            return False, "银河QMT 8888 未连接，无法撤单"
+        except Exception as e:
+            return False, f"银河QMT撤单异常: {e}"
+
     def query_position(self, code):
         """方案 B：查询单只持仓（短连接，超时 3s）。
         返回 dict {code, volume, price} 或 None"""
@@ -306,7 +340,7 @@ class TradeManager:
                     pass
 
     def _dispatch_deal_line(self, line):
-        """解析收到的消息行，分发 DEAL 给已注册回调"""
+        """解析收到的消息行，分发 DEAL/ORDER 给已注册回调"""
         if line.startswith('DEAL,'):
             parts = line.split(',')
             if len(parts) >= 4:
@@ -321,3 +355,15 @@ class TradeManager:
                             logger.warning(f"[TradeManager] deal回调异常: {e}")
                 except (ValueError, IndexError):
                     pass
+        # [AI-2026-07-21] 分发 ORDER 广播给已注册回调（SmartMonitor 捕获 QMT sysid 用）
+        elif line.startswith('ORDER,'):
+            parts = line.split(',')
+            if len(parts) >= 4:
+                code = parts[1]
+                sysid = parts[2]
+                status = parts[3]
+                for cb in self._order_listeners:
+                    try:
+                        cb(code, sysid, status)
+                    except Exception as e:
+                        logger.warning(f"[TradeManager] order回调异常: {e}")

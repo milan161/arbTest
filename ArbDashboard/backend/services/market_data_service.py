@@ -325,7 +325,7 @@ class MarketDataService:
 
             if last_price > 0:
                 source = '新浪 hf_' if used_symbol == symbol else f'新浪 hf_({used_symbol})'
-                logger.info(f"[MDS] {symbol} 最新价 {last_price} (来源 {source})")
+                logger.debug(f"[MDS] {symbol} 最新价 {last_price} (来源 {source})")
                 return {
                     'symbol': symbol,
                     'price': last_price,
@@ -449,7 +449,7 @@ class MarketDataService:
             ratio = si_cny_per_kg / ag0_prev_settle
             rt_val = nav_t1 * ratio
             
-            logger.info(f"[SI估值] SI={si_usd_oz}$/oz CNH={cnh_rate} → {si_cny_per_kg:.2f}¥/kg "
+            logger.debug(f"[SI估值] SI={si_usd_oz}$/oz CNH={cnh_rate} → {si_cny_per_kg:.2f}¥/kg "
                         f"AG0昨结算={ag0_prev_settle} ratio={ratio:.6f} NAV={nav_t1} → val={rt_val:.4f}")
             
             return {

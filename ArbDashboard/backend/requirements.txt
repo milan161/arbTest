@@ -13,3 +13,6 @@ paramiko
 chinese-calendar
 openpyxl
 python-multipart
+selenium              # 爬虫模块
+webdriver-manager     # selenium webdriver 管理
+exchange-calendars    # 交易所日历（美股/港股/日股）
