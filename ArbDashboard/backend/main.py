@@ -149,17 +149,17 @@ def _print_data_source_banners():
 
     sources = [
         ("tdx",    "通达信",  _is_fetcher_connected(active.get("tdx")),
-         "请点击顶部'通达信'按钮启动"),
+         "请点击左侧'通达信'按钮启动"),
         ("guojin", "国金QMT", _is_fetcher_connected(active.get("guojin")),
-         "请点击顶部'国金QMT'按钮启动"),
+         "请点击左侧'国金QMT'按钮启动"),
         ("galaxy", "银河QMT", _is_fetcher_connected(active.get("galaxy")),
-         "请点击顶部'银河QMT'按钮启动"),
+         "请点击左侧'银河QMT'按钮启动"),
         ("ib",     "IB 盈透证券",
          market_data_service.ib_reader is not None and getattr(market_data_service.ib_reader, 'connected', False),
-         "请点击顶部'IB'按钮启动"),
+         "请点击左侧'IB'按钮启动"),
         ("futu",   "富途 OpenD",
          market_data_service.futu_reader is not None and not getattr(market_data_service.futu_reader, 'disabled', True),
-         "请点击顶部'富途'按钮启动"),
+         "请点击左侧'富途'按钮启动"),
     ]
 
     for key, label, available, hint in sources:
@@ -388,7 +388,7 @@ async def lifespan(app: FastAPI):
             _print_data_source_banners()
             
             # [V10.0] 启动完成提示：引导用户手动连接需要的券商客户端
-            system_status.add_milestone("INFO", "💡 如需实时行情，请点击顶部对应按钮连接券商客户端（通达信/IB/银河QMT/国金QMT/富途）")
+            system_status.add_milestone("INFO", "💡 如需实时行情，请点击对应按钮连接券商客户端")
             
             # [AI-2026-07-07] 启动时自动检测并连接 IB Gateway（如果已在运行）
             try:
@@ -655,7 +655,40 @@ async def get_dashboard(watchlist: str = None, category: str = None):
         system_status.add_milestone("ERROR", msg)
         return JSONResponse(status_code=500, content={"status": "error", "message": msg})
 
+@app.get("/api/market/futures")
+async def get_futures_prices():
+    """获取实时期货价格（MGC黄金、MCL原油、NK日经225）- 直接从新浪获取实时数据"""
+    try:
+        raw = market_data_service.data_fetcher.get_futures_settlement_data()
+        result = {}
+        for item in raw:
+            sym = item.get('symbol', '')
+            if sym in ('MGC', 'MCL', 'NK', 'GC', 'CL'):
+                # 优先 close（最新价），兜底 settle（结算价）
+                val = item.get('close') or item.get('settle') or '-'
+                result[sym] = val
+        # 微合约无数据时用母合约兜底
+        if not result.get('MGC') and result.get('GC'):
+            result['MGC'] = result['GC']
+        if not result.get('MCL') and result.get('CL'):
+            result['MCL'] = result['CL']
+        # 确保三个符号都有返回值（无数据时显示 '-'）
+        for sym in ('MGC', 'MCL', 'NK'):
+            if sym not in result:
+                result[sym] = '-'
+        return {"status": "ok", "data": result}
+    except Exception as e:
+        logger.error(f"Futures Prices Error: {e}")
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/market/overview")
+async def get_market():
+    try:
+        data = fund_service.get_market_overview(market_data_service=market_data_service)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Market Overview Error: {e}")
+        return {"status": "error", "message": str(e)}
 async def get_market():
     try:
         data = fund_service.get_market_overview(market_data_service=market_data_service)
