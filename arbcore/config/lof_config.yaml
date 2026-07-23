@@ -1676,6 +1676,7 @@ funds:
   category: QDII日本
   rate_type: spot
   related_index: N225
+  pos_ratio: 0.93
   trade_etf: NKY
   trade_future: NK
   data_source: woody
@@ -1692,6 +1693,7 @@ funds:
   category: QDII日本
   rate_type: spot
   related_index: N225
+  pos_ratio: 1.0
   trade_etf: NKY
   trade_future: NK
   data_source: woody
@@ -1708,6 +1710,7 @@ funds:
   category: QDII日本
   rate_type: spot
   related_index: N225
+  pos_ratio: 0.97
   trade_etf: NKY
   trade_future: NK
   data_source: woody
@@ -1735,6 +1738,7 @@ funds:
   commission_rate: 0
   valuation_method: ''
   rate_type: spot
+  pos_ratio: 0.91
   related_index: N225
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
