@@ -655,22 +655,32 @@ class DailyUpdater(BaseApp):
         conn_ufl.close()
         fund_categories = {str(r[0]): (r[1] or '') for r in all_fund_rows if r[0]}
         all_codes = list(fund_categories.keys())
-        # [AI-2026-07-13] 所有基金统一用前1交易日预期（QDII欧美/黄金原油 T+1 发布，无需 T-2）
+        # [AI-2026-07-23] QDII欧美/黄金原油（美股基金）净值在北京时间上午尚未发布，
+        # 按 expected = T-2 判定，下午 3 点后才改为 T-1，避免无谓的东财抓取。
         T2_CATEGORIES = {'黄金原油', 'QDII欧美'}
+        # 北京时间下午 3 点后，美股基金 T-1 净值通常已发布
+        NAV_CUTOFF_HOUR = 15
 
         for code in all_codes:
             if not code: continue
             # 获取东财净值 ---
-            def get_prev_trading_day(dt):
-                t = dt - timedelta(days=1)
+            def get_prev_trading_day(dt, n=1):
+                t = dt - timedelta(days=n)
                 while t.weekday() >= 5: t -= timedelta(days=1)
                 return t
                 
             t_1_date = get_prev_trading_day(datetime.now())
+            t_2_date = get_prev_trading_day(datetime.now(), n=2)
             
-            # 预期最新净值日期：QDII欧美/黄金原油 T+1 发布，周一可获取上周五净值
+            # 预期最新净值日期：
+            #   QDII欧美/黄金原油：上午用 T-2，下午 3 点后用 T-1
+            #   其他基金：始终 T-1
             category = fund_categories.get(code, '')
-            expected_nav_date = t_1_date.strftime('%Y-%m-%d')
+            now_hour = datetime.now().hour
+            if category in T2_CATEGORIES and now_hour < NAV_CUTOFF_HOUR:
+                expected_nav_date = t_2_date.strftime('%Y-%m-%d')
+            else:
+                expected_nav_date = t_1_date.strftime('%Y-%m-%d')
             
             conn = self.db._get_conn()
             cursor = conn.cursor()
@@ -1387,10 +1397,9 @@ class DailyUpdater(BaseApp):
         self.step2_5_sync_yaml_with_latest_factors()
         self.step3_fetch_exchange_rate()
         # [AI-2026-06-28] 价格+净值分开，nav-only 只拉净值
+        # [AI-2026-07-23] 删除 _step4_fix_holiday_prices() — 数据管道已稳定，全量历史价格核对不再必要
         self._step4_fetch_prices()
         self.step4_fetch_lof_market()
-        # [AI-2026-06-28] 假期价格修复只在完整流水线跑，不干扰 nav-only
-        self._step4_fix_holiday_prices()
         self.step4_5_sync_fund_purchase_status()
         self.step5_fetch_usa_market_data()
         self.step5b_sync_vps_index_data()

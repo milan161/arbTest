@@ -130,7 +130,8 @@ def _ensure_daily_snapshot(conn):
         fx_df = pd.read_sql(
             "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn
         )
-        if not fx_df.empty and fx_df.iloc[0]['usd_cny_mid'] > 0:
+        # [AI-2026-07-23] 防御 None 与 int 比较崩溃
+        if not fx_df.empty and pd.notna(fx_df.iloc[0]['usd_cny_mid']) and fx_df.iloc[0]['usd_cny_mid'] > 0:
             _daily_snapshot['usd_cny_mid'] = fx_df.iloc[0]['usd_cny_mid']
         # 加载实时在岸价（用于 spot rate 基金）
         _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
@@ -621,10 +622,8 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
         elif ex == 'XHKG':
             closed = now.hour >= 16
         elif ex == 'JPX':
-            # [AI-2026-07-20] 日本指数(N225)通过新浪全球指数API获取 int_nikkei，24/7返回最新收盘价
-            # 日本股市 08:00-14:00 CST (09:00-15:00 JST)，但收盘后新浪仍有当日收盘数据
-            # 设为始终可API获取，用于写入 index_history 供 T-1 静态估值使用
-            closed = False
+            # [AI-2026-07-22] 日本指数(N225)不再需要实时行情，直接始终判定为收盘以读取 index_history 的 Yahoo 数据兜底
+            closed = True
         else:
             # 其他交易所（如美股指数）默认不在此API获取
             closed = True
@@ -655,9 +654,10 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
             db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'database', 'arb_master.db')
             conn_write = sqlite3.connect(db_path)
             for sym, data in api_results.items():
-                if sym in ('N225', '.INX', '.NDX') and data.get('price', 0) > 0:
+                if sym in ('.INX', '.NDX') and data.get('price', 0) > 0:
+                    # [AI-2026-07-22] 将 INSERT OR REPLACE 改为 INSERT OR IGNORE，防止新浪实时数据覆盖 Yahoo 历史数据
                     conn_write.execute(
-                        "INSERT OR REPLACE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
                         (sym, today_str, data['price'], 'sina')
                     )
                     logger.debug(f"[INDEX-HISTORY] 写入 {sym} {today_str} close={data['price']}")
@@ -775,10 +775,6 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
             # [V10.13] 美股指数（.INX, .NDX, .SP500-45 等）走新浪获取
             sina_req = f"s_sh{clean_sym}"
             ret_code = clean_sym
-        # [AI-2026-07-09] 日经225(N225) — 新浪全球指数接口 int_nikkei
-        elif clean_sym in ('N225', 'NKY', 'NIKKEI'):
-            sina_req = "int_nikkei"
-            ret_code = "N225"
         else:
             continue
             
@@ -821,9 +817,6 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                     missing_sina_reqs.add(f"s_sz{ret_code}")
                 else:
                     missing_sina_reqs.add(f"s_sh{ret_code}")
-            # [AI-2026-07-09] 日经225等全球指数 — 直接用新浪全球指数接口名
-            elif ret_code == 'N225':
-                missing_sina_reqs.add("int_nikkei")
             else:
                 missing_sina_reqs.add(f"rt_hk{ret_code}")
                 
@@ -1377,7 +1370,7 @@ class FundService:
                                 current_fx = _daily_snapshot.get('usd_cny_mid')
                                 # [V11.0] 在岸价基金：用快照里的在岸价（启动时已从新浪加载）
                                 if code in _FUNDS_WITH_SPOT_RATE:
-                                    spot_fx = _daily_snapshot.get('usd_cny_spot', 0)
+                                    spot_fx = _daily_snapshot.get('usd_cny_spot') or 0
                                     if spot_fx > 0:
                                         current_fx = spot_fx
                                         logger.debug(f"[{code}] 使用快照在岸价: {spot_fx}")
