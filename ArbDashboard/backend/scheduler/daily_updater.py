@@ -1271,29 +1271,34 @@ class DailyUpdater(BaseApp):
                         continue
 
                     # 从 index_history 获取基准日指数值（与 current_idx_close 同源），避免 step5 写入的 ETF 价格污染
-                    if prev_date not in idx_data:
+                    # [AI-2026-07-23] 修复：如果 prev_date 是休市日（无指数数据），往前找最近有数据的交易日
+                    _lookup_date = prev_date
+                    if _lookup_date not in idx_data:
+                        _sorted_dates = sorted([d for d in idx_data.keys() if d < _lookup_date], reverse=True)
+                        _lookup_date = _sorted_dates[0] if _sorted_dates else None
+                    if _lookup_date is None:
                         continue
-                    prev_idx_close = idx_data[prev_date]
+                    prev_idx_close = idx_data[_lookup_date]
                     if not prev_idx_close or float(prev_idx_close) <= 0:
                         continue
 
-                    # 汇率比率
+                    # 汇率比率（用 _lookup_date 对齐指数基准日）
                     fx_ratio = 1.0
                     if fx_type != 'none':
                         if fx_type == 'usd':
                             cursor.execute("SELECT usd_cny_mid FROM exchange_rate WHERE date = ?", (date,))
                             curr_fx = cursor.fetchone()
-                            cursor.execute("SELECT usd_cny_mid FROM exchange_rate WHERE date = ?", (prev_date,))
+                            cursor.execute("SELECT usd_cny_mid FROM exchange_rate WHERE date = ?", (_lookup_date,))
                             prev_fx = cursor.fetchone()
                         elif fx_type == 'jpy':
                             cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date = ?", (date,))
                             curr_fx = cursor.fetchone()
-                            cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date = ?", (prev_date,))
+                            cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date = ?", (_lookup_date,))
                             prev_fx = cursor.fetchone()
                         else:  # hkd
                             cursor.execute("SELECT hkd_cny_mid FROM exchange_rate WHERE date = ?", (date,))
                             curr_fx = cursor.fetchone()
-                            cursor.execute("SELECT hkd_cny_mid FROM exchange_rate WHERE date = ?", (prev_date,))
+                            cursor.execute("SELECT hkd_cny_mid FROM exchange_rate WHERE date = ?", (_lookup_date,))
                             prev_fx = cursor.fetchone()
 
                         curr_val = curr_fx[0] if curr_fx and curr_fx[0] else None

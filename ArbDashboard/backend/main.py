@@ -1672,6 +1672,21 @@ async def smart_monitor_status():
         return {"status": "error", "message": "SmartOpenMonitor not loaded"}
     return _smart_status()
 
+# [AI-2026-07-23] 获取 SmartMonitor 订单历史
+@app.get("/api/private/smart_monitor/history/{direction}")
+async def smart_monitor_history(direction: str):
+    """获取指定方向的订单历史记录 (direction: open/close)"""
+    from private.smart_open_monitor import get_all_monitors
+    monitors = get_all_monitors()
+    result = {}
+    for fc, m in monitors.items():
+        if m.direction == direction:
+            result[fc] = {
+                'direction': m.direction,
+                'order_history': m.order_history[-20:],  # 最近 20 条
+            }
+    return {"status": "ok", "data": result}
+
 # [AI-2026-07-21] 运行时更新目标溢价率（不重启 Monitor）
 @app.patch("/api/private/smart_monitor/update_target")
 async def smart_monitor_update_target(request: Request):
