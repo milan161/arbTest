@@ -489,7 +489,8 @@ class DailyUpdater(BaseApp):
         except Exception as e:
             self.logger.error(f"❌ [Level 1] 离岸价直连兜底失败: {e}")
 
-        # [AI-2026-07-10] JPY/CNY 日元汇率
+        # [AI-2026-07-23] JPY/CNY 日元汇率——优先使用国家外汇管理局中间价
+        # [AI-2026-07-10] 原新浪在岸价仅作兜底
         try:
             conn_jpy = self.db._get_conn()
             has_jpy = conn_jpy.execute(
@@ -497,13 +498,23 @@ class DailyUpdater(BaseApp):
             ).fetchone()[0] > 0
             conn_jpy.close()
             if not has_jpy:
-                jpy_data = data_fetcher.fetch_jpy_cny_rate()
-                if jpy_data:
-                    jpy_date = pd.to_datetime(str(jpy_data.get('日期', today_str))).strftime('%Y-%m-%d')
-                    jpy_rate = jpy_data.get('jpy_cny_rate')
-                    if jpy_rate is not None:
-                        self.db.upsert_exchange_rate(jpy_date, jpy_cny_mid=jpy_rate)
-                        self.logger.info(f"✅ [Level 1] JPY/CNY 入库: {jpy_date} -> {jpy_rate}")
+                # 优先从国家外汇管理局中间价获取（与 USD/HKD 同源）
+                official_rates = data_fetcher.fetch_official_exchange_rate()
+                jpy_rate = official_rates.get('jpy_cny_mid') if official_rates else None
+                jpy_date = official_rates.get('日期', today_str) if official_rates else today_str
+                if jpy_rate is not None:
+                    jpy_date_str = pd.to_datetime(str(jpy_date)).strftime('%Y-%m-%d')
+                    self.db.upsert_exchange_rate(jpy_date_str, jpy_cny_mid=jpy_rate)
+                    self.logger.info(f"✅ [Level 1] JPY/CNY 中间价入库: {jpy_date_str} -> {jpy_rate}")
+                else:
+                    # 兜底：新浪在岸价
+                    jpy_data = data_fetcher.fetch_jpy_cny_rate()
+                    if jpy_data:
+                        jpy_date = pd.to_datetime(str(jpy_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                        jpy_rate = jpy_data.get('jpy_cny_rate')
+                        if jpy_rate is not None:
+                            self.db.upsert_exchange_rate(jpy_date, jpy_cny_mid=jpy_rate)
+                            self.logger.info(f"✅ [Level 1] JPY/CNY 兜底入库(新浪): {jpy_date} -> {jpy_rate}")
         except Exception as e:
             self.logger.error(f"❌ [Level 1] JPY/CNY 直连兜底失败: {e}")
 

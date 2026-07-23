@@ -35,11 +35,19 @@ class DynamicValuationCalculator:
 
         conn = self.db._get_conn()
         try:
+            # [AI-2026-07-23] 根据基金类别选择汇率字段：QDII日本用 jpy_cny_mid，其余用 usd_cny_mid
+            cat_df = pd.read_sql(
+                "SELECT category FROM unified_fund_list WHERE fund_code = ?",
+                conn, params=(fund_code,)
+            )
+            category_fx = str(cat_df.iloc[0]['category']).strip() if not cat_df.empty else ''
+            fx_col = 'jpy_cny_mid' if category_fx == 'QDII日本' else 'usd_cny_mid'
+
             # 联表查询：净值 + 因子 + 汇率
-            query = """
-                SELECT 
-                    a.date, COALESCE(a.nav, b.nav) as nav, a.price as close, 
-                    c.usd_cny_mid as exchange_rate,
+            query = f"""
+                SELECT
+                    a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
+                    c.{fx_col} as exchange_rate,
                     b.position, b.hedge, b.calibration
                 FROM unified_fund_history a
                 LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
@@ -87,8 +95,8 @@ class DynamicValuationCalculator:
                         (*sym_list, base_date)
                     ).fetchone()[0]
                     if etf_count == 0:
-                        # 基准日无ETF数据 → 找最近一个有净值+ETF数据的日期
-                        logger.info(f"  ⏭️ [{fund_code}] 基准日 {base_date} 无美股ETF数据（美国假期），向前回溯...")
+                        # 基准日无ETF数据 → 向前回溯找最近一个有数据的日期（不一定是假期，可能只是数据未采集）
+                        logger.info(f"  ⏭️ [{fund_code}] 基准日 {base_date} 无美股ETF数据，向前回溯最近有效日期...")
                         corrected_df = pd.read_sql(f"""
                             SELECT a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
                                    c.usd_cny_mid as exchange_rate,

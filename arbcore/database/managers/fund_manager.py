@@ -213,6 +213,11 @@ class FundManager(BaseManager):
                         item.get('pos_ratio', 0.95),
                         item.get('target_type', 'ETF')
                     ))
+                # [AI-2026-07-23] 删除 YAML 中已不存在的基金记录（防止残留导致 HSI 等指数继续被抓取)
+                yaml_codes = [item['code'] for item in fund_list]
+                if yaml_codes:
+                    placeholders = ','.join(['?'] * len(yaml_codes))
+                    conn.execute(f"DELETE FROM unified_fund_list WHERE fund_code NOT IN ({placeholders})", yaml_codes)
                 conn.commit()
                 logger.info(f"Successfully synced {len(fund_list)} unified items to database.")
             except Exception as e:

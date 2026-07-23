@@ -189,7 +189,8 @@ class DataFetcher:
                 
                 logger.info(f"找到 {len(records)} 条汇率记录")
                 
-                # 遍历所有记录，查找美元和港币兑人民币汇率
+                # 遍历所有记录，查找美元、港币和日元兑人民币汇率
+                # [AI-2026-07-23] 新增日元中间价：所有静态估值统一使用中间价，禁用新浪在岸价
                 res_rates = {}
                 for record in records:
                     if 'vrtName' in record and 'price' in record:
@@ -199,9 +200,11 @@ class DataFetcher:
                             res_rates['usd'] = float(rate)
                         elif '港' in currency_name or 'HKD' in currency_name:
                             res_rates['hkd'] = float(rate)
+                        elif '日元' in currency_name or 'JPY' in currency_name or '日圆' in currency_name:
+                            res_rates['jpy'] = float(rate)
 
                 if 'usd' in res_rates:
-                    logger.info(f"国家外汇管理局 - USD: {res_rates.get('usd')}, HKD: {res_rates.get('hkd')}")
+                    logger.info(f"国家外汇管理局 - USD: {res_rates.get('usd')}, HKD: {res_rates.get('hkd')}, JPY: {res_rates.get('jpy')}")
                     # 规范化日期格式为 YYYY-MM-DD
                     raw_date = date_info.split(' ')[0]
                     try:
@@ -215,6 +218,7 @@ class DataFetcher:
                         '人民币中间价': res_rates.get('usd'),
                         'usd_cny_mid': res_rates.get('usd'),
                         'hkd_cny_mid': res_rates.get('hkd'),
+                        'jpy_cny_mid': res_rates.get('jpy'),
                         '来源': '国家外汇管理局'
                     }
 
@@ -503,15 +507,32 @@ class DataFetcher:
         return None
     
     def fetch_jpy_cny_rate(self):
-        """从新浪财经获取 JPY/CNY 日元兑人民币实时汇率
+        """获取 JPY/CNY 日元兑人民币汇率
         
-        [AI-2026-07-21] 修复：Sina 返回每1日元汇率（如 0.0416），
-        乘以100转换为每100日元单位（如 4.16），与 VPS 数据和 DB 惯例一致。
+        [AI-2026-07-23] 修复：优先使用国家外汇管理局中间价，新浪在岸价仅作兜底。
+        所有静态估值必须使用中间价，新浪在岸价与官方中间价偏差可达 0.15%。
         
         Returns:
-            dict { '日期', '日元汇率', '来源' } 或 None
+            dict { '日期', 'jpy_cny_rate', '来源' } 或 None
         """
-        logger.info("从新浪财经获取 JPY/CNY 日元汇率")
+        # 1. 优先从国家外汇管理局中间价获取（与 USD/HKD 同源）
+        logger.info("获取 JPY/CNY 日元汇率（优先官方中间价）")
+        try:
+            official_rates = self.fetch_official_exchange_rate()
+            jpy_rate = official_rates.get('jpy_cny_mid') if official_rates else None
+            if jpy_rate is not None:
+                date_str = official_rates.get('日期', '')
+                logger.info(f"JPY/CNY 官方中间价: {jpy_rate} (日期: {date_str})")
+                return {
+                    '日期': date_str,
+                    'jpy_cny_rate': jpy_rate,
+                    '来源': '国家外汇管理局'
+                }
+        except Exception as e:
+            logger.warning(f"官方中间价获取失败，回退到新浪: {e}")
+
+        # 2. 兜底：新浪在岸价
+        logger.info("从新浪财经获取 JPY/CNY 日元汇率（兜底）")
         try:
             url = "https://hq.sinajs.cn/list=fx_sjpycny"
             headers = {
@@ -800,7 +821,7 @@ class DataFetcher:
         
         # [AI-2026-07-02] 美股期货 + 内盘期货（AG0 沪银）分开请求
         # 美股期货 URL
-        url = "http://hq.sinajs.cn/list=hf_MGC,hf_GC,hf_CL,hf_NQ,hf_ES,hf_SI"
+        url = "http://hq.sinajs.cn/list=hf_MGC,hf_GC,hf_CL,hf_NQ,hf_ES,hf_SI,hf_NK"
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
             response.encoding = 'gbk'

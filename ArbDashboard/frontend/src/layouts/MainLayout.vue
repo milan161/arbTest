@@ -42,7 +42,15 @@
           <template #icon><n-icon><Bot /></n-icon></template>
           {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
         </n-tag>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <!-- [AI-2026-07-23] 期货实时价格（侧边栏永远可见，在客户端按钮上方） -->
+      <div v-if="!collapsed" style="margin-bottom: 6px; padding: 4px 6px; background: #f8fafc; border-radius: 4px; font-size: 12px; line-height: 1.6;">
+        <div style="display: flex; justify-content: space-between; color: #64748b;">
+          <span>MGC <strong style="color: #1e293b;">{{ formatFuturesPrice(futures.MGC) }}</strong></span>
+          <span>MCL <strong style="color: #1e293b;">{{ formatFuturesPrice(futures.MCL) }}</strong></span>
+          <span>NK <strong style="color: #1e293b;">{{ formatFuturesPrice(futures.NK) }}</strong></span>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
           <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round
             :style="{ fontWeight: 'bold', cursor: hasTdx ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
             @click="reconnectWithGuard(hasTdx, '通达信', reconnectTdx)">
@@ -67,14 +75,14 @@
               <template #icon><n-icon><Zap /></n-icon></template>
               富途
            </n-tag>
-          <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
-            :style="{ fontWeight: 'bold', cursor: hasGuojin ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
-            @click="reconnectWithGuard(hasGuojin, '国金QMT', reconnectGuojin)">
-            <template #icon><n-icon><Zap /></n-icon></template>
-            国金QMT
-          </n-tag>
-        </div>
-        <n-text style="font-size: 10px; font-weight: bold; color: #888; display: block; text-align: center; margin-top: 4px;">点击切换启动/停止</n-text>
+           <n-tag :type="hasGuojin ? 'success' : 'warning'" size="small" round
+             :style="{ fontWeight: 'bold', cursor: hasGuojin ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
+             @click="reconnectWithGuard(hasGuojin, '国金QMT', reconnectGuojin)">
+             <template #icon><n-icon><Zap /></n-icon></template>
+             国金QMT
+           </n-tag>
+         </div>
+         <n-text style="font-size: 10px; font-weight: bold; color: #888; display: block; text-align: center; margin-top: 4px;">点击切换启动/停止</n-text>
       </div>
     </n-layout-sider>
     <n-layout>
@@ -139,6 +147,32 @@ const marketStore = useMarketStore()
 
 const { engineRunning } = storeToRefs(appStore)
 const { hasTdx, hasIb, hasGalaxy, hasGuojin, hasFutu, hasFutuNoData } = storeToRefs(marketStore)
+
+// [AI-2026-07-23] 期货实时价格（MGC黄金、MCL原油、NK日经225）
+const futures = ref({ MGC: '-', MCL: '-', NK: '-' })
+let futuresTimer: any = null
+
+const formatFuturesPrice = (val: any) => {
+  if (val === '-' || val === null || val === undefined) return '-'
+  const num = parseFloat(val)
+  if (isNaN(num)) return '-'
+  // 大数（NK）显示1位小数，小数（MCL）显示2位，其他1位
+  if (num >= 1000) return num.toFixed(1)
+  if (num < 100) return num.toFixed(2)
+  return num.toFixed(1)
+}
+
+const fetchFutures = async () => {
+  try {
+    const res = await fetch('/api/market/futures')
+    const data = await res.json()
+    if (data.status === 'ok') {
+      futures.value = data.data
+    }
+  } catch (e) {
+    console.error('获取期货价格失败', e)
+  }
+}
 
 // ===== Reconnect 引擎状态 =====
 const refreshStatus = () => marketStore.fetchOverview()
@@ -213,10 +247,13 @@ onMounted(() => {
   // [AI-2026-07-15] 定期刷新数据源连接状态，避免 IB/富途退出后标签仍显示绿色
   marketStore.fetchOverview()
   setInterval(() => marketStore.fetchOverview(), 30000)
+  // [AI-2026-07-23] 期货价格 5 秒轮询
+  fetchFutures()
+  futuresTimer = setInterval(fetchFutures, 5000)
 })
 
 onUnmounted(() => {
-  // cleanup handled by interval reference
+  if (futuresTimer) clearInterval(futuresTimer)
 })
 
 function renderIcon(icon: any) {
@@ -273,7 +310,7 @@ const menuOptions = [
 .sidebar-footer { padding: 10px; border-top: 1px solid #edf1f7; background: #fbfdff; }
 :deep(.n-menu-item-content--selected) { background-color: #eff6ff !important; }
 :deep(.n-menu-item-content--selected .n-menu-item-content-header a) { color: #2563eb !important; }
-:deep(.n-menu-item-content) { border-radius: 8px; margin: 2px 8px; color: #526173; font-weight: 650; }
+:deep(.n-menu-item-content) { border-radius: 8px; margin: 1px 8px; color: #526173; font-weight: 650; padding-top: 6px; padding-bottom: 6px; }
 .nav-alert-bar {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: #92400e;

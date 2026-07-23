@@ -15,6 +15,7 @@ import logging
 # 屏蔽 IBAPI 底层的 INFO 级别刷屏日志
 logging.getLogger('ibapi.client').setLevel(logging.WARNING)
 logging.getLogger('ibapi.wrapper').setLevel(logging.WARNING)
+logging.getLogger('ibapi.utils').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +266,7 @@ class IBReader(EWrapper, EClient):
                     self.sources[sym] = "订阅请求中..."
                     # 💡 核心修复：初始化时间戳，给予长连接 60 秒的建立宽限期，防止开局就误触兜底机制
                     self.last_tick_time[sym] = time.time()
-                    print(f"[IBReader] [INFO] 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
+                    logger.debug(f"[IBReader] 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
             
             # 2. 安全兜底看门狗 (Watchdog) - 检查长连接是否生效
             current_timestamp = time.time()

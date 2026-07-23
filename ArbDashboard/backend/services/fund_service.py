@@ -119,6 +119,7 @@ _valuation_meta_cache = DashboardCache(ttl=5.0)
 _daily_snapshot = {
     'usd_cny_mid': None,
     'usd_cny_spot': None,
+    'jpy_cny_mid': None,
     'loaded': False,
 }
 
@@ -133,12 +134,19 @@ def _ensure_daily_snapshot(conn):
         # [AI-2026-07-23] 防御 None 与 int 比较崩溃
         if not fx_df.empty and pd.notna(fx_df.iloc[0]['usd_cny_mid']) and fx_df.iloc[0]['usd_cny_mid'] > 0:
             _daily_snapshot['usd_cny_mid'] = fx_df.iloc[0]['usd_cny_mid']
+        # [AI-2026-07-23] 加载日元中间价（QDII日本基金用）
+        try:
+            fx_df_all = pd.read_sql("SELECT usd_cny_mid, jpy_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn)
+            if not fx_df_all.empty and pd.notna(fx_df_all.iloc[0]['jpy_cny_mid']) and fx_df_all.iloc[0]['jpy_cny_mid'] > 0:
+                _daily_snapshot['jpy_cny_mid'] = fx_df_all.iloc[0]['jpy_cny_mid']
+        except Exception:
+            pass
         # 加载实时在岸价（用于 spot rate 基金）
         _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
         if _daily_snapshot['usd_cny_spot'] <= 0:
             logger.warning("[SNAPSHOT] 在岸价获取失败，将用中间价兜底（周末/非交易时段可能如此）")
         _daily_snapshot['loaded'] = True
-        logger.info(f"[SNAPSHOT] usd_cny_mid={_daily_snapshot['usd_cny_mid']}, usd_cny_spot={_daily_snapshot['usd_cny_spot']}")
+        logger.info(f"[SNAPSHOT] usd_cny_mid={_daily_snapshot['usd_cny_mid']}, usd_cny_spot={_daily_snapshot['usd_cny_spot']}, jpy_cny_mid={_daily_snapshot['jpy_cny_mid']}")
     except Exception as e:
         logger.warning(f"[SNAPSHOT] 加载汇率失败: {e}")
 
@@ -1221,6 +1229,38 @@ class FundService:
                     metrics['rt_val'] = None
                     metrics['rt_premium'] = None
 
+                # [AI-2026-07-23] QDII日本基金：NK期货实时估值
+                if category == 'QDII日本' and metrics.get('nav', 0) > 0:
+                    try:
+                        nk_quote = self.market_data_service.get_realtime_quote('NK') if self.market_data_service else None
+                        nk_current = float(nk_quote.get('price', 0)) if nk_quote else 0.0
+                        if nk_current > 0:
+                            cursor = conn.cursor()
+                            # NK 基准结算价
+                            cursor.execute("SELECT date, settle_price FROM futures_daily WHERE symbol='NK' AND settle_price > 0 ORDER BY date DESC LIMIT 1")
+                            nk_row = cursor.fetchone()
+                            nk_base = float(nk_row[1]) if nk_row else 0.0
+                            nk_base_date = nk_row[0] if nk_row else None
+                            # 基准日 JPY/CNY 汇率
+                            fx_base = 0.0
+                            if nk_base_date:
+                                cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date=? AND jpy_cny_mid > 0", (nk_base_date,))
+                                fxb = cursor.fetchone()
+                                fx_base = float(fxb[0]) if fxb else 0.0
+                            # 当前 JPY/CNY 汇率
+                            cursor.execute("SELECT jpy_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1")
+                            fx_row = cursor.fetchone()
+                            fx_current = float(fx_row[0]) if fx_row else 0.0
+                            if nk_base > 0 and fx_current > 0 and fx_base > 0:
+                                pos = float(fund.get('pos_ratio', 0.95))
+                                nav = metrics['nav']
+                                rt_val = nav * ((1 - pos) + pos * (nk_current / nk_base) * (fx_current / fx_base))
+                                metrics['rt_val'] = round(rt_val, 4)
+                                if metrics.get('price', 0) > 0:
+                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                    except Exception as e:
+                        logger.error(f"[QDII日本] 实时估值计算失败 {code}: {e}")
+
                 # 尝试实时计算估值 (仅非债券ETF已有，此处保留原逻辑)
                 try:
                     if code == '161226':
@@ -1363,11 +1403,17 @@ class FundService:
                         
                         if fund_cfg:
                             # 获取最新汇率
-                            current_fx = None 
+                            current_fx = None
                             try:
                                 # [V10.1] 汇率当天不变，直接读内存
                                 _ensure_daily_snapshot(conn)
-                                current_fx = _daily_snapshot.get('usd_cny_mid')
+                                # [AI-2026-07-23] QDII日本基金使用日元中间价
+                                if category == 'QDII日本':
+                                    current_fx = _daily_snapshot.get('jpy_cny_mid')
+                                    if not current_fx or current_fx <= 0:
+                                        logger.warning(f"[{code}] jpy_cny_mid 不可用，跳过实时估值")
+                                else:
+                                    current_fx = _daily_snapshot.get('usd_cny_mid')
                                 # [V11.0] 在岸价基金：用快照里的在岸价（启动时已从新浪加载）
                                 if code in _FUNDS_WITH_SPOT_RATE:
                                     spot_fx = _daily_snapshot.get('usd_cny_spot') or 0
@@ -2111,11 +2157,15 @@ class FundService:
                 except Exception as e:
                     logger.error(f"Failed to calculate missing hedge: {e}")
 
-            # 获取最新汇率
-            fx_df = pd.read_sql(
-                "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn
-            )
-            latest_fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else 7.0
+            # [AI-2026-07-23] 根据基金类别选择汇率字段
+            meta_cat_df = pd.read_sql("SELECT category FROM unified_fund_list WHERE fund_code=?", conn, params=(code,))
+            meta_category = str(meta_cat_df.iloc[0]['category']).strip() if not meta_cat_df.empty else ''
+            if meta_category == 'QDII日本':
+                fx_df = pd.read_sql("SELECT jpy_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn)
+                latest_fx = float(fx_df.iloc[0]['jpy_cny_mid']) if not fx_df.empty else 4.16
+            else:
+                fx_df = pd.read_sql("SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn)
+                latest_fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else 7.0
 
             # 获取最新实时行情 (用于标的 ETF 价格和期货价格)
             portfolio = fund_cfg.get('valuation_portfolio', [])
