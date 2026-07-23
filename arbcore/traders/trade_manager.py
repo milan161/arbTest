@@ -327,7 +327,7 @@ class TradeManager:
                     except Exception:
                         break
             except ConnectionRefusedError:
-                logger.info("[TradeManager] 银河QMT 8888 未就绪，5s后重试")
+                logger.debug("[TradeManager] 银河QMT 8888 未就绪，5s后重试")
                 time.sleep(5)
             except Exception as e:
                 logger.warning(f"[TradeManager] 监听线程异常: {e}")

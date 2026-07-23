@@ -1658,36 +1658,6 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证工业4.0指数
-- code: '160140'
-  name: 美国REIT精选LOF
-  category: QDII欧美
-  related_index: VNQ
-  pos_ratio: 0.95
-  data_source: other
-  holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
-  sub_category: 指数
-- code: '160125'
-  name: 南方香港LOF
-  category: QDII欧美
-  related_index: HSI
-  pos_ratio: 0.95
-  data_source: other
-  holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
-  sub_category: 指数
-- code: '501300'
-  name: 美元债LOF
-  category: QDII欧美
-  related_index: AGG
-  pos_ratio: 0.95
-  data_source: other
-  holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
-  sub_category: 指数
 - code: '159561'
   name: 德国ETF嘉实
   category: QDII欧美
