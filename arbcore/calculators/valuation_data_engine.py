@@ -15,9 +15,92 @@
 # 这就是 woody EstNetValue 的 arSrc 注入模式：估值函数只认 {symbol: 现价}。
 
 from typing import Optional, List, Dict, Any
+import os
 
 # 区域后缀：^USO-EU / ^GLD-JP / ^HSI-HK 去掉后缀得到基础代码
 _REGION_SUFFIXES = ('-EU', '-JP', '-HK')
+
+# ─────────────────────────────────────────────────────────────
+# [AI-2026-07-27] 估值类型路由：由 lof_config.yaml `valuation_routing` 节驱动
+# yaml 缺失该节时用 _DEFAULT_ROUTING 兜底（与 yaml 中内容保持一致）。
+# hedge 语义（2026-07-27 用 woody API JSON 数值核对）：
+#   hedge = calibration / position（含仓位）；calibration = 基准价×基准汇率/净值（不含仓位）；
+#   hedge 计价标的因基金而异（162411=XOP、161125=SPY、161130=QQQ、513000=NKY期货），
+#   故是否可用取决于「当前估值路径取的价格标的」是否与 hedge 计价标的一致——由本路由表决策。
+# ─────────────────────────────────────────────────────────────
+_DEFAULT_ROUTING = {
+    'methods': {
+        '':             {'static_hedge': True,  'dynamic_hedge': True},
+        'etf':          {'static_hedge': True,  'dynamic_hedge': True},
+        'basket':       {'static_hedge': False, 'dynamic_hedge': False},
+        'index':        {'static_hedge': False, 'dynamic_hedge': True},
+        'equity_asia':  {'static_hedge': False, 'dynamic_hedge': False},
+        'lof_domestic': {'static_hedge': False, 'dynamic_hedge': False},
+    },
+    'category_fallback': {
+        'QDII日本': 'index',
+        'QDII亚洲': 'equity_asia',
+        '国内LOF': 'lof_domestic',
+        '现金管理': 'lof_domestic',
+    },
+}
+
+_routing_cache = None
+
+
+def load_valuation_routing() -> Dict[str, Any]:
+    """从 lof_config.yaml 读取 valuation_routing 节（模块级缓存；失败则用内置默认）。"""
+    global _routing_cache
+    if _routing_cache is not None:
+        return _routing_cache
+    routing = _DEFAULT_ROUTING
+    try:
+        import yaml as _yaml
+        cfg_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'lof_config.yaml')
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            cfg = _yaml.safe_load(f)
+        r = cfg.get('valuation_routing') if isinstance(cfg, dict) else None
+        if isinstance(r, dict) and isinstance(r.get('methods'), dict):
+            routing = {
+                'methods': {str(k): dict(v) for k, v in r['methods'].items() if isinstance(v, dict)},
+                'category_fallback': dict(r.get('category_fallback') or {}),
+            }
+    except Exception:
+        pass  # yaml 不可读时静默用默认表（默认表与 yaml 内容一致）
+    _routing_cache = routing
+    return routing
+
+
+def resolve_method(valuation_method: str, category: str = '') -> str:
+    """基金未显式配置 valuation_method（空串）时，按 category 兜底路由。"""
+    m = (valuation_method or '').strip()
+    if m:
+        return m
+    routing = load_valuation_routing()
+    return routing.get('category_fallback', {}).get((category or '').strip(), '')
+
+
+def hedge_allowed(valuation_method: str, category: str = '', mode: str = 'static') -> bool:
+    """查询该基金在 static/dynamic 路径下是否允许消费 hedge 因子（魔法公式）。"""
+    routing = load_valuation_routing()
+    m = resolve_method(valuation_method, category)
+    rule = routing.get('methods', {}).get(m)
+    if rule is None:
+        rule = routing.get('methods', {}).get('', {})
+    key = 'static_hedge' if mode == 'static' else 'dynamic_hedge'
+    return bool(rule.get(key, False))
+
+
+def _clean_float(value, fallback=None):
+    """[AI-2026-07-27] 健壮的数值清洗：None / NaN(float或numpy) / 非法值 → fallback。
+    修复原 `hasattr(x, 'isna')` 判断对 float('nan') / numpy.nan 无效导致 NaN 毒化公式的隐患。"""
+    try:
+        f = float(value)
+        if f == f:  # NaN != NaN
+            return f
+    except (TypeError, ValueError):
+        pass
+    return fallback
 
 
 def resolve_base_symbol(full_symbol: str) -> str:
@@ -39,21 +122,36 @@ def assemble_dynamic_components(
     装配实时估值的输入。
 
     参数：
-      fund_cfg      : 基金配置（含 valuation_portfolio / hedging_portfolio / code）
+      fund_cfg      : 基金配置（含 valuation_portfolio / hedging_portfolio / code / category / valuation_method）
       base_data     : get_base_data() 返回的 T-1 基准（nav/exchange_rate/position/hedge/各ETF基准价）
       current_prices: 调用方已取到的实时价 {基础代码: 现价}，如 {'XOP': 110.2, 'NKY': 38000.0}
                       —— QDII日本 由调用方把 NK 期货价注入到 'NKY'（或对应 portfolio symbol）。
+
+    [AI-2026-07-27] hedge 路由改为 yaml valuation_routing 驱动（dynamic_hedge 列）：
+      - 实时路径取的是 portfolio 交易标的价（SPY/QQQ/XOP…），与 woody hedge 计价标的一致，
+        故 index 类（161125/161130）实时允许魔法公式（与旧 valuation_method != 'basket' 行为一致）。
+      - 仅当 portfolio 恰为 1 个组件时才携带 hedge（魔法公式仅对单组件成立）。
+      - 组件基准价缺失但实时价可得时仍保留组件（魔法公式不需要基准价，矩阵路径会自然跳过）。
 
     返回：
       { 'components': [...], 'fx_base': float, 'fx_now': float, 'hedge': float|None, 'ok': bool }
     """
     portfolio = fund_cfg.get('valuation_portfolio', []) or fund_cfg.get('hedging_portfolio', [])
-    position = base_data.get('position')
-    if position is None or (hasattr(position, 'isna') and position.isna()):
-        position = fund_cfg.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
-    fx_base = base_data.get('exchange_rate')
+    position = _clean_float(
+        base_data.get('position'),
+        fund_cfg.get('holdings', {}).get('equity_ratio', 100.0) / 100.0,
+    )
+    fx_base = _clean_float(base_data.get('exchange_rate'))
     fx_now = None  # 由调用方在 calculate 时单独传入
-    hedge = base_data.get('hedge')
+
+    # hedge 路由（yaml 驱动）：dynamic 列 + 单组件守卫
+    hedge = None
+    if len(portfolio) == 1 and hedge_allowed(
+        fund_cfg.get('valuation_method', ''), fund_cfg.get('category', ''), mode='dynamic'
+    ):
+        h = _clean_float(base_data.get('hedge'))
+        if h is not None and h > 0:
+            hedge = h
 
     components = []
     for p in portfolio:
@@ -63,11 +161,11 @@ def assemble_dynamic_components(
         c_price = current_prices.get(base_sym) or 0
         if not c_price or c_price <= 0:
             c_price = b_price  # 实时缺失则退化用基准价（与旧逻辑一致）
-        if b_price and c_price > 0:
+        if c_price and c_price > 0:
             components.append({
                 'symbol': full_sym,
                 'current_price': float(c_price),
-                'base_price': float(b_price),
+                'base_price': float(b_price or 0),
                 'weight': float(p.get('weight', 0)) / 100.0,
             })
 
@@ -88,6 +186,7 @@ def assemble_static_components(
     portfolio: List[Dict],
     related_index: str = '',
     valuation_method: str = '',
+    category: str = '',
 ) -> Dict[str, Any]:
     """
     装配静态估值（单点）的输入。
@@ -97,20 +196,22 @@ def assemble_static_components(
       portfolio      : 基金持仓列表
       related_index : 跟踪指数代码（QDII日本=N225、QDII亚洲=HSI 等）；空表示无
       valuation_method : 来自 lof_config.yaml，决定 hedge 是否可用
+      category       : 基金类别；valuation_method 为空串时按 yaml category_fallback 兜底路由
 
-    hedge 路由规则（与旧 _deduce_valuation 完全一致，防止指数类基金误走魔法）：
-      - 'index' / 'equity_asia' / 'lof_domestic'：hedge 强制 None（走指数/单组件矩阵公式）
-      - '' / 'etf' / 'basket'：hedge 取自 base_row（etf 命中魔法，缺失则矩阵兜底；basket 永远矩阵）
+    [AI-2026-07-27] hedge 路由改为 yaml valuation_routing 驱动（static_hedge 列）：
+      - 'index' / 'equity_asia' / 'lof_domestic'：hedge 强制 None（走指数/单组件矩阵公式）。
+        原因：静态路径取的是指数价（.INX/.NDX/N225），而 woody hedge 以 SPY/QQQ/NKY期货 计价，
+        标的不一致，误用会差 10 倍/41 倍（161125/161130）或引入期现基差（513000）。
+      - '' / 'etf'：hedge 取自 base_row（etf 命中魔法，缺失则矩阵兜底）；'basket' 永远矩阵。
+      - 513000/513880 的 valuation_method 为空串，靠 category_fallback（QDII日本→index）守卫。
 
     返回：
       { 'components': [...], 'fx_base', 'fx_now', 'hedge', 'position', 'base_nav', 'ok' }
     """
-    nav_base = base_row.get('nav')
-    fx_base = base_row.get('exchange_rate')
-    fx_now = row.get('exchange_rate')
-    position = base_row.get('position')
-    if position is None or (hasattr(position, 'isna') and position.isna()):
-        position = 0.95
+    nav_base = _clean_float(base_row.get('nav'))
+    fx_base = _clean_float(base_row.get('exchange_rate'))
+    fx_now = _clean_float(row.get('exchange_rate'))
+    position = _clean_float(base_row.get('position'), 0.95)
 
     components = []
     # 1) 优先用 portfolio 组件（多篮子 / 单 ETF）
@@ -137,12 +238,12 @@ def assemble_static_components(
                 'weight': 1.0,
             })
 
-    # hedge 路由（关键安全点）：index/亚洲/国内LOF 绝不消费 hedge
+    # hedge 路由（关键安全点，yaml valuation_routing 驱动）：index/亚洲/国内LOF 绝不消费 hedge
     hedge = None
-    if valuation_method in ('', 'etf', 'basket'):
-        h = base_row.get('hedge')
-        if h is not None and not (hasattr(h, 'isna') and h.isna()) and h > 0:
-            hedge = float(h)
+    if hedge_allowed(valuation_method, category, mode='static'):
+        h = _clean_float(base_row.get('hedge'))
+        if h is not None and h > 0:
+            hedge = h
 
     return {
         'components': components,

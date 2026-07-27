@@ -5,6 +5,27 @@ currencies:
   symbol: USD
 - currency: JPY
   symbol: USD
+# [AI-2026-07-27] 估值类型路由配置（数据引擎 valuation_data_engine 读取；估值核心 unified_valuation 不感知）
+# static_hedge / dynamic_hedge：该 valuation_method 在「静态 / 实时」估值中是否允许消费 hedge 因子（魔法公式）
+# 背景（2026-07-27 用 woody API 实际 JSON 数值核对）：
+#   hedge = calibration / position（含仓位），calibration = 基准价×基准汇率/净值（不含仓位）；
+#   hedge 的计价标的因基金而异——162411 以 XOP 计价（静态取价同标的→可用）；
+#   161125/161130 以 SPY/QQQ 计价（静态取 .INX/.NDX 指数价→禁用，实时取 SPY/QQQ 价→可用）；
+#   513000/513880 以 NKY 期货计价（静态取 N225 指数价，存在期现基差→统一走矩阵公式）。
+valuation_routing:
+  methods:
+    '':           { static_hedge: true,  dynamic_hedge: true }
+    etf:          { static_hedge: true,  dynamic_hedge: true }
+    basket:       { static_hedge: false, dynamic_hedge: false }
+    index:        { static_hedge: false, dynamic_hedge: true }
+    equity_asia:  { static_hedge: false, dynamic_hedge: false }
+    lof_domestic: { static_hedge: false, dynamic_hedge: false }
+  # 基金未显式配置 valuation_method（空串）时，按 category 兜底路由
+  category_fallback:
+    QDII日本: index
+    QDII亚洲: equity_asia
+    国内LOF: lof_domestic
+    现金管理: lof_domestic
 funds:
 - code: '501018'
   name: 南方原油

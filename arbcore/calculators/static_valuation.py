@@ -154,10 +154,13 @@ class StaticValuationCalculator:
         # 静态估值可消费 hedge（如 162411 的 XOP 魔法公式），其余走矩阵/指数路径。
         # hedge 是否可用由 valuation_method 决定（index/亚洲/国内LOF 强制 None，防误走魔法）。
         # 标的类型（ETF/指数/期货）只决定喂进来的 components，不改变公式本身。
+        # [AI-2026-07-27] 补传 category：valuation_method 为空串的基金（如 513000 QDII日本）
+        # 由 yaml valuation_routing.category_fallback 兜底路由，防止误走魔法公式
         assembled = assemble_static_components(
             row, base_row, portfolio,
             fund_config.get('related_index', ''),
             fund_config.get('valuation_method', ''),
+            fund_config.get('category', ''),
         )
         if assembled['ok']:
             val = basket_valuation(

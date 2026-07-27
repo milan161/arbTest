@@ -5,7 +5,9 @@ import pandas as pd
 import logging
 import time
 from typing import Dict, Any, Optional
-from .valuation_math import calculate_magic_valuation, calculate_basket_valuation
+# [AI-2026-07-27] calculate() 直调统一估值核心，不再经 valuation_math 间接
+from .unified_valuation import basket_valuation
+from .valuation_data_engine import assemble_dynamic_components
 
 logger = logging.getLogger(__name__)
 
@@ -158,61 +160,31 @@ class DynamicValuationCalculator:
     def calculate(self, fund_config: Dict, current_fx: float, current_etfs: Dict[str, float]) -> Optional[Dict[str, Any]]:
         """
         实时估值矩阵推演
+
+        [AI-2026-07-27] 重构：直调统一估值核心 basket_valuation（估值引擎 + 数据引擎分离）。
+        - 数据装配（组件价格解析、hedge 路由、仓位兜底）全部下沉到 assemble_dynamic_components；
+          hedge 是否可用由 lof_config.yaml `valuation_routing` 的 dynamic_hedge 列驱动
+          （实时路径取的是交易标的价 SPY/QQQ/XOP，与 woody hedge 计价标的一致，index 类允许魔法）。
+        - basket_valuation 内部自动路由：hedge>0 且单组件 → 魔法公式；否则矩阵(篮子)标准公式。
+          与旧「先试魔法、失败落矩阵」两段式逻辑数学等价。
         """
         code = str(fund_config.get('code', ''))
         base_data = self.get_base_data(code)
         if not base_data: return None
-        
-        b_nav = base_data['nav']
-        b_fx = base_data['exchange_rate']
-        position = base_data['position']
-        if pd.isna(position):
-            position = fund_config.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
-            
-        # 1. 尝试魔法公式 (Hedge)
-        valuation_method = fund_config.get('valuation_method', '')
-        b_hedge = base_data['hedge']
-        portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
-        
-        rt_val = None
-        if valuation_method != 'basket' and pd.notna(b_hedge) and b_hedge > 0 and len(portfolio) == 1:
-            # 分子：实时价格，去掉 ^ 前缀和 -EU/-JP/-HK 后缀，得到基础代码 USO/GLD
-            full_symbol = portfolio[0].get('symbol', '')
-            primary_sym = full_symbol.lstrip('^')  # ^USO-EU → USO-EU
-            for suffix in ['-EU', '-JP', '-HK']:
-                if primary_sym.endswith(suffix):
-                    primary_sym = primary_sym[:-len(suffix)]  # USO-EU → USO
-                    break
-            c_price = current_etfs.get(primary_sym) or 0
-            if not c_price or c_price <= 0:
-                c_price = base_data.get(full_symbol) or 0
-            if c_price > 0:
-                rt_val = calculate_magic_valuation(b_nav, position, c_price, current_fx, b_hedge)
-        
-        # 2. 尝试矩阵公式
-        if rt_val is None:
-            items = []
-            for p in portfolio:
-                # 分母：基准价格，用完整符号查数据库
-                full_symbol = p.get('symbol', '')
-                b_price = base_data.get(full_symbol) or 0
-                # 分子：实时价格，去掉 ^ 前缀和 -EU/-JP/-HK 后缀，得到基础代码
-                c_sym = full_symbol.lstrip('^')  # ^USO-EU → USO-EU
-                for suffix in ['-EU', '-JP', '-HK']:
-                    if c_sym.endswith(suffix):
-                        c_sym = c_sym[:-len(suffix)]  # USO-EU → USO
-                        break
-                c_price = current_etfs.get(c_sym) or 0
-                if not c_price or c_price <= 0:
-                    c_price = b_price
-                if b_price and c_price > 0:
-                    items.append({
-                        'current_price': c_price,
-                        'base_price': b_price,
-                        'weight': p.get('weight', 0) / 100.0
-                    })
-            rt_val = calculate_basket_valuation(b_nav, position, current_fx, b_fx, items)
-            
+
+        assembled = assemble_dynamic_components(fund_config, base_data, current_etfs)
+        if not assembled['ok']:
+            return None
+
+        rt_val = basket_valuation(
+            assembled['base_nav'],
+            assembled['position'],
+            assembled['components'],
+            assembled['fx_base'],
+            current_fx,
+            hedge=assembled['hedge'],
+        )
+
         if rt_val:
             return {
                 'rt_val': round(rt_val, 4),
