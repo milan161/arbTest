@@ -5,14 +5,9 @@ import pandas as pd
 import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-# [AI-2026-07-09] 导入新增的指数/亚洲/LOF估值函数
-from .valuation_math import (
-    calculate_magic_valuation, 
-    calculate_basket_valuation,
-    calculate_index_valuation,
-    calculate_asia_valuation,
-    calculate_lof_premium
-)
+# [AI-2026-07-27] 统一估值核心 + 数据引擎（采集与计算分离）
+from .unified_valuation import basket_valuation
+from .valuation_data_engine import assemble_static_components
 
 logger = logging.getLogger(__name__)
 
@@ -155,64 +150,22 @@ class StaticValuationCalculator:
             # 降级从配置读取
             position = fund_config.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
         
-        valuation_method = fund_config.get('valuation_method', '')
-        
-        # 0. 明确指定走纯指数估值（跳过魔法/矩阵）
-        if valuation_method == 'index' or valuation_method == 'equity_asia' or valuation_method == 'lof_domestic':
-            related_index = fund_config.get('related_index', '')
-            if related_index and related_index in row and related_index in base_row:
-                c_idx = row[related_index]
-                b_idx = base_row[related_index]
-                if pd.notna(c_idx) and pd.notna(b_idx) and c_idx > 0 and b_idx > 0:
-                    if valuation_method == 'equity_asia':
-                        return calculate_asia_valuation(b_nav, position, c_idx, b_idx, c_fx, b_fx)
-                    elif valuation_method == 'lof_domestic':
-                        return calculate_lof_premium(b_nav, position, c_idx, b_idx, c_fx, b_fx)
-                    else:
-                        return calculate_index_valuation(b_nav, position, c_idx, b_idx, c_fx, b_fx)
-                        
-        # 1. 尝试魔法公式 (O(1))
-        if valuation_method == '' or valuation_method == 'etf':
-            b_hedge = base_row['hedge']
-            if pd.notna(b_hedge) and b_hedge > 0 and primary_sym in row:
-                c_price = row[primary_sym]
-                val = calculate_magic_valuation(b_nav, position, c_price, c_fx, b_hedge)
-                if val: return val
-            
-        # 2. 尝试矩阵公式 (一篮子权重) - ETF 模式下若无 hedge 也应 fallback 到此处 (Level 2)
-        if valuation_method == '' or valuation_method == 'basket' or valuation_method == 'etf':
-            items = []
-            for p in portfolio:
-                sym = p.get('symbol', '').replace('^', '')
-                if any(suffix in sym for suffix in ['-JP', '-EU', '-HK']): sym = f"^{sym}"
-                
-                if sym in row and sym in base_row:
-                    items.append({
-                        'current_price': row[sym],
-                        'base_price': base_row[sym],
-                        'weight': row.get(f"{sym}_weight", p.get('weight', 0)) / 100.0
-                    })
-            
-            basket_val = calculate_basket_valuation(b_nav, position, c_fx, b_fx, items)
-            if basket_val:
-                return basket_val
-        
-        # [AI-2026-07-09] 3. 指数估值公式（无 hedge、无 basket 的兜底）
-        # 适用：QDII日本（513000/513520/159866）、QDII亚洲、国内LOF
-        related_index = fund_config.get('related_index', '')
-        if related_index and related_index in row and related_index in base_row:
-            c_idx = row[related_index]
-            b_idx = base_row[related_index]
-            if pd.notna(c_idx) and pd.notna(b_idx) and c_idx > 0 and b_idx > 0:
-                # 根据 valuation_method 选择对应函数
-                valuation_method = fund_config.get('valuation_method', '')
-                if valuation_method == 'equity_asia':
-                    return calculate_asia_valuation(b_nav, position, c_idx, b_idx, c_fx, b_fx)
-                elif valuation_method == 'lof_domestic':
-                    return calculate_lof_premium(b_nav, position, c_idx, b_idx, c_fx, b_fx)
-                else:
-                    return calculate_index_valuation(b_nav, position, c_idx, b_idx, c_fx, b_fx)
-        
+        # [AI-2026-07-27] 统一估值核心：数据引擎装配 + 单一篮子公式
+        # 静态估值可消费 hedge（如 162411 的 XOP 魔法公式），其余走矩阵/指数路径。
+        # hedge 是否可用由 valuation_method 决定（index/亚洲/国内LOF 强制 None，防误走魔法）。
+        # 标的类型（ETF/指数/期货）只决定喂进来的 components，不改变公式本身。
+        assembled = assemble_static_components(
+            row, base_row, portfolio,
+            fund_config.get('related_index', ''),
+            fund_config.get('valuation_method', ''),
+        )
+        if assembled['ok']:
+            val = basket_valuation(
+                assembled['base_nav'], assembled['position'], assembled['components'],
+                assembled['fx_base'], assembled['fx_now'], hedge=assembled.get('hedge'),
+            )
+            if val is not None:
+                return val
         return None
 
     def _save_results(self, fund_code: str, df: pd.DataFrame):

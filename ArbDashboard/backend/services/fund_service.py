@@ -14,6 +14,8 @@ import yaml
 
 # [AI-2026-07-23] 导入估值方法映射（供 get_valuation_meta 使用）
 from arbcore.config.valuation_mapping import get_fund_valuation_method
+# [AI-2026-07-27] 统一估值核心（估值引擎+数据引擎分离）：QDII日本实时复用篮子公式，NK期货价作单组件
+from arbcore.calculators.unified_valuation import basket_valuation
 
 # [AI-2026-07-23] 期货结算价缓存（30秒 TTL），避免前端轮询刷屏新浪
 _FUTURES_CACHE_TTL = 30
@@ -1310,11 +1312,18 @@ class FundService:
                                 fx_current = _daily_snapshot.get('jpy_cny_spot') or 0.0
                                 if nk_base > 0 and fx_current > 0 and fx_base > 0 and nav_base > 0:
                                     pos = float(fund.get('pos_ratio', 0.95))
-                                    # Woody 公式
-                                    rt_val = nav_base * ((1 - pos) + pos * (nk_current / nk_base) * (fx_current / fx_base))
-                                    metrics['rt_val'] = round(rt_val, 4)
-                                    if metrics.get('price', 0) > 0:
-                                        metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                                    # [AI-2026-07-27] 复用统一估值核心：NK期货价作单组件(weight=1.0)，hedge=None
+                                    # 等价于原 Woody 公式 rt_val = nav_base * ((1-pos) + pos*(nk_current/nk_base)*(fx_current/fx_base))
+                                    rt_val = basket_valuation(
+                                        nav_base, pos,
+                                        [{'symbol': 'NKY', 'current_price': nk_current,
+                                          'base_price': nk_base, 'weight': 1.0}],
+                                        fx_base, fx_current, hedge=None,
+                                    )
+                                    if rt_val is not None:
+                                        metrics['rt_val'] = round(rt_val, 4)
+                                        if metrics.get('price', 0) > 0:
+                                            metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
                     except Exception as e:
                         logger.error(f"[QDII日本] 实时估值计算失败 {code}: {e}")
 
@@ -1535,34 +1544,33 @@ class FundService:
                                     nk_price = nk_quote.get('bid') or nk_quote.get('price') if nk_quote else 0
                                     # 获取在岸价
                                     jpy_spot = _daily_snapshot.get('jpy_cny_spot') or 0
-                                    # 获取校准数据（T-1 NAV, NKY_close, JPYCNY_close）
-                                    cal_row = conn.execute("""
-                                        SELECT h.nav, h.price as close, r.jpy_cny_mid
+                                    # [AI-2026-07-27] 复用统一估值核心：取 T-1 基准(NAV+日元中间价)与 NK 结算价(基准)，NK期货价作单组件
+                                    t1_row = conn.execute("""
+                                        SELECT h.date, h.nav, r.jpy_cny_mid
                                         FROM unified_fund_history h
                                         LEFT JOIN exchange_rate r ON h.date = r.date
-                                        WHERE h.fund_code = ? AND h.nav > 0
+                                        WHERE h.fund_code = ? AND h.nav > 0 AND r.jpy_cny_mid > 0
                                         ORDER BY h.date DESC LIMIT 1
                                     """, (code,)).fetchone()
-                                    if nk_price > 0 and jpy_spot > 0 and cal_row:
-                                        base_nav = cal_row[0]
-                                        base_jpy = cal_row[2]
-                                        if base_nav > 0 and base_jpy > 0:
-                                            # Woody 公式: rt_val = NK_spot * JPY_spot * NAV_base / (NK_base * JPY_base)
-                                            # 简化为: rt_val = NAV_base * (NK_spot / NK_base) * (JPY_spot / JPY_base)
-                                            # 其中 NK_base = base_jpy * base_nav / (NK_spot_prev * JPY_spot_prev)
-                                            # 更简单的: rt_val = NK_spot * JPY_spot / fFactor
-                                            # fFactor = NKY_close * JPYCNY_close / NAV_close
-                                            # 但我们没有 NKY_close，用 base_jpy * base_nav / (nk_price * jpy_spot) 估算
-                                            # 实际上: rt_val = base_nav * (nk_price / (base_jpy * base_nav / (nk_price_prev * jpy_prev)))
-                                            # 最简: rt_val = nk_price * jpy_spot / (base_jpy * base_nav / base_nav)
-                                            # 直接用: rt_val = base_nav * nk_price * jpy_spot / (base_jpy * base_nav)
-                                            # = nk_price * jpy_spot / base_jpy
-                                            rt_val = nk_price * jpy_spot / base_jpy
-                                            if rt_val > 0:
-                                                metrics['rt_val'] = round(rt_val, 4)
-                                                if metrics.get('price', 0) > 0:
-                                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
-                                                logger.debug(f"[{code}] NK实时估值: nk={nk_price}, jpy={jpy_spot}, base_jpy={base_jpy}, rt_val={rt_val:.4f}")
+                                    nk_base_row = conn.execute(
+                                        "SELECT settle_price FROM futures_daily WHERE symbol='NK' AND settle_price > 0 ORDER BY date DESC LIMIT 1"
+                                    ).fetchone()
+                                    if nk_price > 0 and jpy_spot > 0 and t1_row and nk_base_row:
+                                        nav_base = float(t1_row[1])
+                                        fx_base = float(t1_row[2])
+                                        nk_base = float(nk_base_row[0])
+                                        pos = float(fund.get('pos_ratio', 0.95))
+                                        rt_val = basket_valuation(
+                                            nav_base, pos,
+                                            [{'symbol': 'NKY', 'current_price': nk_price,
+                                              'base_price': nk_base, 'weight': 1.0}],
+                                            fx_base, jpy_spot, hedge=None,
+                                        )
+                                        if rt_val is not None:
+                                            metrics['rt_val'] = round(rt_val, 4)
+                                            if metrics.get('price', 0) > 0:
+                                                metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                                            logger.debug(f"[{code}] NK实时估值(兜底): nk={nk_price}, jpy={jpy_spot}, rt_val={rt_val:.4f}")
                                 except Exception as e:
                                     logger.warning(f"[{code}] NK实时估值失败: {e}")
 
