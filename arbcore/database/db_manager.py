@@ -37,18 +37,13 @@ class DatabaseManager:
     def init_db(self):
         with self.lock:
             conn = self._get_conn()
-            conn.execute('CREATE TABLE IF NOT EXISTS fund_data (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, fund_code TEXT, price REAL, nav REAL, premium REAL, static_val REAL, val_error REAL, created_at TEXT, UNIQUE(date, fund_code))')
-            try:
-                conn.execute('ALTER TABLE fund_data ADD COLUMN static_val REAL')
-                conn.execute('ALTER TABLE fund_data ADD COLUMN val_error REAL')
-            except sqlite3.OperationalError: pass
-
+            # [AI-2026-07-25] 已删除 fund_data 建表与 ALTER（fund_data 表已废弃，零调用方死代码）
             conn.execute('DROP TABLE IF EXISTS futures_data')
             conn.execute('DROP TABLE IF EXISTS future_calibration')
             conn.execute('DROP TABLE IF EXISTS macro_data')
             conn.execute('DROP TABLE IF EXISTS api_sync_status')
 
-            conn.execute('''CREATE TABLE IF NOT EXISTS system_health (id INTEGER PRIMARY KEY AUTOINCREMENT, component TEXT NOT NULL, status TEXT, message TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+            # [AI-2026-07-25] 已删除 system_health 建表（表已废弃，零调用方死代码）
             conn.execute('''CREATE TABLE IF NOT EXISTS exchange_rate (date TEXT PRIMARY KEY, usd_cny_mid REAL, hkd_cny_mid REAL, usd_cnh REAL, updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')))''')
             try: conn.execute('ALTER TABLE exchange_rate ADD COLUMN hkd_cny_mid REAL')
             except sqlite3.OperationalError: pass
@@ -72,7 +67,6 @@ class DatabaseManager:
             conn.execute('''CREATE TABLE IF NOT EXISTS access_sync_status (sync_date TEXT NOT NULL, access_source TEXT NOT NULL, sync_time TIMESTAMP DEFAULT (datetime('now', 'localtime')), PRIMARY KEY (sync_date, access_source))''')
 
             conn.execute('CREATE INDEX IF NOT EXISTS idx_fund_code_date ON fund_daily_factors (fund_code, date DESC)')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_health_component ON system_health(component)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_etf_prices_date ON usa_etf_daily_prices(date DESC)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_fund_basket ON fund_basket_weights(fund_code, date DESC)')
 
@@ -145,10 +139,10 @@ class DatabaseManager:
                 """)
 
             conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95, target_type TEXT DEFAULT 'ETF')''')
-            conn.execute('''CREATE TABLE IF NOT EXISTS jsl_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95)''')
+            # [AI-2026-07-25] 已删除 jsl_fund_list 建表（表已废弃，零调用方死代码）
+            # [AI-2026-07-25] 补齐 fund_watchlist：原代码从未建此表，全新环境会 no such table 导致"我的关注"报错。加 IF NOT EXISTS 兜底。
+            conn.execute('''CREATE TABLE IF NOT EXISTS fund_watchlist (fund_code TEXT PRIMARY KEY, added_at TIMESTAMP DEFAULT (datetime('now','localtime')))''')
             try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
-            except sqlite3.OperationalError: pass
-            try: conn.execute('ALTER TABLE jsl_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
             except sqlite3.OperationalError: pass
             # [V11.0] 补齐 idx_code / idx_name 列（兼容旧版分享数据库）
             try: conn.execute("ALTER TABLE unified_fund_list ADD COLUMN idx_code TEXT DEFAULT '-'")
@@ -293,19 +287,15 @@ class DatabaseManager:
             conn.close()
 
     # Delegate methods
-    def save_fund_data(self, *args, **kwargs): return self.funds.save_fund_data(*args, **kwargs)
-    def update_fund_valuation(self, *args, **kwargs): return self.funds.update_fund_valuation(*args, **kwargs)
+    # [AI-2026-07-25] 已删除 save_fund_data / update_fund_valuation 委托（fund_data 表废弃死代码）
     def upsert_fund_factor(self, *args, **kwargs): return self.funds.upsert_fund_factor(*args, **kwargs)
     def update_fund_pos_ratio(self, *args, **kwargs): return self.funds.update_fund_pos_ratio(*args, **kwargs)
     def upsert_fund_basket_weight(self, *args, **kwargs): return self.funds.upsert_fund_basket_weight(*args, **kwargs)
     def get_latest_fund_factor(self, *args, **kwargs): return self.funds.get_latest_fund_factor(*args, **kwargs)
     def get_fund_basket(self, *args, **kwargs): return self.funds.get_fund_basket(*args, **kwargs)
-    def get_latest_fund_price(self, *args, **kwargs): return self.funds.get_latest_fund_price(*args, **kwargs)
-    def batch_save_fund_prices(self, *args, **kwargs): return self.funds.batch_save_fund_prices(*args, **kwargs)
+    # [AI-2026-07-25] 已删除 get_latest_fund_price / batch_save_fund_prices / sync_jsl_fund_list / get_jsl_fund_list 委托（表废弃死代码）
     def sync_unified_fund_list(self, *args, **kwargs): return self.funds.sync_unified_fund_list(*args, **kwargs)
     def get_unified_fund_list(self, *args, **kwargs): return self.funds.get_unified_fund_list(*args, **kwargs)
-    def sync_jsl_fund_list(self, *args, **kwargs): return self.funds.sync_jsl_fund_list(*args, **kwargs)
-    def get_jsl_fund_list(self, *args, **kwargs): return self.funds.get_jsl_fund_list(*args, **kwargs)
     def batch_save_fund_purchase_status(self, *args, **kwargs): return self.funds.batch_save_fund_purchase_status(*args, **kwargs)
     def get_fund_purchase_status(self, *args, **kwargs): return self.funds.get_fund_purchase_status(*args, **kwargs)
     def save_unified_history(self, *args, **kwargs): return self.funds.save_unified_history(*args, **kwargs)
@@ -327,7 +317,7 @@ class DatabaseManager:
     def is_access_synced_today(self, *args, **kwargs): return self.system.is_access_synced_today(*args, **kwargs)
     def remove_access_sync_status(self, *args, **kwargs): return self.system.remove_access_sync_status(*args, **kwargs)
     def save_health_status(self, *args, **kwargs): return self.system.save_health_status(*args, **kwargs)
-    def get_health_status(self, *args, **kwargs): return self.system.get_health_status(*args, **kwargs)
+    # [AI-2026-07-25] 已删除 get_health_status 委托（方案C：健康检查功能无调用方，死代码）
     def cleanup_old_data(self, *args, **kwargs): return self.system.cleanup_old_data(*args, **kwargs)
     def drop_deprecated_tables(self, *args, **kwargs): return self.system.drop_deprecated_tables(*args, **kwargs)
     def vacuum_database(self, *args, **kwargs): return self.system.vacuum_database(*args, **kwargs)

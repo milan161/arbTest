@@ -197,6 +197,8 @@
             </template>
             <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                <!-- ETF 实时价格 (USO, GLD, etc.) -->
+               <!-- [AI-2026-07-23] QDII日本基金不显示ETF盘口，只显示期货盘口 -->
+               <template v-if="!vcRef?.isQDIIJapan">
                <div v-for="item in (vcRef?.uniqueValuationSymbols ?? [])" :key="item.symbol" 
                     style="background: #f0f7ff; padding: 6px 10px; border-radius: 6px; border: 1px solid #bae6fd; display: flex; flex-direction: column; gap: 4px;">
                   <div style="font-weight: bold; color: #0369a1; font-size: 12px; display: flex; justify-content: space-between; align-items: center;">
@@ -210,8 +212,9 @@
                      <span style="color:#d32f2f; font-weight:bold; cursor:pointer;" @click="hedgePrice = (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask ?? hedgePrice" title="点击填入卖一价">
                         卖一: <span style="font-family: monospace;">{{ (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask?.toFixed(2) || '等待数据' }}</span>
                      </span>
-                  </div>
+                   </div>
                </div>
+               </template>
 
                <!-- 期货实时价格 (CL, GC, etc.) -->
                <div v-if="vcRef?.meta?.fund_config?.trade_future && (vcRef?.showFutCalib || vcRef?.showPureFut)" 

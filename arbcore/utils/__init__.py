@@ -77,7 +77,7 @@ def is_a_share_trading_hour(dt: datetime = None) -> bool:
 
 
 from .retry_manager import RetryManager, CircuitBreaker, create_retry_manager, create_circuit_breaker
-from .health_monitor import HealthMonitor
+# [AI-2026-07-25] 已删除 HealthMonitor 导入（方案C：health_monitor.py 已删，全项目无调用方）
 from .config_manager import ConfigManager
 from .market_calendar import (is_trading_day, is_us_trading_day, is_hk_trading_day,
                                symbol_to_exchange, classify_by_exchange, filter_closed_markets)
@@ -87,7 +87,6 @@ __all__ = [
     'CircuitBreaker',
     'create_retry_manager',
     'create_circuit_breaker',
-    'HealthMonitor',
     'ConfigManager',
     'is_a_share_trading_day',
     'is_a_share_trading_hour',

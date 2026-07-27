@@ -315,9 +315,12 @@ class MarketDataService:
                 r.encoding = 'gbk'
                 if r.status_code == 200 and '="' in r.text:
                     parts = r.text.split('"')[1].split(',')
-                    # hf_ 格式: 昨收盘,今开,最高,最低,最新价,成交量,持仓量,结算价,昨结算,涨跌,涨跌幅
-                    if len(parts) >= 8:
-                        price = float(parts[4]) if parts[4] else 0.0
+                    # [AI-2026-07-23] hf_NK 实际格式（NK连续合约）:
+                    # parts[0]=最新价, parts[1]=今开(空), parts[2]=最高, parts[3]=最低
+                    # parts[5]=成交量, parts[9]=持仓量
+                    # 注意: parts[4] 是最高价，不是最新价！
+                    if len(parts) >= 1:
+                        price = float(parts[0]) if parts[0] else 0.0
                         if price > 0:
                             last_price = price
                             used_symbol = t
@@ -325,12 +328,15 @@ class MarketDataService:
 
             if last_price > 0:
                 source = '新浪 hf_' if used_symbol == symbol else f'新浪 hf_({used_symbol})'
-                logger.debug(f"[MDS] {symbol} 最新价 {last_price} (来源 {source})")
+                # [AI-2026-07-23] NK 盘口: parts[3]=买价/卖价, 用于前端显示
+                bid = float(parts[3]) if len(parts) > 3 and parts[3] else last_price
+                ask = bid  # NK 连续合约买卖价相同
+                logger.debug(f"[MDS] {symbol} 最新价 {last_price}, 买价 {bid} (来源 {source})")
                 return {
                     'symbol': symbol,
                     'price': last_price,
-                    'bid': last_price,
-                    'ask': last_price,
+                    'bid': bid,
+                    'ask': ask,
                     'source': source
                 }
             logger.warning(f"[MDS] {symbol} 新浪 hf_ 无有效最新价")

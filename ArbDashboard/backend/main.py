@@ -332,12 +332,11 @@ async def lifespan(app: FastAPI):
             scripts_dir = os.path.normpath(os.path.join(backend_dir, "scheduler"))
             script_path = os.path.join(scripts_dir, "daily_updater.py")
             
-            # [V4.1] 尝试多种 Python 路径
+            # [V4.1] 尝试多种 Python 路径 — 统一使用 ArbDashboard/.venv
             python_exe_candidates = [
-                os.path.normpath(os.path.join(backend_dir, "..", "..", ".venv", "Scripts", "python.exe")),
-                os.path.normpath(os.path.join(backend_dir, "..", "..", "..", ".venv", "Scripts", "python.exe")),
-                os.path.normpath(os.path.join(backend_dir, "..", "..", "..", "Python311", "python.exe")),
-                "python",
+                os.path.normpath(os.path.join(backend_dir, "..", ".venv", "Scripts", "python.exe")),  # ArbDashboard/.venv (正确)
+                r"C:\Users\milan\AppData\Local\Programs\Python\Python311\python.exe",  # 系统 Python311
+                "python",  # PATH
             ]
             
             python_exe = None
@@ -419,8 +418,8 @@ async def lifespan(app: FastAPI):
             return os.path.normpath(os.path.join(backend_dir, "scheduler"))
         def _find_python():
             for candidate in [
-                os.path.normpath(os.path.join(backend_dir, "..", "..", ".venv", "Scripts", "python.exe")),
-                os.path.normpath(os.path.join(backend_dir, "..", "..", "..", ".venv", "Scripts", "python.exe")),
+                os.path.normpath(os.path.join(backend_dir, "..", ".venv", "Scripts", "python.exe")),  # ArbDashboard/.venv (正确)
+                r"C:\Users\milan\AppData\Local\Programs\Python\Python311\python.exe",  # 系统 Python311
                 "python",
             ]:
                 if os.path.exists(candidate):
@@ -523,9 +522,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/health")
-async def get_health():
-    return {"status": "ok", "db": root_db_path}
+# [AI-2026-07-25] 已删除 /api/health 健康检查端点（方案C：该健康检查功能无调用方，华而不实）
 
 # [V6.0] 存储前端传递的最新自选基金列表（用于采样服务过滤）
 # (已在服务初始化前定义)
@@ -564,7 +561,6 @@ async def export_share_db():
         'index_history': 'date',
         'index_realtime_quotes': None,
         'raw_api_data': 'date',
-        'system_health': None,
         'unified_fund_history': 'date',
         'unified_fund_list': None,
         'usa_etf_daily_prices': 'date',
@@ -654,32 +650,6 @@ async def get_dashboard(watchlist: str = None, category: str = None):
         logger.error(traceback.format_exc())  # 添加详细堆栈跟踪
         system_status.add_milestone("ERROR", msg)
         return JSONResponse(status_code=500, content={"status": "error", "message": msg})
-
-@app.get("/api/market/futures")
-async def get_futures_prices():
-    """获取实时期货价格（MGC黄金、MCL原油、NK日经225）- 直接从新浪获取实时数据"""
-    try:
-        raw = market_data_service.data_fetcher.get_futures_settlement_data()
-        result = {}
-        for item in raw:
-            sym = item.get('symbol', '')
-            if sym in ('MGC', 'MCL', 'NK', 'GC', 'CL'):
-                # 优先 close（最新价），兜底 settle（结算价）
-                val = item.get('close') or item.get('settle') or '-'
-                result[sym] = val
-        # 微合约无数据时用母合约兜底
-        if not result.get('MGC') and result.get('GC'):
-            result['MGC'] = result['GC']
-        if not result.get('MCL') and result.get('CL'):
-            result['MCL'] = result['CL']
-        # 确保三个符号都有返回值（无数据时显示 '-'）
-        for sym in ('MGC', 'MCL', 'NK'):
-            if sym not in result:
-                result[sym] = '-'
-        return {"status": "ok", "data": result}
-    except Exception as e:
-        logger.error(f"Futures Prices Error: {e}")
-        return {"status": "error", "message": str(e)}
 
 @app.get("/api/market/overview")
 async def get_market():
@@ -2310,10 +2280,9 @@ async def trigger_task(task: str):
     
     # [V4.1] 尝试多种 Python 路径
     python_exe_candidates = [
-        os.path.normpath(os.path.join(backend_dir, "..", "..", ".venv", "Scripts", "python.exe")),  # 项目 .venv
-        os.path.normpath(os.path.join(backend_dir, "..", "..", "..", ".venv", "Scripts", "python.exe")),  # 上级 .venv
-        os.path.normpath(os.path.join(backend_dir, "..", "..", "..", "Python311", "python.exe")),  # Python311
-        "python",  # 系统 Python
+        os.path.normpath(os.path.join(backend_dir, "..", ".venv", "Scripts", "python.exe")),  # ArbDashboard/.venv (正确)
+        r"C:\Users\milan\AppData\Local\Programs\Python\Python311\python.exe",  # 系统 Python311
+        "python",  # PATH
     ]
     
     python_exe = None
@@ -2408,92 +2377,7 @@ async def get_data_status():
         }
     }
 
-@app.get("/api/system/health-check")
-async def health_check():
-    """系统自检：验证数据完整性、同步新鲜度"""
-    today = datetime.now().strftime("%Y-%m-%d")
-    issues = []
-    conn = db._get_conn()
-    try:
-        # 1. 检查静态估值完整性（最近3个交易日）
-        recent_dates = conn.execute("""
-            SELECT DISTINCT date FROM unified_fund_history 
-            ORDER BY date DESC LIMIT 5
-        """).fetchall()
-        check_dates = [r[0] for r in recent_dates[:3]]
-        
-        missing_sv = conn.execute("""
-            SELECT date, fund_code FROM unified_fund_history 
-            WHERE date IN ({}) AND (static_val IS NULL OR static_val <= 0)
-              AND date != ?  -- 今天可能还没出净值，排除
-              AND nav IS NOT NULL  -- 只检查有实际净值的基金，排除僵尸记录
-            ORDER BY date DESC
-        """.format(','.join('?' * len(check_dates))), check_dates + [today]).fetchall()
-        
-        if missing_sv:
-            for date, code in missing_sv[:10]:
-                issues.append(f"[{code}] {date} static_val 缺失")
-        
-        # 2. 检查同步新鲜度
-        stale_sources = []
-        for src in ['woody_lof_batch', 'official_exchange_rate', 'futures_data']:
-            synced = db.is_access_synced_today(today, source=src)
-            if not synced:
-                stale_sources.append(src)
-        if stale_sources:
-            issues.append(f"同步未完成: {', '.join(stale_sources)}")
-        
-        # 3. 检查最近 sync 日期是否太旧
-        farthest = conn.execute("""
-            SELECT sync_date FROM access_sync_status 
-            WHERE access_source='woody_lof_batch' 
-            ORDER BY sync_date DESC LIMIT 1
-        """).fetchone()
-        if farthest:
-            if farthest[0] < today:
-                issues.append(f"Woody因子最后同步日: {farthest[0]}（非今日）")
-        
-        # 4. 检查数据库健康
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()
-        if integrity and integrity[0] != 'ok':
-            issues.append(f"数据库完整性异常: {integrity[0]}")
-        
-        fund_count = conn.execute("SELECT COUNT(DISTINCT fund_code) FROM unified_fund_history").fetchone()[0]
-        record_count = conn.execute("SELECT COUNT(*) FROM unified_fund_history").fetchone()[0]
-        
-    finally:
-        conn.close()
-    
-    status = "healthy" if not issues else "warning"
-    return {
-        "status": status,
-        "issues": issues,
-        "today": today,
-        "stats": {
-            "fund_count": fund_count or 0,
-            "total_records": record_count or 0,
-            "checked_dates": check_dates
-        }
-    }
-
-@app.get("/api/system/runtime-health")
-async def runtime_health():
-    """Runtime health for UI polling and data-source observability."""
-    db_status = "unknown"
-    try:
-        conn = db._get_conn()
-        try:
-            conn.execute("SELECT 1").fetchone()
-            db_status = "ok"
-        finally:
-            conn.close()
-    except Exception as e:
-        db_status = f"error: {e}"
-    return {
-        "status": "ok",
-        "dashboard": dashboard_snapshot_service.get_runtime_health(),
-        "database": {"status": db_status},
-    }
+# [AI-2026-07-25] 已删除 /api/system/health-check 与 /api/system/runtime-health 端点（方案C：健康检查功能无调用方，华而不实）
 
 # --- Auto Trade Engine APIs (旧版信号监测，重命名文件避免冲突) ---
 @app.get("/api/auto_trade/rules")

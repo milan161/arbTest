@@ -12,7 +12,7 @@
  * - LOF价 → depth.ask[0]（卖一价）
  * - ETF价 → quoteObj.bid（买一价）
  */
-import { ref, computed, reactive, watch } from 'vue'
+import { ref, computed, reactive, watch, onMounted } from 'vue'
 import { getFundValuationMeta, getRealtimeQuote } from '../api'
 
 export function useValuationCalculator() {
@@ -68,6 +68,22 @@ export function useValuationCalculator() {
 
   /** 是否为白银基金 */
   const isSilver = computed(() => fundCode.value === '161226')
+
+  /** [AI-2026-07-23] 是否为 QDII日本基金（纯期货估值，无需ETF/NKY盘口） */
+  const isQDIIJapan = computed(() => {
+    const method = meta.value?.fund_config?.valuation_method || ''
+    return method === 'equity_jp'
+  })
+
+  // [AI-2026-07-23] QDII日本基金默认显示纯期货估值
+  onMounted(() => {
+    if (isQDIIJapan.value) {
+      showPureFut.value = true
+    }
+  })
+  watch(isQDIIJapan, (val) => {
+    if (val) showPureFut.value = true
+  })
 
   /** 基础仓位比率 */
   const positionRatio = computed(() => {
@@ -379,7 +395,8 @@ export function useValuationCalculator() {
     const baseExchangeRate = parseFloat(bd.exchange_rate) || 0
 
     const futPrice = parseFloat(testFutPrice.value as any) || 0
-    const baseFuturePrice = parseFloat(bd.calibration) || 0
+    // [AI-2026-07-23] NK 结算价：bd.calibration 是对冲值(~137081)，不是 NK 结算价！
+    const baseFuturePrice = parseFloat(bd.nk_settle_price) || parseFloat(bd.calibration) || 0
 
     if (
       baseNav <= 0 ||
@@ -747,6 +764,7 @@ export function useValuationCalculator() {
     isCashManagement,
     isComplexCategory,
     isSilver,
+    isQDIIJapan,
     positionRatio,
     uniqueValuationSymbols,
     baseEtfsText,

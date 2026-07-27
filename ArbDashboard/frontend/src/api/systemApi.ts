@@ -43,16 +43,6 @@ export function triggerTask(task: string) {
   return client.post(`/api/system/trigger/${task}`)
 }
 
-/** 健康检查 */
-export function getHealth() {
-  return client.get('/api/health')
-}
-
-/** 系统自检：验证静态估值完整性 + 同步新鲜度 */
-export function getSystemHealthCheck() {
-  return client.get('/api/system/health-check')
-}
-
 /** 获取净值更新状态 */
 export function getNavStatus() {
   return client.get('/api/system/nav-status')

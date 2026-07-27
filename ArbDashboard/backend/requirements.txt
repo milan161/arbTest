@@ -13,6 +13,9 @@ paramiko
 chinese-calendar
 openpyxl
 python-multipart
-selenium              # 爬虫模块
-webdriver-manager     # selenium webdriver 管理
 exchange-calendars    # 交易所日历（美股/港股/日股）
+beautifulsoup4         # Woody 网页在岸价回退解析（bs4）
+akshare                # 历史数据回采（A股/美股等）
+futu-api               # 富途行情（代码内 import futu）
+xtquant                # 国金QMT 实时行情与交易
+ibapi                  # IB 盈透行情

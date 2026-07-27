@@ -212,14 +212,27 @@ class DailyUpdater(BaseApp):
 
                 # 🛡️ [AI-2026-07-06] 检查本地 raw_api_data 是否已有该日期的因子数据
                 # 解决 access_sync_status 被清理后 VPS 重复处理历史数据的 bug
+                # [AI-2026-07-25] 修复：如果 raw 存在但 fund_daily_factors 缺失，说明之前只存了原始数据没解析，需补解析
                 existing_raw = self.db.get_raw_api_data(file_date, 'woody_lof')
                 if existing_raw:
-                    self.logger.info(f"   ⏭️ [VPS] 日期 {file_date} 的因子原始数据已存在，跳过入库解析")
-                    # 补打 VPS 同步标记，确保 _try_sync_all_from_vps 下次不再下载该文件
-                    self.db.mark_access_synced(file_date, 'woody_vps_sync')
-                    if file_date == today_str:
-                        vps_today_success = True
-                    continue
+                    # 检查是否已解析入库
+                    try:
+                        _c = self.db._get_conn()
+                        factor_count = _c.execute(
+                            "SELECT COUNT(*) FROM fund_daily_factors WHERE date=?",
+                            (file_date,)
+                        ).fetchone()[0]
+                        _c.close()
+                    except Exception:
+                        factor_count = 0
+                    if factor_count > 0:
+                        self.logger.info(f"   ⏭️ [VPS] 日期 {file_date} 的因子原始数据已存在且已解析，跳过")
+                        self.db.mark_access_synced(file_date, 'woody_vps_sync')
+                        if file_date == today_str:
+                            vps_today_success = True
+                        continue
+                    else:
+                        self.logger.info(f"   🔧 [VPS] 日期 {file_date} 有原始数据但未解析，正在补解析...")
 
                 try:
                     # 提取真实内容 (Woody API 包装在 text 字段里)
@@ -731,11 +744,34 @@ class DailyUpdater(BaseApp):
         except Exception as e:
             self.logger.error(f"❌ 申赎状态同步失败: {e}")
 
-    def step5_fetch_usa_market_data(self):
+    def step5_fetch_usa_market_data(self, weekend_mode=False):
         """步骤五：抓取美股市场交易数据"""
         self.logger.info("=== 步骤五：抓取海外及指数市场交易数据 (标准库模式) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+        
+        # [AI-2026-07-25] 周末模式：检测数据库最新日期，自动补全缺失交易日
+        conn = self.db._get_conn()
+        try:
+            db_latest = conn.execute(
+                "SELECT MAX(date) FROM usa_etf_daily_prices WHERE symbol='XOP'"
+            ).fetchone()[0]
+        except Exception:
+            db_latest = None
+        finally:
+            conn.close()
+        
+        if weekend_mode and db_latest:
+            # 周末：从数据库最新日期+1天开始采集，直到今天
+            gap_days = (datetime.now() - datetime.strptime(db_latest, '%Y-%m-%d')).days
+            start_date = db_latest
+            self.logger.info(f"📅 [周末补采] 数据库最新美股数据: {db_latest}，距今 {gap_days} 天")
+            if gap_days <= 1:
+                self.logger.info("⏭️ [周末补采] 数据未缺失，跳过步骤五")
+                return
+        else:
+            start_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+            if not weekend_mode:
+                self.logger.info(f"[平日] 采集最近15天美股数据 (start={start_date})")
 
         # access_sync_status 防刷：今天已跑过步骤五就跳过
         if self.db.is_access_synced_today(today_str, source='usa_etf_data'):
@@ -762,15 +798,29 @@ class DailyUpdater(BaseApp):
         for sym in symbols:
             df = self.hist_manager.get_prices(sym, source="sina", start_date=start_date)
             if not df.empty:
+                skipped_count = 0
+                written_count = 0
                 for _, row in df.iterrows():
                     date_str = row['date'].strftime('%Y-%m-%d')
-                    self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=row['close'])
+                    close_val = row['close']
+                    # [AI-2026-07-25] 过滤空值：close 为 None/NaN/<=0 时丢弃，不写入数据库
+                    # 防止无效数据覆盖历史有效价格（曾导致 XOP/GLD 等 ETF price 被置 NULL）
+                    import math
+                    if close_val is None or (isinstance(close_val, float) and (math.isnan(close_val) or math.isinf(close_val))) or (isinstance(close_val, (int, float)) and close_val <= 0):
+                        skipped_count += 1
+                        continue
+                    self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=float(close_val))
+                    written_count += 1
                     # [AI-2026-07-20] 美股指数（.NDX/.INX）本身就是要写入 index_history 的指数，
-                    # 与"ETF 价格冒充净值"是两码事——ETF(XOP/GLD)只写 usa_etf_daily_prices，绝不写 index_history；
-                    # 美股指数只写 index_history（供 step11 静态估值读取），不写 usa_etf_daily_prices。
+                    # 与"ETF(XOP/GLD)只写 usa_etf_daily_prices，绝不写 index_history；
                     if sym.upper() in us_index_whitelist:
-                        self.db.upsert_index_history(symbol=sym, date=date_str, close=row['close'])
-                self.logger.info(f"✅ [海外/指数] {sym} 行情同步完成")
+                        self.db.upsert_index_history(symbol=sym, date=date_str, close=float(close_val))
+                msg = f"✅ [海外/指数] {sym} 行情同步完成 (写入{written_count}条)"
+                if skipped_count > 0:
+                    msg += f" ⚠️ 跳过{skipped_count}条空值数据！"
+                    self.logger.warning(msg)
+                else:
+                    self.logger.info(msg)
 
         self.db.mark_access_synced(today_str, source='usa_etf_data')
         self.logger.info(f"✅ [海外/指数] 步骤五完成，已标记防刷")
@@ -796,12 +846,17 @@ class DailyUpdater(BaseApp):
                 trade_date = content.get('trade_date', file_date)
 
                 if symbol and close_price is not None:
-                    self.db.upsert_index_history(
-                        symbol=symbol,
-                        date=trade_date,
-                        close=close_price
-                    )
-                    self.logger.info(f"   ✅ [VPS-INDEX] {symbol} {trade_date} -> close={close_price}")
+                    # [AI-2026-07-25] 检查 trade_date 是否与文件名日期一致
+                    # 不一致说明 Yahoo 返回了滞后数据（如日本假期休市导致返回上一交易日）
+                    if trade_date != file_date:
+                        self.logger.warning(f"   ⚠️ [VPS-INDEX] {symbol} {file_date} 的 trade_date={trade_date}（滞后{ (datetime.strptime(file_date, '%Y-%m-%d') - datetime.strptime(trade_date, '%Y-%m-%d')).days }天），跳过写入避免污染 index_history")
+                    else:
+                        self.db.upsert_index_history(
+                            symbol=symbol,
+                            date=trade_date,
+                            close=close_price
+                        )
+                        self.logger.info(f"   ✅ [VPS-INDEX] {symbol} {trade_date} -> close={close_price}")
                 else:
                     self.logger.warning(f"   ⚠️ [VPS-INDEX] {file_date} 数据不完整: {content}")
 
@@ -1038,10 +1093,32 @@ class DailyUpdater(BaseApp):
                     self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 期货数据时出错: {e}")
 
         if vps_today_success:
+            # [AI-2026-07-23] VPS 同步成功后，检查 NK 数据是否存在
+            # VPS 可能有其他期货数据但缺少 NK，需要从新浪兜底补齐
+            try:
+                nk_check = conn.execute(
+                    "SELECT COUNT(*) FROM futures_daily WHERE symbol='NK' AND date=? AND settle_price > 0",
+                    (today_str,)
+                ).fetchone()
+                if nk_check[0] == 0:
+                    self.logger.warning(f"⚠️ [VPS] 今日 NK 期货数据缺失，从新浪补齐...")
+                    from arbcore.fetchers.data_fetcher import data_fetcher
+                    nk_data = data_fetcher.get_futures_settlement_data()
+                    for f_data in nk_data:
+                        if f_data.get('symbol') == 'NK':
+                            settle = f_data.get('settle')
+                            close_price = f_data.get('close')
+                            volume = f_data.get('volume')
+                            if settle is not None or close_price is not None:
+                                self.db.upsert_futures_daily(date=today_str, symbol='NK', settle_price=settle, close_price=close_price, volume=volume)
+                                self.logger.info(f"  ✅ NK 结算价={settle}, 收盘价={close_price}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ [VPS] NK 数据检查失败: {e}")
+
             self.db.mark_access_synced(today_str, source='futures_data')
             self.logger.info("✅ [VPS] 今日期货数据同步完成！")
             return
-            
+
         # 本地兜底
         self.logger.warning("⚠️ [VPS] 未获取到今日期货数据，启动本地新浪API兜底...")
         from arbcore.fetchers.data_fetcher import data_fetcher
@@ -1399,11 +1476,17 @@ class DailyUpdater(BaseApp):
 
         # 默认：完整流水线（周末跳过除净值外的所有步骤）
         if now.weekday() in (5, 6):
-            self.logger.info("📅 [周末] 跳过完整流水线，仅执行净值更新+静态估值...")
+            self.logger.info("📅 [周末] 跳过完整流水线，执行净值+收盘价+Woody补采+静态估值+美股补采...")
             self.step4_fetch_lof_market()
+            # [AI-2026-07-25] 周末也跑收盘价采集（腾讯API），否则 LOF 收盘价缺失
+            self._step4_fetch_prices()
+            # [AI-2026-07-25] 周末也跑 step1：从 VPS 补采缺失的 Woody 因子数据（防用户外出多日）
+            self.step1_and_2_fetch_woody_api()
+            # [AI-2026-07-25] 周末也跑 step5：补采上次遗漏的美股 ETF 数据（防用户外出多日）
+            self.step5_fetch_usa_market_data(weekend_mode=True)
             # [AI-2026-07-04] 周末也跑静态估值计算，避免 nav 更新后 static_val 缺失
             self._step10_calculate_static_valuation()
-            self.logger.info("🎉 [周末净值+静态估值] 更新完毕！")
+            self.logger.info("🎉 [周末净值+Woody补采+静态估值+美股补采] 更新完毕！")
             return
         self._run_pipeline()
 

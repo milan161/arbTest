@@ -450,17 +450,16 @@ const allColumns: DataTableColumns<any> = [
 
 // 通用数值渲染函数，historyColumns 和 columns 共享
 const renderValWithChg = (val: number, chg: number, precision: number = 4) => {
-    if (!val || val === 0) return h('span', { style: 'color: #999;' }, '-')
+    if (val == null) return h('span', { style: 'color: #999;' }, '-')
     const valStr = val.toFixed(precision)
     if (chg == null || chg === 0) {
         return h('span', { style: 'font-weight: 500;' }, valStr)
     }
     const color = chg > 0 ? '#dc2626' : '#16a34a'
-    const arrow = chg > 0 ? '▲' : '▼'
     const chgStr = (chg > 0 ? '+' : '') + chg.toFixed(2) + '%'
     return h('span', {}, [
         h('span', { style: 'font-weight: 500;' }, valStr),
-        h('span', { style: `color: ${color}; font-size: 11px; margin-left: 3px;` }, `${arrow}${chgStr}`)
+        h('span', { style: `color: ${color}; font-size: 11px; margin-left: 3px;` }, chgStr)
     ])
 }
 
@@ -526,7 +525,7 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
             title: '每日增加', key: 'daily_inc', width: 78, align: 'center',
             render(row: any) {
                 const inc = dailyIncrements.value[row.date]
-                if (inc == null || inc === 0) return '-'
+                if (inc == null) return '-'
                 const color = inc >= 0 ? '#16a34a' : '#dc2626'
                 return h('span', { class: 'num-cell compact', style: { color } }, (inc >= 0 ? '+' : '') + inc.toFixed(4))
             }
@@ -549,17 +548,17 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 ] : []),
                 { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
                 // [AI-2026-07-07] 修复：static_val为null时不显示-100%，直接返回'-'
-                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
-                { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
+                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
+                { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
               ]
             : [
                 { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
                 // [AI-2026-07-07] 修复同上：static_val为null时显示'-'
-                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
-                { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; if (v === 0) return h('span', { class: 'num-cell muted' }, '-'); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
-                { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium || 0; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
+                { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
+                { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
+                { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium; if (v == null) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
                 // [AI-2026-07-04] 单ETF基金（魔法公式）显示对冲值
-                ...(hasHedge ? [{ title: '对冲值', key: 'hedge', width: 95, align: 'center', render(row: any) { return row.hedge ? h('span', { class: 'num-cell' }, row.hedge.toFixed(2)) : '-' } }] : []),
+                ...(hasHedge ? [{ title: '对冲值', key: 'hedge', width: 95, align: 'center', render(row: any) { return row.hedge != null ? h('span', { class: 'num-cell' }, row.hedge.toFixed(2)) : '-' } }] : []),
               ],
         // QDII亚洲 / QDII日本 / 国内LOF / 指数型基金 专属：指数价 + 指数涨跌
         ...(['QDII亚洲', 'QDII日本', '国内LOF'].includes(selectedFund.value?.category || '') || selectedFund.value?.sub_category?.includes('指数') ? [
@@ -568,9 +567,9 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
         ] : []),
         // 现金管理不显示份额/新增/换手率
         ...(isCash ? [] : [
-            { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatShares(row.shares)) } },
-            { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { return h('span', { style: { color: priceColor(Number(row.shares_added || 0)), fontSize: '11px' } }, formatSharesChange(row.shares_added)) } },
-            { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { return h('span', { style: 'font-size: 12px;' }, formatTurnoverRate(row.turnover_rate)) } },
+            { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { const v = row.shares; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(0)) } },
+            { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { const v = row.shares_added; if (v == null) return '-'; const n = Number(v); return h('span', { style: { color: priceColor(n), fontSize: '11px' } }, (n >= 0 ? '+' : '') + n.toFixed(0)) } },
+            { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { const v = row.turnover_rate; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(2) + '%') } },
         ]),
     ]
 
@@ -691,7 +690,7 @@ const columns = computed<DataTableColumns<any>>(() => {
         { title: '日均增长', key: 'avg_daily_growth', width: 72, align: 'center',
           render(row: any) {
             const g = row.avg_daily_growth
-            if (g == null || g === 0) return '-'
+            if (g == null) return '-'
             return h('span', { class: 'num-cell compact', style: { color: priceColor(g) } }, (g * 10000).toFixed(1) + '万')
           }
         },

@@ -8,24 +8,7 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 class FundManager(BaseManager):
-    def save_fund_data(self, date, fund_code, price, nav, premium):
-        with self.lock:
-            conn = self._get_conn()
-            conn.execute('INSERT OR REPLACE INTO fund_data (date, fund_code, price, nav, premium, created_at) VALUES (?, ?, ?, ?, ?, ?)', 
-                         (date, fund_code, price, nav, premium, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            conn.commit()
-            conn.close()
-            
-    def update_fund_valuation(self, date: str, fund_code: str, static_val: float, val_error: float):
-        with self.lock:
-            conn = self._get_conn()
-            conn.execute('''
-                UPDATE fund_data 
-                SET static_val = ?, val_error = ?
-                WHERE date = ? AND fund_code = ?
-            ''', (static_val, val_error, date, fund_code))
-            conn.commit()
-            conn.close()
+    # [AI-2026-07-25] 已删除 save_fund_data / update_fund_valuation（fund_data 表已废弃，零调用方死代码）
 
     def upsert_fund_factor(self, date: str, fund_code: str, calibration: float, hedge: float, position: float, nav: float = None):
         with self.lock:
@@ -94,70 +77,8 @@ class FundManager(BaseManager):
         conn.close()
         return [{"symbol": row[0], "weight": row[1]} for row in results]
 
-    def get_latest_fund_price(self, code: str) -> Optional[Dict[str, Any]]:
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT fund_code, price, nav, premium, created_at, date 
-                FROM fund_data 
-                WHERE fund_code = ? 
-                ORDER BY date DESC LIMIT 1
-            ''', (code,))
-            result = cursor.fetchone()
-            conn.close()
-            if result:
-                return {
-                    'code': result[0],
-                    'price': result[1],
-                    'nav': result[2],
-                    'premium': result[3],
-                    'timestamp': result[4],
-                    'date': result[5]
-                }
-            return None
-        except Exception as e:
-            logger.error(f"Failed to get fund price: {e}")
-            return None
-
-    def batch_save_fund_prices(self, data_list: List[Dict[str, Any]]):
-        try:
-            for data in data_list:
-                date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
-                self.save_fund_data(
-                    date=date_str, 
-                    fund_code=data.get('code'), 
-                    price=data.get('price'), 
-                    nav=data.get('nav'), 
-                    premium=data.get('premium')
-                )
-            logger.info(f"Batch saved fund prices: {len(data_list)} items")
-        except Exception as e:
-            logger.error(f"Failed to batch save fund prices: {e}")
-            
-    def sync_jsl_fund_list(self, fund_list: List[Dict[str, str]]):
-        with self.lock:
-            try:
-                conn = self._get_conn()
-                for item in fund_list:
-                    conn.execute('''
-                        INSERT OR REPLACE INTO jsl_fund_list 
-                        (category, fund_code, fund_name, related_index)
-                        VALUES (?, ?, ?, ?)
-                    ''', (item['category'], item['code'], item['name'], item.get('related_index', '-')))
-                conn.commit()
-                logger.info(f"Successfully synced {len(fund_list)} JSL items to database.")
-            except Exception as e:
-                logger.error(f"Failed to sync JSL fund list: {e}")
-            finally:
-                conn.close()
-
-    def get_jsl_fund_list(self) -> List[Dict[str, str]]:
-        conn = self._get_conn()
-        cursor = conn.execute("SELECT category, fund_code, fund_name, related_index FROM jsl_fund_list")
-        results = [{"category": r[0], "code": r[1], "name": r[2], "related_index": r[3]} for r in cursor.fetchall()]
-        conn.close()
-        return results
+    # [AI-2026-07-25] 已删除 get_latest_fund_price / batch_save_fund_prices / sync_jsl_fund_list / get_jsl_fund_list
+    #               （fund_data、jsl_fund_list 表已废弃，零调用方死代码）
 
     def batch_save_fund_purchase_status(self, df):
         with self.lock:

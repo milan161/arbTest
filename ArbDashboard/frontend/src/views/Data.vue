@@ -74,6 +74,7 @@
         <n-card title="核心基金配置" class="shadow-soft">
           <template #header-extra>
             <n-space>
+              <n-button size="tiny" type="primary" secondary @click="showInventory = true">基金大盘点</n-button>
               <n-button size="tiny" @click="handleImportClick">导入</n-button>
               <n-button size="tiny" @click="handleExportClick">导出</n-button>
             </n-space>
@@ -256,6 +257,76 @@
         <n-button type="primary" @click="handleImportConfirm" :loading="importLoading" :disabled="!importFile">确认导入</n-button>
       </div>
     </n-modal>
+
+    <!-- [AI-2026-07-27] 基金大盘点弹窗：全量基金 分类/估值算法(含兜底)/数据源/对冲方式(含兜底)/关键证据 -->
+    <n-modal v-model:show="showInventory" preset="card" title="基金大盘点（全量配置一览）" style="width: 96%; max-width: 1280px;">
+      <template #header-extra>
+        <n-space>
+          <n-button size="small" @click="exportInventoryCsv">
+            <template #icon><n-icon><FileDown /></n-icon></template>导出 CSV
+          </n-button>
+          <n-button size="small" quaternary @click="showInventory = false">关闭</n-button>
+        </n-space>
+      </template>
+      <div class="inv-controls">
+        <n-space>
+          <n-select v-model:value="invFilterCat" :options="invCatOptions" placeholder="全部分类" clearable style="width: 180px;" />
+          <n-input v-model:value="invQuery" placeholder="搜索 代码 / 名称 / 算法..." style="width: 240px;" />
+          <n-text depth="3">共 {{ inventoryRows.length }} 只 · 当前显示 {{ invFiltered.length }}</n-text>
+        </n-space>
+      </div>
+      <div class="inv-table-wrap">
+        <table class="inv-table">
+          <thead>
+            <tr>
+              <th>分类(TAB)</th>
+              <th>代码</th>
+              <th>名称</th>
+              <th>估值算法（静态 / 实时）</th>
+              <th>数据源（静态 / 实时）</th>
+              <th>对冲方式（主源 → 兜底）</th>
+              <th>关键证据(篮子/ETF/指数)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in invFiltered" :key="r.code">
+              <td><span class="inv-tag" :style="getCategoryTextColor(r.cat)">{{ r.cat }}</span></td>
+              <td class="inv-code">{{ r.code }}</td>
+              <td>{{ r.name }}</td>
+              <td>
+                <template v-if="r.unified">
+                  <div class="inv-algo">{{ r.staticAlgo }}</div>
+                </template>
+                <template v-else>
+                  <div class="inv-algo">静态：{{ r.staticAlgo }}</div>
+                  <div class="inv-algo">实时：{{ r.dynAlgo }}</div>
+                </template>
+              </td>
+              <td>
+                <template v-if="r.unified">
+                  <div class="inv-algo">{{ r.staticSrc }}</div>
+                </template>
+                <template v-else>
+                  <div class="inv-algo">静态：{{ r.staticSrc }}</div>
+                  <div class="inv-sub">实时：{{ r.dynSrc }}</div>
+                </template>
+              </td>
+              <td>
+                <div class="inv-algo">{{ r.hedge }}</div>
+                <div class="inv-sub">{{ r.hedgeFallback }}</div>
+              </td>
+              <td class="inv-ev">{{ r.evidence }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="inv-note">
+        <strong>估值算法区分「静态估值 / 实时估值」</strong>：静态估值（step4 批量计算）按基金跟踪方式用指数公式或篮子/魔法公式；实时估值（看板推演）按对冲标的走魔法公式（Tier1 用 Woody hedge / Tier2 矩阵公式兜底）或 NK 期货标准公式。
+        hedge = ETF净值×汇率/(基金净值×仓位)，可由公开数据自算（162411 实测与 Woody 值误差 0.000%）；Woody 另提供锚点 ETF 权重（yaml 配置）。
+        Woody 三层链：<strong>VPS文件 → 直接访问API(Palmmicro) → woody网站(爬虫兜底)</strong>。
+        其余数据源：指数点位走新浪/东财/Yahoo；ETF 实时价走 IB→富途→新浪；A股/指数/期货走 TDX→国金/银河QMT→腾讯→新浪。标注「待确认」的请以实际配置为准。
+      </p>
+    </n-modal>
   </div>
 </template>
 
@@ -372,6 +443,21 @@ const getCategoryBadgeStyle = (cat: string) => {
     else if (cat.includes('跨境') || cat.includes('欧美') || cat.includes('亚洲') || cat.includes('纯ETF') || cat.includes('混合')) { textColor = '#dc2626'; bgColor = '#fee2e2'; }
     else if (cat.includes('白银')) { textColor = '#059669'; bgColor = '#d1fae5'; }
     return { color: textColor, backgroundColor: bgColor, padding: '3px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold', display: 'inline-block', lineHeight: '1.2' };
+}
+
+// [AI-2026-07-27] 基金大盘点表格：不同 TAB 用不同字体颜色，便于一眼区分
+const CATEGORY_TEXT_COLOR: Record<string, string> = {
+  '黄金原油': '#d97706',   // 琥珀
+  'QDII欧美': '#dc2626',   // 红
+  'QDII日本': '#db2777',   // 粉
+  'QDII亚洲': '#7c3aed',   // 紫
+  '国内LOF': '#2563eb',    // 蓝
+  '白银': '#059669',       // 绿
+  '现金管理': '#64748b',   // 灰
+}
+const getCategoryTextColor = (cat: string) => {
+  const c = CATEGORY_TEXT_COLOR[cat] || '#374151'
+  return { color: c, fontWeight: 'bold', fontSize: '12px' }
 }
 
 const fetchDataStatus = async () => {
@@ -586,6 +672,175 @@ const handleExportShareDb = async () => {
   }
 }
 
+// [AI-2026-07-27] 基金大盘点：基于 fundConfigs（已加载的全部 YAML 配置）计算全量一览，
+// 兜底链路来自代码核查（woody_api_service / market_data_service / symbol_source_map / data_fetcher）。
+const showInventory = ref(false)
+const invFilterCat = ref<string | null>(null)
+const invQuery = ref('')
+
+// [AI-2026-07-27] 基金大盘点：估值算法 / 数据源 区分「静态估值(step4)」与「实时估值(推演)」
+// 静态估值分发逻辑来自 static_valuation.py _deduce_valuation；实时估值来自 dynamic_valuation.calculate() + fund_service NK 期货路径
+// 关键事实（已查代码 + 实测确认，非猜测）：
+//  - 161125/161130：静态=指数公式(.INX/.NDX)，实时=魔法公式(SPY/QQQ + Woody hedge) → Tier1/Tier2 矩阵公式兜底
+//  - QDII日本：静态=指数公式(N225)，实时=NK 期货标准公式
+//  - 黄金原油等多篮子：静态=实时=矩阵(篮子)标准公式（统一显示，数据源 woody API 含 hedge，无兜底）
+//  - 162411：静态=魔法公式(XOP+hedge)，hedge缺失→矩阵(篮子)标准公式；实时=Tier1 魔法/Tier2 矩阵
+//  - hedge = ETF净值×汇率/(基金净值×仓位)，可由公开数据自算（162411 实测误差 0.000%）；Woody 另提供锚点 ETF 权重(yaml)
+//  - Woody 三层链：VPS文件 → 直接访问API(Palmmicro) → woody网站(爬虫兜底)
+// [AI-2026-07-27] 判定：related_index 必须是「干净的指数符号」才算指数基金，
+// 否则（ETF 符号如 XOP/GLD，或逗号串如 GLD,USO）不当作指数，避免把单ETF/多篮子基金误判为指数公式
+const ETF_SYMBOLS = new Set(['XOP', 'SPY', 'QQQ', 'GLD', 'USO', 'SLV', 'NKY', 'INDA', 'XLK', 'ARKK', 'EWA', 'MGC', 'CL', 'UNG', 'GDX'])
+function isIndexRi(ri: any): boolean {
+  ri = String(ri ?? '')
+  if (!ri || ri === 'None') return false
+  if (ri.includes(',')) return false
+  if (ETF_SYMBOLS.has(ri)) return false
+  if (ri.startsWith('.')) return true
+  if (/^\d+$/.test(ri)) return true
+  return true // N225 / HSI / HSCEI 等已知指数符号
+}
+function vmOf(fd: any): string {
+  const v = fd.valuation_method
+  return (v === null || v === undefined) ? '' : String(v)
+}
+
+function invStaticAlgo(fd: any): { algo: string; src: string } {
+  const vm = vmOf(fd)
+  const ri = fd.related_index || ''
+  const vp: any[] = fd.valuation_portfolio || []
+  const cat = fd.category || ''
+  const sym = vp.length ? (vp[0].symbol || '') : ''
+  if (cat === 'QDII日本') return { algo: '指数公式(N225)', src: '日经225(Yahoo/新浪)' }
+  if (vm === 'index' || vm === 'equity_asia' || vm === 'lof_domestic') return { algo: `指数公式(${ri || '指数'})`, src: '指数点位(新浪/东财)' }
+  if (vm === 'etf') return { algo: '魔法公式(单一ETF+hedge)；hedge缺失→矩阵(篮子)标准公式', src: `Woody hedge；兜底用 ${sym} 净值(Yahoo)` }
+  if (vm === 'basket') return { algo: '矩阵(篮子)标准公式', src: '各 ETF 净值(Yahoo/IB) + yaml 权重' }
+  if (isIndexRi(ri) && vp.length <= 1) return { algo: `指数公式(${ri})`, src: '指数点位(新浪/东财)' }
+  if (vp.length > 1) return { algo: '矩阵(篮子)标准公式', src: '各 ETF 净值(Yahoo/IB) + yaml 权重' }
+  if (vp.length === 1) return { algo: '魔法公式(单一ETF+hedge)；hedge缺失→矩阵(篮子)标准公式', src: `Woody hedge；兜底用 ${sym} 净值(Yahoo)` }
+  return { algo: '待确认', src: '待确认' }
+}
+
+function invDynAlgo(fd: any): { algo: string; src: string } {
+  const vm = vmOf(fd)
+  const ri = fd.related_index || ''
+  const vp: any[] = fd.valuation_portfolio || []
+  const cat = fd.category || ''
+  const sym = vp.length ? (vp[0].symbol || '') : ''
+  if (cat === 'QDII日本') return { algo: 'NK 期货标准公式', src: '新浪 hf_NK 实时价 + futures_daily NK 结算价 + 日元在岸价' }
+  if (vm === 'index' && vp.length === 1) return { algo: 'Tier1 魔法公式(单一ETF+hedge); Tier2 矩阵(篮子)标准公式', src: `Tier1: ${sym} 实时价(IB→富途→新浪) + Woody hedge；Tier2: Yahoo 净值 + yaml 权重` }
+  if (vm === 'etf' || (vm === '' && vp.length === 1)) return { algo: 'Tier1 魔法公式(单一ETF+hedge); Tier2 矩阵(篮子)标准公式', src: `Tier1: ${sym} 实时价(IB→富途→新浪) + Woody hedge；Tier2: Yahoo 净值 + yaml 权重` }
+  if (vm === 'basket' || (vm === '' && vp.length > 1)) return { algo: '矩阵(篮子)标准公式', src: '各 ETF 实时价(IB→富途→新浪) + 基准价(Yahoo/IB) + yaml 权重' }
+  if (isIndexRi(ri) && vm !== 'etf' && vm !== 'basket') return { algo: `指数公式(${ri})`, src: '指数点位(新浪/东财)' }
+  return { algo: '待确认', src: '待确认' }
+}
+
+function invVpStr(vp: any[]): string {
+  if (!vp || !vp.length) return ''
+  return vp.map((v: any) => {
+    const s = v.symbol || ''
+    const w = v.weight != null ? v.weight : ''
+    const a = v.anchor || ''
+    return a ? `${s}(${w},${a})` : `${s}(${w})`
+  }).join(', ')
+}
+
+// [AI-2026-07-27] invAlgoName 已弃用：估值算法现由 invStaticAlgo / invDynAlgo 按「静态/实时」分别推导，见上方。
+
+function invHedgeStr(fd: any): string {
+  const te = fd.trade_etf || ''
+  const tf = fd.trade_future || ''
+  const fh = fd.future_hedging || []
+  const cat = fd.category || ''
+  const parts: string[] = []
+  if (te) parts.push(`ETF ${te}`)
+  if (tf) parts.push(`期货 ${tf}`)
+  else if (fh && fh.length) fh.forEach((h: any) => parts.push(`期货 ${h.symbol || ''}`))
+  if (cat === 'QDII亚洲' || cat === '国内LOF') return '无法对冲'
+  if (!parts.length) return '未配置'
+  return parts.join(' / ')
+}
+
+// [AI-2026-07-27] 对冲方式兜底链（按分类）
+function invHedgeFallback(cat: string): string {
+  switch (cat) {
+    case '黄金原油': return '对冲ETF实时价: IB→富途→None; 期货结算价: 新浪 hf_/nf_'
+    case 'QDII欧美': return '对冲ETF实时价: IB→富途→None; 期货结算价: 新浪'
+    case 'QDII日本': return '日经期货NK: 新浪 hf_NK(无兜底)'
+    case 'QDII亚洲':
+    case '国内LOF': return '无法对冲'
+    case '白银': return '沪银Ag: 上期所/新浪(无兜底)'
+    case '现金管理': return '未配置'
+    default: return '待确认'
+  }
+}
+
+const inventoryRows = computed(() => {
+  const catOrder = ['黄金原油', 'QDII欧美', 'QDII日本', 'QDII亚洲', '国内LOF', '白银', '现金管理']
+  const rows = (fundConfigs.value || []).map((fd: any) => {
+    const cat = fd.category || ''
+    const sa = invStaticAlgo(fd)
+    const da = invDynAlgo(fd)
+    const unified = cat === '黄金原油'
+    const ev = invVpStr(fd.valuation_portfolio) || fd.trade_etf || fd.related_index || ''
+    return {
+      code: fd.code,
+      name: fd.name || '',
+      cat,
+      unified,
+      staticAlgo: unified ? '矩阵(篮子)标准公式' : sa.algo,
+      staticSrc: unified ? 'woody API（含hedge）' : sa.src,
+      dynAlgo: unified ? '矩阵(篮子)标准公式' : da.algo,
+      dynSrc: unified ? 'woody API（含hedge）' : da.src,
+      hedge: invHedgeStr(fd),
+      hedgeFallback: invHedgeFallback(cat),
+      evidence: ev,
+    }
+  })
+  rows.sort((a: any, b: any) => {
+    const ia = catOrder.indexOf(a.cat); const ib = catOrder.indexOf(b.cat)
+    if (ia !== ib) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+    return String(a.code).localeCompare(String(b.code))
+  })
+  return rows
+})
+
+const invCatOptions = computed(() => {
+  const set = new Set<string>()
+  inventoryRows.value.forEach((r: any) => set.add(r.cat))
+  return Array.from(set).map((c) => ({ label: c, value: c }))
+})
+
+const invFiltered = computed(() => {
+  const c = invFilterCat.value
+  const q = (invQuery.value || '').toLowerCase().trim()
+  return inventoryRows.value.filter((r: any) => {
+    if (c && r.cat !== c) return false
+    if (!q) return true
+    return (r.code + r.name + r.staticAlgo + r.dynAlgo + r.hedge + r.evidence).toLowerCase().includes(q)
+  })
+})
+
+const exportInventoryCsv = () => {
+  const headers = ['分类', '代码', '名称', '静态估值算法', '静态数据源', '实时估值算法', '实时数据源', '对冲方式', '对冲兜底链', '关键证据']
+  const lines = [headers.join(',')]
+  inventoryRows.value.forEach((r: any) => {
+    const cells = [r.cat, r.code, r.name, r.staticAlgo, r.staticSrc, r.dynAlgo, r.dynSrc, r.hedge, r.hedgeFallback, r.evidence]
+    lines.push(cells.map((cell: any) => `"${String(cell == null ? '' : cell).replace(/"/g, '""')}"`).join(','))
+  })
+  const csv = '﻿' + lines.join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  const ts = new Date().toISOString().slice(0, 10)
+  link.setAttribute('download', `基金大盘点_${ts}.csv`)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+  message.success('已导出 CSV')
+}
+
 onMounted(() => {
   fetchFundConfigs()
   fetchCategories()
@@ -648,4 +903,16 @@ onMounted(() => {
 .health-result { padding: 8px 0; font-size: 13px; }
 .health-issue { display: flex; align-items: flex-start; padding: 4px 0; color: #92400e; }
 .health-stats { font-size: 12px; color: #64748b; line-height: 1.8; }
+.inv-controls { margin-bottom: 12px; }
+.inv-table-wrap { max-height: 62vh; overflow: auto; border: 1px solid #edf2f7; border-radius: 8px; }
+.inv-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.inv-table th, .inv-table td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
+.inv-table thead th { background: #2c3e50; color: #fff; position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+.inv-table tbody tr:nth-child(even) { background: #fafafa; }
+.inv-code { font-family: monospace; font-weight: 600; white-space: nowrap; color: #1e293b; }
+.inv-tag { background: #3498db; color: #fff; padding: 2px 7px; border-radius: 3px; font-size: 12px; white-space: nowrap; }
+.inv-algo { font-weight: 600; color: #1e293b; }
+.inv-sub { font-size: 11px; color: #94a3b8; margin-top: 2px; line-height: 1.5; }
+.inv-ev { color: #64748b; font-size: 11.5px; max-width: 260px; }
+.inv-note { font-size: 11.5px; color: #64748b; line-height: 1.7; margin-top: 12px; background: #f8fafc; padding: 8px 12px; border-radius: 6px; }
 </style>

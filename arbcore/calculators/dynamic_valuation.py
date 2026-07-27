@@ -116,22 +116,13 @@ class DynamicValuationCalculator:
                             base_date = base_row['date']
                             logger.info(f"  ✅ [{fund_code}] 回溯后基准日调整为 {base_date}")
 
-            # [FIX] 当最新日期缺少 hedge/position 时，向前查找最近的有效数据
-            if pd.isna(base_row.get('hedge')) or float(base_row.get('hedge', 0)) <= 0:
-                try:
-                    hedge_query = """
-                        SELECT hedge, position 
-                        FROM fund_daily_factors 
-                        WHERE fund_code = ? AND hedge IS NOT NULL AND hedge > 0
-                        ORDER BY date DESC LIMIT 1
-                    """
-                    hedge_df = pd.read_sql(hedge_query, conn, params=(fund_code,))
-                    if not hedge_df.empty:
-                        base_row['hedge'] = hedge_df.iloc[0]['hedge']
-                        base_row['position'] = hedge_df.iloc[0]['position']
-                except Exception as e:
-                    logger.warning(f"获取 hedge 兜底数据失败 ({fund_code}): {e}")
-            
+            # [AI-2026-07-27] 删除旧的「向前取最近 hedge」兜底（原第②级，当年三条路径里最不精确的）：
+            # 删除后仅剩两级：① 魔法公式(hedge在) ② 矩阵(篮子)标准公式(hedge缺，自然降级)。
+            # 改为：hedge 缺失时不再用陈旧值兜底——calculate() 会直接落到
+            # 矩阵(篮子)标准公式，仅依赖 usa_etf_daily_prices.netvalue(Yahoo) +
+            # exchange_rate(官方中间价) + yaml 权重/仓位，全链路可脱离 Woody 独立计算。
+            # （单ETF基金的 position 缺失时由 calculate() 用 yaml holdings.equity_ratio 兜底）
+
             # [AI-2026-07-21] 补充底层 ETF 基准价格：查询 fund_basket_weights 判断基金会是否为多篮子
             # 有 basket 条目的基金（如161116→GLD+^GLD-EU）必须取 price（市场价格），矩阵公式需要真实价格变化率
             # 无 basket 的单主ETF（如162411→XOP）取 netvalue（净值），因为 hedge 魔术公式不直接使用 base_price
@@ -192,9 +183,9 @@ class DynamicValuationCalculator:
                 if primary_sym.endswith(suffix):
                     primary_sym = primary_sym[:-len(suffix)]  # USO-EU → USO
                     break
-            c_price = current_etfs.get(primary_sym, 0)
+            c_price = current_etfs.get(primary_sym) or 0
             if not c_price or c_price <= 0:
-                c_price = base_data.get(full_symbol, 0)
+                c_price = base_data.get(full_symbol) or 0
             if c_price > 0:
                 rt_val = calculate_magic_valuation(b_nav, position, c_price, current_fx, b_hedge)
         
@@ -204,14 +195,14 @@ class DynamicValuationCalculator:
             for p in portfolio:
                 # 分母：基准价格，用完整符号查数据库
                 full_symbol = p.get('symbol', '')
-                b_price = base_data.get(full_symbol)
+                b_price = base_data.get(full_symbol) or 0
                 # 分子：实时价格，去掉 ^ 前缀和 -EU/-JP/-HK 后缀，得到基础代码
                 c_sym = full_symbol.lstrip('^')  # ^USO-EU → USO-EU
                 for suffix in ['-EU', '-JP', '-HK']:
                     if c_sym.endswith(suffix):
                         c_sym = c_sym[:-len(suffix)]  # USO-EU → USO
                         break
-                c_price = current_etfs.get(c_sym, 0)
+                c_price = current_etfs.get(c_sym) or 0
                 if not c_price or c_price <= 0:
                     c_price = b_price
                 if b_price and c_price > 0:

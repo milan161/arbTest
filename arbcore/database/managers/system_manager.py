@@ -42,36 +42,8 @@ class SystemManager(BaseManager):
         conn.close()
         return result is not None
 
-    def save_health_status(self, component: str, status: str, message: str = ""):
-        with self.lock:
-            try:
-                conn = self._get_conn()
-                conn.execute('''
-                    INSERT INTO system_health (component, status, message, timestamp)
-                    VALUES (?, ?, ?, (datetime('now', 'localtime')))
-                ''', (component, status, message))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                logger.error(f"Failed to save health status: {e}")
-
-    def get_health_status(self, component: str = None) -> List[Dict[str, Any]]:
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            if component:
-                cursor.execute('SELECT component, status, message, timestamp FROM system_health WHERE component = ? ORDER BY timestamp DESC LIMIT 10', (component,))
-            else:
-                cursor.execute('SELECT component, status, message, timestamp FROM system_health ORDER BY timestamp DESC LIMIT 50')
-            results = cursor.fetchall()
-            conn.close()
-            return [
-                {'component': row[0], 'status': row[1], 'message': row[2], 'timestamp': row[3]}
-                for row in results
-            ]
-        except Exception as e:
-            logger.error(f"Failed to get health status: {e}")
-            return []
+    # [AI-2026-07-25] 已删除 save_health_status 方法（system_health 表已废弃，零调用方，方案C健康检查功能尾巴）
+    # [AI-2026-07-25] 已删除 get_health_status 方法（方案C：健康检查功能无调用方，死代码）
 
     def remove_access_sync_status(self, sync_date: str, source: str):
         with self.lock:
@@ -90,8 +62,7 @@ class SystemManager(BaseManager):
                 
                 conn.execute('DELETE FROM futures_daily WHERE date < ?', (cutoff_date,))
                 conn.execute('DELETE FROM usa_etf_daily_prices WHERE date < ?', (cutoff_date,))
-                conn.execute('DELETE FROM system_health WHERE timestamp < ?', (cutoff_date,))
-                
+
                 sync_cutoff = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
                 conn.execute('DELETE FROM access_sync_status WHERE sync_date < ?', (sync_cutoff,))
                 

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npx kill-port 5173 && vite",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -23,6 +23,7 @@
     "@types/node": "^24.12.3",
     "@vitejs/plugin-vue": "^6.0.6",
     "@vue/tsconfig": "^0.9.1",
+    "kill-port": "^2.0.1",
     "typescript": "~6.0.2",
     "vite": "^8.0.12",
     "vue-tsc": "^3.2.8"

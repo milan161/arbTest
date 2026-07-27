@@ -17,7 +17,15 @@ requests.packages.urllib3.disable_warnings()
 import pandas as pd
 from io import StringIO
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+# [AI-2026-07-25] bs4 改为可选 import：Woody 网页爬虫为备用数据源，非核心路径。
+# 缺 bs4 时 BeautifulSoup 调用即抛 RuntimeError，由上层 try/except 降级，避免模块 import 失败拖垮后端启动。
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+    def BeautifulSoup(*args, **kwargs):
+        raise RuntimeError("bs4 未安装，Woody 网页爬虫不可用（pip install beautifulsoup4）")
 
 class WoodyWebCrawler:
     def __init__(self):

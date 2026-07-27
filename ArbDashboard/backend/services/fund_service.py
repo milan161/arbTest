@@ -12,6 +12,13 @@ import logging
 import requests
 import yaml
 
+# [AI-2026-07-23] 导入估值方法映射（供 get_valuation_meta 使用）
+from arbcore.config.valuation_mapping import get_fund_valuation_method
+
+# [AI-2026-07-23] 期货结算价缓存（30秒 TTL），避免前端轮询刷屏新浪
+_FUTURES_CACHE_TTL = 30
+_futures_cache = {'data': None, 'time': 0.0}
+
 logger = logging.getLogger(__name__)
 
 # [V11.0] 加载 lof_config.yaml 获取基金配置（rate_type 等字段不在数据库中的）
@@ -78,6 +85,45 @@ def _get_realtime_spot_fx() -> float:
         return _SPOT_FX_CACHE['rate']
     return 0.0
 
+# [AI-2026-07-23] JPY/CNY 在岸价缓存（实时估值用）
+_JPY_SPOT_FX_CACHE = {'rate': 0.0, 'time': 0.0}
+
+def _get_realtime_jpy_spot_fx() -> float:
+    """从新浪获取 JPY/CNY 实时在岸价（实盘汇率），15秒缓存
+
+    [AI-2026-07-23] 新浪 fx_sjpycny 返回每1日元汇率（如 0.0416），
+    需要乘以 100 转换为每100日元汇率（如 4.16），与数据库 jpy_cny_mid 单位一致。
+    参考：woody stockref.php L487-490
+    """
+    now = time.time()
+    if now - _JPY_SPOT_FX_CACHE['time'] < 15 and _JPY_SPOT_FX_CACHE['rate'] > 0:
+        return _JPY_SPOT_FX_CACHE['rate']
+    try:
+        resp = requests.get(
+            "http://hq.sinajs.cn/list=fx_sjpycny",
+            headers={"Referer": "https://finance.sina.com.cn/"},
+            timeout=3.0,
+            proxies={"http": None, "https": None}
+        )
+        resp.encoding = 'gbk'
+        if resp.text and '="' in resp.text:
+            parts = resp.text.split('"')[1].split(',')
+            if len(parts) >= 2:
+                # [AI-2026-07-23] 新浪返回每1日元汇率，乘100转每100日元
+                rate = float(parts[1]) * 100.0
+                if rate > 0:
+                    _JPY_SPOT_FX_CACHE['rate'] = rate
+                    _JPY_SPOT_FX_CACHE['time'] = now
+                    logger.debug(f"[FX] 日元在岸价: {rate}")
+                    return rate
+    except Exception as e:
+        logger.warning(f"[FX] 获取日元在岸价失败: {e}")
+    if _JPY_SPOT_FX_CACHE['rate'] > 0:
+        return _JPY_SPOT_FX_CACHE['rate']
+    return 0.0
+
+
+
 # [债券ETF] 引入债券ETF估值服务
 from services.bond_etf_valuation import get_bond_etf_valuation, BOND_ETF_META
 
@@ -120,6 +166,7 @@ _daily_snapshot = {
     'usd_cny_mid': None,
     'usd_cny_spot': None,
     'jpy_cny_mid': None,
+    'jpy_cny_spot': None,
     'loaded': False,
 }
 
@@ -134,13 +181,15 @@ def _ensure_daily_snapshot(conn):
         # [AI-2026-07-23] 防御 None 与 int 比较崩溃
         if not fx_df.empty and pd.notna(fx_df.iloc[0]['usd_cny_mid']) and fx_df.iloc[0]['usd_cny_mid'] > 0:
             _daily_snapshot['usd_cny_mid'] = fx_df.iloc[0]['usd_cny_mid']
-        # [AI-2026-07-23] 加载日元中间价（QDII日本基金用）
+        # [AI-2026-07-23] 加载日元中间价和在岸价（QDII日本基金用）
         try:
             fx_df_all = pd.read_sql("SELECT usd_cny_mid, jpy_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn)
             if not fx_df_all.empty and pd.notna(fx_df_all.iloc[0]['jpy_cny_mid']) and fx_df_all.iloc[0]['jpy_cny_mid'] > 0:
                 _daily_snapshot['jpy_cny_mid'] = fx_df_all.iloc[0]['jpy_cny_mid']
         except Exception:
             pass
+        # [AI-2026-07-23] 加载日元在岸价（实时估值用）
+        _daily_snapshot['jpy_cny_spot'] = _get_realtime_jpy_spot_fx()
         # 加载实时在岸价（用于 spot rate 基金）
         _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
         if _daily_snapshot['usd_cny_spot'] <= 0:
@@ -618,8 +667,8 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
                     part = _build_index_daily_fallback(syms, conn, now)
                     if part:
                         db_results.update(part)
-                        logger.info(f"[INDEX-DB] {ex} 非交易日 {now.date()}，"
-                                    f"{len(part)}/{len(syms)} 个指数取上一交易日收盘价")
+                        logger.debug(f"[INDEX-DB] {ex} 非交易日 {now.date()}，"
+                                     f"{len(part)}/{len(syms)} 个指数取上一交易日收盘价")
                 except Exception as e:
                     logger.warning(f"[INDEX-DB] {ex} 兜底失败: {e}")
             continue
@@ -1143,7 +1192,8 @@ class FundService:
 
                     valid_prices = metrics_df.dropna(subset=['price'])
                     if not valid_prices.empty:
-                        metrics['price'] = valid_prices.iloc[0]['price']
+                        p = valid_prices.iloc[0]['price']
+                        metrics['price'] = float(p) if p is not None and float(p) > 0 else 0.0
 
                     for col in ['volume', 'shares', 'shares_added', 'turnover_rate']:
                         valid_series = metrics_df.dropna(subset=[col])
@@ -1177,7 +1227,9 @@ class FundService:
                 # ── 4. 实时价格（从预取的 quotes_dict 取，避免逐只序列调用） ──
                 if self.market_data_service and code in quotes_dict:
                     rt = quotes_dict[code]
-                    metrics['price'] = rt['price']
+                    p = rt.get('price')
+                    if p is not None and float(p) > 0:
+                        metrics['price'] = float(p)
                     if rt.get('amount'):
                         metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
                 elif self.market_data_service:
@@ -1229,35 +1281,40 @@ class FundService:
                     metrics['rt_val'] = None
                     metrics['rt_premium'] = None
 
-                # [AI-2026-07-23] QDII日本基金：NK期货实时估值
+                # [AI-2026-07-23] QDII日本基金：NK期货实时估值（Woody 公式）
+                # Woody: fVal = NK_real * JPYCNY_real / fFactor, fFactor = NK_base * JPYCNY_base / NAV_base
+                # 等价于: rt_val = NAV_base * [(1-pos) + pos * (NK_real/NK_base) * (JPYCNY_real/JPYCNY_base)]
                 if category == 'QDII日本' and metrics.get('nav', 0) > 0:
                     try:
                         nk_quote = self.market_data_service.get_realtime_quote('NK') if self.market_data_service else None
-                        nk_current = float(nk_quote.get('price', 0)) if nk_quote else 0.0
+                        nk_current = float(nk_quote.get('price', 0) or 0) if nk_quote else 0.0
                         if nk_current > 0:
-                            cursor = conn.cursor()
-                            # NK 基准结算价
-                            cursor.execute("SELECT date, settle_price FROM futures_daily WHERE symbol='NK' AND settle_price > 0 ORDER BY date DESC LIMIT 1")
-                            nk_row = cursor.fetchone()
-                            nk_base = float(nk_row[1]) if nk_row else 0.0
-                            nk_base_date = nk_row[0] if nk_row else None
-                            # 基准日 JPY/CNY 汇率
-                            fx_base = 0.0
-                            if nk_base_date:
-                                cursor.execute("SELECT jpy_cny_mid FROM exchange_rate WHERE date=? AND jpy_cny_mid > 0", (nk_base_date,))
-                                fxb = cursor.fetchone()
-                                fx_base = float(fxb[0]) if fxb else 0.0
-                            # 当前 JPY/CNY 汇率
-                            cursor.execute("SELECT jpy_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1")
-                            fx_row = cursor.fetchone()
-                            fx_current = float(fx_row[0]) if fx_row else 0.0
-                            if nk_base > 0 and fx_current > 0 and fx_base > 0:
-                                pos = float(fund.get('pos_ratio', 0.95))
-                                nav = metrics['nav']
-                                rt_val = nav * ((1 - pos) + pos * (nk_current / nk_base) * (fx_current / fx_base))
-                                metrics['rt_val'] = round(rt_val, 4)
-                                if metrics.get('price', 0) > 0:
-                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                            # 获取 T-1 基准日数据（与 NAV 同一天）
+                            t1_row = conn.execute("""
+                                SELECT h.date, h.nav, r.jpy_cny_mid
+                                FROM unified_fund_history h
+                                LEFT JOIN exchange_rate r ON h.date = r.date
+                                WHERE h.fund_code = ? AND h.nav > 0 AND r.jpy_cny_mid > 0
+                                ORDER BY h.date DESC LIMIT 1
+                            """, (code,)).fetchone()
+                            if t1_row:
+                                base_date = t1_row[0]
+                                nav_base = float(t1_row[1])
+                                fx_base = float(t1_row[2])
+                                # [AI-2026-07-23] NK 基准结算价：取最新数据（futures_daily 可能缺失历史 NK 数据）
+                                nk_base_row = conn.execute(
+                                    "SELECT settle_price FROM futures_daily WHERE symbol='NK' AND settle_price > 0 ORDER BY date DESC LIMIT 1"
+                                ).fetchone()
+                                nk_base = float(nk_base_row[0]) if nk_base_row else 0.0
+                                # 当前 JPY/CNY 在岸价（实时估值用对在岸价，不用中间价）
+                                fx_current = _daily_snapshot.get('jpy_cny_spot') or 0.0
+                                if nk_base > 0 and fx_current > 0 and fx_base > 0 and nav_base > 0:
+                                    pos = float(fund.get('pos_ratio', 0.95))
+                                    # Woody 公式
+                                    rt_val = nav_base * ((1 - pos) + pos * (nk_current / nk_base) * (fx_current / fx_base))
+                                    metrics['rt_val'] = round(rt_val, 4)
+                                    if metrics.get('price', 0) > 0:
+                                        metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
                     except Exception as e:
                         logger.error(f"[QDII日本] 实时估值计算失败 {code}: {e}")
 
@@ -1310,7 +1367,7 @@ class FundService:
                             # 参考估值 (rt_val) = 昨天净值 * (实时成交价 / 昨结算价)
                             rt_val = nav_home * (ag_future_price / settlement_price)
                             metrics['rt_val'] = round(rt_val, 4)
-                            if metrics['price'] > 0:
+                            if metrics.get('price', 0) > 0:
                                 metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
                                 
                             # 🚀 官方估值 (static_val) = 昨天净值 * (VWAP / 昨结算价)
@@ -1467,8 +1524,47 @@ class FundService:
                                 if val_res and val_res > 0:
                                     metrics['rt_val'] = round(val_res, 4)
                                     # 重新计算溢价率
-                                    if metrics['price'] > 0:
+                                    if metrics.get('price', 0) > 0:
                                         metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
+
+                            # [AI-2026-07-23] QDII日本基金：用 NK 期货 + 在岸价 做实时估值（Woody 公式）
+                            if not metrics.get('rt_val') and category == 'QDII日本':
+                                try:
+                                    # 获取 NK 期货实时价（hf_NK）
+                                    nk_quote = self.market_data_service.get_realtime_quote('NK') if self.market_data_service else None
+                                    nk_price = nk_quote.get('bid') or nk_quote.get('price') if nk_quote else 0
+                                    # 获取在岸价
+                                    jpy_spot = _daily_snapshot.get('jpy_cny_spot') or 0
+                                    # 获取校准数据（T-1 NAV, NKY_close, JPYCNY_close）
+                                    cal_row = conn.execute("""
+                                        SELECT h.nav, h.price as close, r.jpy_cny_mid
+                                        FROM unified_fund_history h
+                                        LEFT JOIN exchange_rate r ON h.date = r.date
+                                        WHERE h.fund_code = ? AND h.nav > 0
+                                        ORDER BY h.date DESC LIMIT 1
+                                    """, (code,)).fetchone()
+                                    if nk_price > 0 and jpy_spot > 0 and cal_row:
+                                        base_nav = cal_row[0]
+                                        base_jpy = cal_row[2]
+                                        if base_nav > 0 and base_jpy > 0:
+                                            # Woody 公式: rt_val = NK_spot * JPY_spot * NAV_base / (NK_base * JPY_base)
+                                            # 简化为: rt_val = NAV_base * (NK_spot / NK_base) * (JPY_spot / JPY_base)
+                                            # 其中 NK_base = base_jpy * base_nav / (NK_spot_prev * JPY_spot_prev)
+                                            # 更简单的: rt_val = NK_spot * JPY_spot / fFactor
+                                            # fFactor = NKY_close * JPYCNY_close / NAV_close
+                                            # 但我们没有 NKY_close，用 base_jpy * base_nav / (nk_price * jpy_spot) 估算
+                                            # 实际上: rt_val = base_nav * (nk_price / (base_jpy * base_nav / (nk_price_prev * jpy_prev)))
+                                            # 最简: rt_val = nk_price * jpy_spot / (base_jpy * base_nav / base_nav)
+                                            # 直接用: rt_val = base_nav * nk_price * jpy_spot / (base_jpy * base_nav)
+                                            # = nk_price * jpy_spot / base_jpy
+                                            rt_val = nk_price * jpy_spot / base_jpy
+                                            if rt_val > 0:
+                                                metrics['rt_val'] = round(rt_val, 4)
+                                                if metrics.get('price', 0) > 0:
+                                                    metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
+                                                logger.debug(f"[{code}] NK实时估值: nk={nk_price}, jpy={jpy_spot}, base_jpy={base_jpy}, rt_val={rt_val:.4f}")
+                                except Exception as e:
+                                    logger.warning(f"[{code}] NK实时估值失败: {e}")
 
                             # 尝试用 trade_etf 兜底 [V10.8]
                             # basket为空时（如162411的XOP），直接用 trade_etf 获取实时ETF价格做 hedge 估值
@@ -1510,12 +1606,13 @@ class FundService:
                                                         val_res = b_nav * (1.0 - b_position) + (etf_price * fx) / b_hedge
                                                         if val_res > 0:
                                                             metrics['rt_val'] = round(val_res, 4)
-                                                            if metrics['price'] > 0:
+                                                            if metrics.get('price', 0) > 0:
                                                                 metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
                                         except Exception as e:
                                             logger.warning(f"{code} trade_etf({trade_etf}) 实时行情获取失败: {e}")
                 except Exception as e:
-                    logger.error(f"实时计算 {code} 估值失败: {e}")
+                    import traceback
+                    logger.error(f"实时计算 {code} 估值失败: {e}\n{traceback.format_exc()}")
 
                 # [V6.1] 备用兜底：如果实时计算失败（例如未连行情源，或美股休市无最新价），从采样表获取最近一次的记录
                 if not metrics.get('rt_val') or metrics['rt_val'] <= 0:
@@ -1527,9 +1624,15 @@ class FundService:
                         try:
                             sample_query = "SELECT rt_val, premium FROM fund_intraday_quotes WHERE fund_code=? ORDER BY date DESC, time DESC LIMIT 1"
                             sample_df = pd.read_sql(sample_query, conn, params=(code,))
-                            if not sample_df.empty and sample_df.iloc[0]['rt_val'] > 0:
-                                metrics['rt_val'] = sample_df.iloc[0]['rt_val']
-                                metrics['rt_premium'] = sample_df.iloc[0]['premium']
+                            if not sample_df.empty:
+                                rv = sample_df.iloc[0]['rt_val']
+                                if rv is not None and float(rv) > 0:
+                                    metrics['rt_val'] = float(rv)
+                                    pm = sample_df.iloc[0]['premium']
+                                    metrics['rt_premium'] = float(pm) if pm is not None else 0
+                                else:
+                                    metrics['rt_val'] = 0
+                                    metrics['rt_premium'] = 0
                             else:
                                 metrics['rt_val'] = 0
                                 metrics['rt_premium'] = 0
@@ -2113,11 +2216,15 @@ class FundService:
                     trade_future = "AG0"
 
             # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），避免用 related_index（.INX/.NDX）
+            # [AI-2026-07-23] 新增 valuation_method 和 category，供前端 isQDIIJapan 判断
+            _method = get_fund_valuation_method(code)
             fund_cfg = {
                 "code": code,
                 "trade_etf": _YAML_TRADE_ETF.get(code) or f_row[1] or '',
                 "position": float(f_row[2] or 0.95) * 100,
-                "trade_future": trade_future
+                "trade_future": trade_future,
+                "valuation_method": _method,
+                "category": f_row[3] if len(f_row) > 3 else ''
             }
 
             basket_df = pd.read_sql(
@@ -2361,6 +2468,18 @@ class FundService:
                     else:
                         formatted_base_data[k] = str(v)
 
+            # [AI-2026-07-23] QDII日本基金：添加 NK 结算价（用于纯期货估值）
+            # 注意：bd.calibration 是对冲值（~137081），不是 NK 结算价！
+            if meta_category == 'QDII日本':
+                try:
+                    nk_settle_row = conn.execute(
+                        "SELECT settle_price FROM futures_daily WHERE symbol='NK' AND settle_price > 0 ORDER BY date DESC LIMIT 1"
+                    ).fetchone()
+                    if nk_settle_row:
+                        formatted_base_data['nk_settle_price'] = float(nk_settle_row[0])
+                except Exception:
+                    pass
+
             # [债券ETF] 为现金管理基金添加额外估值信息
             bond_extra = {}
             if code in BOND_ETF_CODES:
@@ -2427,5 +2546,14 @@ class FundService:
             
             logger.debug(f"[Snapshot] 采样服务使用数据库自选列表: {len(watchlist)} 只基金")
             return watchlist
+        # [AI-2026-07-25] 容错：fund_watchlist 表不存在（旧库/全新环境未建表）或查询异常时，
+        #                  降级返回全部基金，杜绝其他用户运行时的 no such table 报错。
+        except Exception as e:
+            logger.warning(f"[Snapshot] fund_watchlist 查询失败({e})，降级采样所有基金")
+            try:
+                cur = conn.execute("SELECT fund_code FROM unified_fund_list ORDER BY fund_code")
+                return [row[0] for row in cur.fetchall()]
+            except Exception:
+                return []
         finally:
             conn.close()

@@ -2,10 +2,6 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import re
 import sys
@@ -47,6 +43,7 @@ class DataFetcher:
         # 初始化Woody网页爬虫
         self.woody_crawler = WoodyWebCrawler()
         self._szse_blocked = False  # 新增：深交所全局熔断标志
+        # 期货数据直接从 futures_daily 表读取，不缓存不轮询
         self._fx_cache = None       # [V10.1] 汇率内存缓存
         self._fx_cache_time = 0     # [V10.1] 缓存时间戳
     
@@ -305,63 +302,8 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"API接口获取人民币在岸价失败: {e}")
         
-        # 2. API失败，回退到Selenium网页爬取
-        logger.info("API接口失败，尝试使用Selenium网页爬取")
-        try:
-            # 配置Chrome选项
-            chrome_options = Options()
-            chrome_options.add_argument('--headless')  # 无头模式，不显示浏览器
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--window-size=1920,1080')
-            chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36')
-            
-            # 启动浏览器
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            try:
-                # 打开目标网页
-                url = "https://finance.sina.com.cn/money/forex/hq/USDCNY.shtml"
-                logger.info(f"打开网页: {url}")
-                driver.get(url)
-                
-                # 等待页面加载完成
-                time.sleep(5)  # 等待页面完全加载
-                
-                # 执行JavaScript获取页面中的所有文本内容
-                page_text = driver.execute_script("return document.body.innerText")
-                
-                # 查找符合汇率格式的数字
-                matches = re.findall(r'\b6\.\d{4}\b', page_text)
-                if matches:
-                    # 选择第一个匹配结果
-                    spot_rate = float(matches[0])
-                    current_time = datetime.now().strftime('%H:%M:%S')
-                    current_date = datetime.now().date().strftime('%Y-%m-%d')
-                    
-                    logger.info(f"Selenium网页爬取 - 人民币在岸价: {spot_rate} (爬取时间: {current_time})")
-                    result = {
-                        '日期': current_date,
-                        '时间': current_time,
-                        '人民币在岸价': spot_rate,
-                        '来源': 'Selenium网页爬取'
-                    }
-                    self._fx_cache = result
-                    self._fx_cache_time = time.time()
-                    return result
-                else:
-                    logger.error("Selenium网页爬取未能提取在岸价")
-            except Exception as e:
-                logger.error(f"Selenium网页爬取失败: {e}")
-            finally:
-                driver.quit()
-        except Exception as e:
-            logger.error(f"Selenium初始化失败: {e}")
-        
-        # 3. Selenium失败，回退到Woody网页
-        logger.info("Selenium网页爬取失败，尝试从Woody网页获取")
+        # 2. API失败，回退到Woody网页（bs4 解析，轻量）
+        logger.info("API接口失败，尝试从Woody网页获取")
         try:
             woody_rates = self.woody_crawler.get_woody_exchange_rates()
             if woody_rates and 'USDCNY' in woody_rates:
@@ -811,9 +753,10 @@ class DataFetcher:
         return index_data
     
     def get_futures_settlement_data(self):
-        """从新浪获取期货结算价数据（美股期货 + 内盘 AG0 沪银）"""
+        """从新浪获取期货结算价数据（美股期货 + 内盘 AG0 沪银）
+        仅供 daily_updater 每日调用一次写入 futures_daily 表，前端不调此函数"""
         logger.info("从新浪获取期货结算价数据")
-        
+
         futures_data = []
         headers = {
             'Referer': 'https://finance.sina.com.cn/'
@@ -867,7 +810,7 @@ class DataFetcher:
                         logger.error(f"解析内盘期货行失败 {line}: {e}")
         except Exception as e:
             logger.error(f"获取内盘期货数据失败: {e}")
-        
+
         return futures_data
     
     def fetch_sina_us_stock_historical_data(self, symbol, start_date, end_date):
