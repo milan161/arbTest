@@ -1585,7 +1585,7 @@ class FundService:
                                 trade_etf = fund_cfg.get('trade_etf', '')
                                 if trade_etf and self.market_data_service:
                                     # [V10.9] 跳过指数类符号（HSI/HSTECH等），指数走 get_index_change_percent 路径
-                                    from arbcore.config.symbol_source_map import get_symbol_source
+                                    from arbcore.config.source_routing import get_symbol_source
                                     if get_symbol_source(trade_etf) == 'SINA':
                                         pass  # 指数符号不加入实时行情查询
                                     else:
@@ -2313,7 +2313,7 @@ class FundService:
                 trade_etf = fund_cfg.get('trade_etf', '')
                 if trade_etf:
                     # [V10.9] 跳过指数类符号（HSI/HSTECH/399300等），指数无可用的实时行情
-                    from arbcore.config.symbol_source_map import get_symbol_source
+                    from arbcore.config.source_routing import get_symbol_source
                     if get_symbol_source(trade_etf) == 'SINA':
                         pass  # 指数符号不加入实时行情查询
                     else:

@@ -1,0 +1,939 @@
+funds:
+- code: '501018'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority: &id001
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority: &id002
+    - IB
+    - FUTU
+- code: '160723'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: USO
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: USO
+    source_priority: *id002
+- code: '161129'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority: *id002
+- code: '160216'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id002
+- code: '161815'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id002
+- code: '160719'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id002
+- code: '161116'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id002
+- code: '164701'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id002
+- code: '165513'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority: *id002
+- code: '513350'
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: XOP
+    source_priority: &id003
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XOP
+    source_priority: &id004
+    - IB
+    - FUTU
+- code: '159518'
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: XOP
+    source_priority: *id003
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XOP
+    source_priority: *id004
+- code: '162411'
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: XOP
+    source_priority: *id003
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XOP
+    source_priority: *id004
+- code: '162415'
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: XLY
+    source_priority: &id005
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XLY
+    source_priority: *id004
+- code: '159502'
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: XBI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XBI
+    source_priority: *id004
+- code: '161127'
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: XBI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XBI
+    source_priority: *id004
+- code: '161125'
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: .INX
+    source_priority: &id006
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: SPY
+    source_priority: *id004
+- code: '161130'
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: .NDX
+    source_priority: *id006
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: QQQ
+    source_priority: *id004
+- code: '164824'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: INDA
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: INDA
+    source_priority: *id002
+- code: '164906'
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: KWEB
+    source_priority: *id003
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: KWEB
+    source_priority: *id004
+- code: '161126'
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: RSPH
+    source_priority: *id005
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: RSPH
+    source_priority: *id004
+- code: '163208'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: XLE
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: XLE
+    source_priority: *id002
+- code: '160644'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: MU
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: MU
+    source_priority: *id002
+- code: '501225'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: SOXX
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: SOXX
+    source_priority: *id002
+- code: '501312'
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: ARKK
+    source_priority: *id001
+  dynamic_valuation:
+    basis: basket_price
+    symbol: ARKK
+    source_priority: *id002
+- code: '161226'
+  valuation_method: futures
+  static_valuation:
+    basis: futures
+    symbol: AG0
+    source_priority:
+    - sina
+  dynamic_valuation:
+    basis: futures
+    symbol: AG0
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
+- code: '160322'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCI
+    source_priority: &id007
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSCI
+    source_priority: &id008
+    - sina
+- code: '501305'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority: &id009
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
+- code: '501303'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSMI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSMI
+    source_priority: *id008
+- code: '501302'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSI
+    source_priority: *id008
+- code: '160924'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSI
+    source_priority: *id008
+- code: '164705'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSI
+    source_priority: *id008
+- code: '501306'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority: *id009
+- code: '161831'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority: *id008
+- code: '501307'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: 930917.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930917.CSI
+    source_priority: *id009
+- code: '501301'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCCI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSCCI
+    source_priority: *id008
+- code: '160717'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority: *id008
+- code: '501311'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSSCNE
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSSCNE
+    source_priority: *id008
+- code: '501025'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: '869'
+    source_priority: &id010
+    - eastmoney
+  dynamic_valuation:
+    basis: index
+    symbol: '869'
+    source_priority: *id010
+- code: '161124'
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSSI
+    source_priority: *id007
+  dynamic_valuation:
+    basis: index
+    symbol: HSSI
+    source_priority: *id008
+- code: '160706'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '162711'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '163113'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '161604'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority: *id009
+- code: '165523'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '161811'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '160615'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '162509'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '511880'
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: &id011 []
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+- code: '511360'
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+- code: '511520'
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+- code: '161118'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399005'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399005'
+    source_priority: *id009
+- code: '161025'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 移动互联
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 移动互联
+    source_priority: *id009
+- code: '501048'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 证券公司
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 证券公司
+    source_priority: *id009
+- code: '165522'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 中证TMT
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 中证TMT
+    source_priority: *id009
+- code: '161029'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399986'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399986'
+    source_priority: *id009
+- code: '165511'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 中证500
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 中证500
+    source_priority: *id009
+- code: '502056'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: SZ399989
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: SZ399989
+    source_priority: *id009
+- code: '161716'
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: *id011
+- code: '168204'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority: *id009
+- code: '501089'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: H30094.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: H30094.CSI
+    source_priority: *id009
+- code: '501050'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 950090.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 950090.CSI
+    source_priority: *id009
+- code: '161812'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority: *id009
+- code: '501227'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000922.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 000922.CSI
+    source_priority: *id009
+- code: '161227'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority: *id009
+- code: '163109'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399001'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399001'
+    source_priority: *id009
+- code: '161032'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority: *id009
+- code: '501043'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '161715'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000979.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 000979.CSI
+    source_priority: *id009
+- code: '161631'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930713.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930713.CSI
+    source_priority: *id009
+- code: '160225'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399417'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399417'
+    source_priority: *id009
+- code: '160643'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930875.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930875.CSI
+    source_priority: *id009
+- code: '501007'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930720.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930720.CSI
+    source_priority: *id009
+- code: '501058'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority: *id009
+- code: '160925'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: CES300.HI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: CES300.HI
+    source_priority: *id009
+- code: '163407'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority: *id009
+- code: '162412'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399989'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399989'
+    source_priority: *id009
+- code: '501057'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority: *id009
+- code: '160639'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399807'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399807'
+    source_priority: *id009
+- code: '161217'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000961.CSI
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 000961.CSI
+    source_priority: *id009
+- code: '502000'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000905
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: 000905
+    source_priority: *id009
+- code: '160632'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399987'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399987'
+    source_priority: *id009
+- code: '161726'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399441'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399441'
+    source_priority: *id009
+- code: '167301'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399809'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399809'
+    source_priority: *id009
+- code: '161725'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399997'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399997'
+    source_priority: *id009
+- code: '161031'
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399803'
+    source_priority: *id005
+  dynamic_valuation:
+    basis: index
+    symbol: '399803'
+    source_priority: *id009
+- code: '159561'
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: DAX
+    source_priority: *id003
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: DAX
+    source_priority: *id004
+- code: '513000'
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority: &id012
+    - yahoo
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority: &id013
+    - sina
+- code: '159866'
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority: *id012
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority: *id013
+- code: '513520'
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority: *id012
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority: *id013
+- code: '513880'
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority: *id012
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority: *id013
+- code: '501300'
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: AGG
+    source_priority: *id003
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: AGG
+    source_priority: *id004

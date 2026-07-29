@@ -5,7 +5,7 @@ from .eastmoney import EastMoneyHistoricalFetcher
 from .sina import SinaHistoricalFetcher
 from .xueqiu import XueqiuHistoricalFetcher
 from .tencent import TencentHistoricalFetcher
-from arbcore.config.symbol_source_map import get_symbol_source
+from arbcore.config.source_routing import get_symbol_source
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class HistoricalDataManager:
     def get_prices(self, symbol: str, source: str = None, **kwargs) -> pd.DataFrame:
         """获取历史 K 线价格"""
         if not source:
-            # 根据 symbol_source_map 自动选择
+            # 根据 lof_config.yaml 的 symbol_sources 自动选择
             source = get_symbol_source(symbol)
             
         # 如果 source 是 TDX 或 SINA，统一用 sina 抓取历史

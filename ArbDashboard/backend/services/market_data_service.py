@@ -112,7 +112,7 @@ class MarketDataService:
                 symbol = symbol[:-len(suffix)]
                 break
         
-        from arbcore.config.symbol_source_map import get_symbol_source
+        from arbcore.config.source_routing import get_symbol_source
         source = get_symbol_source(symbol)
         
         # [FIX] 根据 source 决定是否走美股通道

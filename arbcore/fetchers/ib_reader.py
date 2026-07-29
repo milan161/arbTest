@@ -216,7 +216,7 @@ class IBReader(EWrapper, EClient):
             try:
                 # [V7.3] IB 只订阅核心套利标的，不拉取全量 SYMBOL_SOURCE_MAP
                 # 核心标的列表从配置读取，支持用户自定义
-                from arbcore.config.symbol_source_map import IB_CORE_ARBITRAGE_SYMBOLS
+                from arbcore.config.source_routing import IB_CORE_ARBITRAGE_SYMBOLS
                 self.symbols = list(IB_CORE_ARBITRAGE_SYMBOLS)
                 print(f"[IBReader] 核心套利标的: {self.symbols} ({len(self.symbols)} 只)")
             except Exception as e:

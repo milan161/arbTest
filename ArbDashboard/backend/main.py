@@ -828,13 +828,13 @@ async def get_fund_categories():
 @app.get("/api/config/ib_core_symbols")
 async def get_ib_core_symbols():
     """获取 IB 核心套利标的白名单"""
-    from arbcore.config.symbol_source_map import IB_CORE_ARBITRAGE_SYMBOLS
+    from arbcore.config.source_routing import IB_CORE_ARBITRAGE_SYMBOLS
     return {"status": "ok", "data": IB_CORE_ARBITRAGE_SYMBOLS}
 
 @app.post("/api/config/ib_core_symbols")
 async def update_ib_core_symbols(request: Request):
     """更新 IB 核心套利标的白名单（运行时生效，不持久化到文件）"""
-    from arbcore.config.symbol_source_map import IB_CORE_ARBITRAGE_SYMBOLS, SOURCE_SYMBOL_MAP, US_ETF_MAP
+    from arbcore.config.source_routing import IB_CORE_ARBITRAGE_SYMBOLS, SOURCE_SYMBOL_MAP, US_ETF_MAP
     try:
         data = await request.json()
         symbols = data.get('symbols', [])
