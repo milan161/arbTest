@@ -7,8 +7,8 @@ currencies:
   symbol: USD
 valuation_routing:
   methods:
-    ? ''
-    : static_hedge: true
+    '':
+      static_hedge: true
       dynamic_hedge: true
     etf:
       static_hedge: true
@@ -62,6 +62,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: USO
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority:
+    - IB
+    - FUTU
 - code: '160723'
   name: 嘉实原油
   category: 黄金原油
@@ -125,6 +138,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: USO
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: USO
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: USO
+    source_priority:
+    - IB
+    - FUTU
 - code: '161129'
   name: 易方达原油
   category: 黄金原油
@@ -186,6 +212,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: USO
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: USO-EU
+    source_priority:
+    - IB
+    - FUTU
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金原油
@@ -212,6 +251,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: GLD,USO
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - IB
+    - FUTU
 - code: '161815'
   name: 银华抗通胀
   category: 黄金原油
@@ -250,6 +302,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: GLD,USO
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - IB
+    - FUTU
 - code: '160719'
   name: 嘉实黄金
   category: 黄金原油
@@ -308,6 +373,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: GLD
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - IB
+    - FUTU
 - code: '161116'
   name: 易方达黄金
   category: 黄金原油
@@ -367,6 +445,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: GLD
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - IB
+    - FUTU
 - code: '164701'
   name: 汇添富贵金属
   category: 黄金原油
@@ -442,6 +533,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: GLD
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - IB
+    - FUTU
 - code: '165513'
   name: 中信保诚
   category: 黄金原油
@@ -473,6 +577,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: GLD
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: GLD
+    source_priority:
+    - IB
+    - FUTU
 - code: '513350'
   name: 富国标普石油
   category: QDII欧美
@@ -497,6 +614,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XOP
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: XOP
+    source_priority:
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XOP
+    source_priority:
+    - IB
+    - FUTU
 - code: '159518'
   name: 嘉实标普石油
   category: QDII欧美
@@ -521,6 +651,19 @@ funds:
   data_source: woody
   related_index: XOP
   position: 99.0
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: XOP
+    source_priority:
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XOP
+    source_priority:
+    - IB
+    - FUTU
 - code: '162411'
   name: 华宝油气
   category: QDII欧美
@@ -550,6 +693,18 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XOP
+  static_valuation:
+    basis: etf_netvalue
+    symbol: XOP
+    source_priority:
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XOP
+    source_priority:
+    - IB
+    - FUTU
 - code: '162415'
   name: 美国消费
   category: QDII欧美
@@ -572,6 +727,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XLY
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: XLY
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XLY
+    source_priority:
+    - IB
+    - FUTU
 - code: '159502'
   name: 嘉实标普生物
   category: QDII欧美
@@ -597,6 +765,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XBI
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: XBI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XBI
+    source_priority:
+    - IB
+    - FUTU
 - code: '161127'
   name: 标普生物科技
   category: QDII欧美
@@ -620,6 +801,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XBI
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: XBI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: XBI
+    source_priority:
+    - IB
+    - FUTU
 - code: '161125'
   name: 易方达标普500
   category: QDII欧美
@@ -650,6 +844,17 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: .INX
+  static_valuation:
+    basis: index
+    symbol: .INX
+    source_priority:
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: SPY
+    source_priority:
+    - IB
+    - FUTU
 - code: '161130'
   name: 易方达纳100
   category: QDII欧美
@@ -680,6 +885,17 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: .NDX
+  static_valuation:
+    basis: index
+    symbol: .NDX
+    source_priority:
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: QQQ
+    source_priority:
+    - IB
+    - FUTU
 - code: '164824'
   name: 交银印度
   category: QDII欧美
@@ -710,6 +926,18 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: INDA
+  static_valuation:
+    basis: basket_price
+    symbol: INDA
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: INDA
+    source_priority:
+    - IB
+    - FUTU
 - code: '164906'
   name: 交银中证海外
   category: QDII欧美
@@ -730,6 +958,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: KWEB
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: KWEB
+    source_priority:
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: KWEB
+    source_priority:
+    - IB
+    - FUTU
 - code: '161126'
   name: 标普医疗保健
   category: QDII欧美
@@ -750,6 +991,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: RSPH
+  valuation_method: etf
+  static_valuation:
+    basis: index
+    symbol: RSPH
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: RSPH
+    source_priority:
+    - IB
+    - FUTU
 - code: '163208'
   name: 诺安油气能源
   category: 黄金原油
@@ -773,6 +1027,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XLE
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: XLE
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: XLE
+    source_priority:
+    - IB
+    - FUTU
 - code: '160644'
   name: 港美互联网
   category: QDII欧美
@@ -820,6 +1087,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: ''
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: MU
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: MU
+    source_priority:
+    - IB
+    - FUTU
 - code: '501225'
   name: 顺丰半导体芯片
   category: QDII欧美
@@ -843,6 +1123,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: SOXX
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: SOXX
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: SOXX
+    source_priority:
+    - IB
+    - FUTU
 - code: '501312'
   name: 海外科技
   category: QDII欧美
@@ -890,6 +1183,19 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: ''
+  valuation_method: basket
+  static_valuation:
+    basis: basket_price
+    symbol: ARKK
+    source_priority:
+    - woody
+    - IB
+  dynamic_valuation:
+    basis: basket_price
+    symbol: ARKK
+    source_priority:
+    - IB
+    - FUTU
 - code: '161226'
   name: 国瑞白银期货
   category: 白银
@@ -912,6 +1218,21 @@ funds:
   woody_supported: false
   data_source: other
   related_index: ''
+  valuation_method: futures
+  static_valuation:
+    basis: futures
+    symbol: AG0
+    source_priority:
+    - sina
+  dynamic_valuation:
+    basis: futures
+    symbol: AG0
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160322'
   name: 港股精选
   category: QDII亚洲
@@ -928,6 +1249,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSCI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSCI
+    source_priority:
+    - sina
 - code: '501305'
   name: 港股高股息
   category: QDII亚洲
@@ -944,6 +1277,22 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: 930914.CSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501303'
   name: 恒生中型股
   category: QDII亚洲
@@ -960,6 +1309,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSMI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSMI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSMI
+    source_priority:
+    - sina
 - code: '501302'
   name: 恒生指数基金
   category: QDII亚洲
@@ -976,6 +1337,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSI
+    source_priority:
+    - sina
 - code: '160924'
   name: 恒生指数LOF
   category: QDII亚洲
@@ -992,6 +1365,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSI
+    source_priority:
+    - sina
 - code: '164705'
   name: 恒生LOF
   category: QDII亚洲
@@ -1008,6 +1393,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSI
+    source_priority:
+    - sina
 - code: '501306'
   name: 港股高股息LOFC
   category: QDII亚洲
@@ -1024,6 +1421,22 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: 930914.CSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930914.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161831'
   name: 恒生国企LOF
   category: QDII亚洲
@@ -1040,6 +1453,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSCEI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority:
+    - sina
 - code: '501307'
   name: 银华高股息LOF
   category: QDII亚洲
@@ -1056,6 +1481,22 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: 930917.CSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: 930917.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930917.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501301'
   name: 香港大盘LOF
   category: QDII亚洲
@@ -1072,6 +1513,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSCCI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCCI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSCCI
+    source_priority:
+    - sina
 - code: '160717'
   name: H股LOF
   category: QDII亚洲
@@ -1088,6 +1541,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSCEI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority:
+    - sina
 - code: '501311'
   name: 新经济港股通LOF
   category: QDII亚洲
@@ -1104,6 +1569,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSSCNE
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSSCNE
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSSCNE
+    source_priority:
+    - sina
 - code: '501025'
   name: 香港银行LOF
   category: QDII亚洲
@@ -1120,6 +1597,17 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: 869
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: '869'
+    source_priority:
+    - eastmoney
+  dynamic_valuation:
+    basis: index
+    symbol: '869'
+    source_priority:
+    - eastmoney
 - code: '161124'
   name: 港股小盘LOF
   category: QDII亚洲
@@ -1136,6 +1624,18 @@ funds:
   woody_supported: false
   data_source: hkindex
   related_index: HSSI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSSI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSSI
+    source_priority:
+    - sina
 - code: '160706'
   name: 嘉实沪深300
   category: 国内LOF
@@ -1153,6 +1653,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '162711'
   name: 广发沪深300
   category: 国内LOF
@@ -1170,6 +1686,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '163113'
   name: 申万菱信沪深300
   category: 国内LOF
@@ -1187,6 +1719,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161604'
   name: 融通深证100
   category: 国内LOF
@@ -1204,6 +1752,22 @@ funds:
   data_source: localindex
   related_index: '399330'
   idx_name: 深证100指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '165523'
   name: 信诚沪深300
   category: 国内LOF
@@ -1221,6 +1785,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161811'
   name: 银华沪深300
   category: 国内LOF
@@ -1238,6 +1818,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160615'
   name: 鹏华沪深300
   category: 国内LOF
@@ -1255,6 +1851,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '162509'
   name: 国联安沪深300
   category: 国内LOF
@@ -1272,6 +1884,22 @@ funds:
   data_source: localindex
   related_index: '399300'
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '511880'
   name: 银华日利
   category: 现金管理
@@ -1280,6 +1908,15 @@ funds:
   holdings:
     equity_ratio: 0.0
     cash_ratio: 100.0
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
 - code: '511360'
   name: 海富通短融
   category: 现金管理
@@ -1288,6 +1925,15 @@ funds:
   holdings:
     equity_ratio: 0.0
     cash_ratio: 100.0
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
 - code: '511520'
   name: 富国政金
   category: 现金管理
@@ -1296,6 +1942,15 @@ funds:
   holdings:
     equity_ratio: 0.0
     cash_ratio: 100.0
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
 - code: '161118'
   name: 中小企业100LOF
   category: 国内LOF
@@ -1307,6 +1962,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中小100指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399005'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399005'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161025'
   name: 互联网LOF
   category: 国内LOF
@@ -1318,6 +1989,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证移动互联网指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 移动互联
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 移动互联
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501048'
   name: 证券公司LOFC
   category: 国内LOF
@@ -1329,6 +2016,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证全证券指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 证券公司
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 证券公司
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '165522'
   name: TMTLOF
   category: 国内LOF
@@ -1340,6 +2043,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证TMT产业指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 中证TMT
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 中证TMT
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161029'
   name: 银行龙头LOF
   category: 国内LOF
@@ -1351,6 +2070,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证银行指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399986'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399986'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '165511'
   name: 中信保诚500LOF
   category: 国内LOF
@@ -1362,6 +2097,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证500指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 中证500
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 中证500
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '502056'
   name: 医疗基金LOF
   category: 国内LOF
@@ -1373,6 +2124,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证医疗指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: SZ399989
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: SZ399989
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161716'
   name: 招商双债LOF
   category: 国内LOF
@@ -1383,6 +2150,15 @@ funds:
     equity_ratio: 95.0
     cash_ratio: 5.0
   sub_category: 指数
+  valuation_method: na
+  static_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
+  dynamic_valuation:
+    basis: na
+    symbol: ''
+    source_priority: []
 - code: '168204'
   name: 煤炭LOF
   category: 国内LOF
@@ -1394,6 +2170,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证煤炭指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501089'
   name: 消费红利增强LOF
   category: 国内LOF
@@ -1405,6 +2197,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证消费红利指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: H30094.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: H30094.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501050'
   name: 50AHLOF
   category: 国内LOF
@@ -1416,6 +2224,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证AH高股息指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 950090.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 950090.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161812'
   name: 深证100LOF
   category: 国内LOF
@@ -1427,6 +2251,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 深证100指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501227'
   name: 泓德红利优选LOF
   category: 国内LOF
@@ -1438,6 +2278,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证红利指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000922.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 000922.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161227'
   name: 国投深证100LOF
   category: 国内LOF
@@ -1449,6 +2305,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 深证100指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399330'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '163109'
   name: 申万深成LOF
   category: 国内LOF
@@ -1460,6 +2332,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 深证成指
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399001'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399001'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161032'
   name: 煤炭龙头LOF
   category: 国内LOF
@@ -1471,6 +2359,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证煤炭指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399998'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501043'
   name: 沪深300LOF
   category: 国内LOF
@@ -1482,6 +2386,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161715'
   name: 大宗商品LOF
   category: 国内LOF
@@ -1493,6 +2413,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证商品指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000979.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 000979.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161631'
   name: 人工智能LOF
   category: 国内LOF
@@ -1504,6 +2440,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证人工智能主题指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930713.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930713.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160225'
   name: 新能源汽车LOF
   category: 国内LOF
@@ -1515,6 +2467,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证新能源汽车指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399417'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399417'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160643'
   name: 空天军工LOF
   category: 国内LOF
@@ -1526,6 +2494,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证空天军工指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930875.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930875.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501007'
   name: 互联网医疗LOF
   category: 国内LOF
@@ -1537,6 +2521,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证互联网医疗指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930720.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930720.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501058'
   name: 新能源车LOFC
   category: 国内LOF
@@ -1548,6 +2548,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证新能源汽车产业指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160925'
   name: 沪深300LOF
   category: 国内LOF
@@ -1559,6 +2575,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 沪深300等权指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: CES300.HI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: CES300.HI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '163407'
   name: 兴全沪深300LOF
   category: 国内LOF
@@ -1570,6 +2602,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 沪深300指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399300'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '162412'
   name: 医疗基金LOF
   category: 国内LOF
@@ -1581,6 +2629,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证医疗指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399989'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399989'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '501057'
   name: 新能源车LOF
   category: 国内LOF
@@ -1592,6 +2656,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证新能源汽车产业指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 930997.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160639'
   name: 高铁LOF
   category: 国内LOF
@@ -1603,6 +2683,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证高铁产业指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399807'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399807'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161217'
   name: 国投资源LOF
   category: 国内LOF
@@ -1614,6 +2710,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证全指公用事业指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: 000961.CSI
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: 000961.CSI
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '502000'
   name: 500增强LOF
   category: 国内LOF
@@ -1625,6 +2737,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证500指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '000905'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '000905'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '160632'
   name: 酒LOF
   category: 国内LOF
@@ -1636,6 +2764,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证酒指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399987'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399987'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161726'
   name: 生物医药LOF
   category: 国内LOF
@@ -1647,6 +2791,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证生物医药指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399441'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399441'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '167301'
   name: 保险主题LOF
   category: 国内LOF
@@ -1658,6 +2818,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证保险产业指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399809'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399809'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161725'
   name: 白酒基金LOF
   category: 国内LOF
@@ -1669,6 +2845,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证白酒指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399997'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399997'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '161031'
   name: 工业4.0LOF
   category: 国内LOF
@@ -1680,6 +2872,22 @@ funds:
     cash_ratio: 5.0
   sub_category: 指数
   idx_name: 中证工业4.0指数
+  valuation_method: lof_domestic
+  static_valuation:
+    basis: index
+    symbol: '399803'
+    source_priority:
+    - tencent
+    - sina
+  dynamic_valuation:
+    basis: index
+    symbol: '399803'
+    source_priority:
+    - tdx
+    - guojin
+    - galaxy
+    - tencent
+    - sina
 - code: '159561'
   name: 德国ETF嘉实
   category: QDII欧美
@@ -1693,6 +2901,19 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
+  valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: DAX
+    source_priority:
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: DAX
+    source_priority:
+    - IB
+    - FUTU
 - code: '513000'
   name: 易方达日经225ETF
   category: QDII日本
@@ -1710,6 +2931,17 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority:
+    - yahoo
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority:
+    - sina
 - code: '159866'
   name: 华安日经225ETF
   category: QDII日本
@@ -1727,6 +2959,17 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority:
+    - yahoo
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority:
+    - sina
 - code: '513520'
   name: 工银日经225ETF
   category: QDII日本
@@ -1744,6 +2987,17 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
+  valuation_method: index
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority:
+    - yahoo
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority:
+    - sina
 - code: '513880'
   name: 华安日经225ETF
   category: QDII日本
@@ -1758,10 +3012,20 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
-  valuation_method: ''
+  valuation_method: 'index'
   rate_type: spot
   pos_ratio: 0.91
   related_index: N225
+  static_valuation:
+    basis: index
+    symbol: N225
+    source_priority:
+    - yahoo
+  dynamic_valuation:
+    basis: futures
+    symbol: NK
+    source_priority:
+    - sina
 - code: '501300'
   name: 海富通 美元债
   category: QDII欧美
@@ -1776,6 +3040,18 @@ funds:
   redemption_fee_rate: 0.5
   commission_rate: 0
   valuation_method: etf
+  static_valuation:
+    basis: etf_netvalue
+    symbol: AGG
+    source_priority:
+    - eastmoney
+    - yahoo
+  dynamic_valuation:
+    basis: etf_realtime
+    symbol: AGG
+    source_priority:
+    - IB
+    - FUTU
 last_update_date: '2026-04-07'
 future_gold_calibration: .nan
 future_oil_calibration: .nan
@@ -2036,3 +3312,5 @@ symbol_sources:
   'H30094': 'TDX'
 
 ib_core_symbols: ['XOP', 'GLD', 'USO', 'SLV', 'INDA', 'QQQ', 'SPY']
+
+realtime_source_priority: [tdx, guojin, galaxy, tencent, sina]  # [AI-2026-07-29] 收编：实时行情源优先级默认值（单一真相源）

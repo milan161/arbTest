@@ -69,10 +69,11 @@ export function useValuationCalculator() {
   /** 是否为白银基金 */
   const isSilver = computed(() => fundCode.value === '161226')
 
-  /** [AI-2026-07-23] 是否为 QDII日本基金（纯期货估值，无需ETF/NKY盘口） */
+  /** [AI-2026-07-29] 是否为 QDII日本基金（纯期货估值，无需ETF/NKY盘口）
+   *  改读 category（业务分类），与 valuation_method 估值词表(etf/basket/index)解耦，单一真相源 */
   const isQDIIJapan = computed(() => {
-    const method = meta.value?.fund_config?.valuation_method || ''
-    return method === 'equity_jp'
+    const category = meta.value?.fund_config?.category || ''
+    return category === 'QDII日本'
   })
 
   // [AI-2026-07-23] QDII日本基金默认显示纯期货估值

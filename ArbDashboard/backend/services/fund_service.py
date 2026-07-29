@@ -12,8 +12,8 @@ import logging
 import requests
 import yaml
 
-# [AI-2026-07-23] 导入估值方法映射（供 get_valuation_meta 使用）
-from arbcore.config.valuation_mapping import get_fund_valuation_method
+# [AI-2026-07-29] 收编：valuation_method 改从主 YAML 读取，删 valuation_mapping 硬编码；统一用 resolve_method 按 category 兜底
+from arbcore.calculators.valuation_data_engine import resolve_method
 # [AI-2026-07-27] 统一估值核心（估值引擎+数据引擎分离）：QDII日本实时复用篮子公式，NK期货价作单组件
 from arbcore.calculators.unified_valuation import basket_valuation
 
@@ -2239,8 +2239,11 @@ class FundService:
                     trade_future = "AG0"
 
             # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），避免用 related_index（.INX/.NDX）
-            # [AI-2026-07-23] 新增 valuation_method 和 category，供前端 isQDIIJapan 判断
-            _method = get_fund_valuation_method(code)
+            # [AI-2026-07-29] valuation_method 改从主 YAML(lof_config.yaml) 读取（单一真相源），
+            # 空串经 resolve_method 按 category 兜底；前端 isQDIIJapan 已改为读 category，不再依赖此值
+            _yaml_fund_cfg = self.config_service.get_fund_config(code) or {} if self.config_service else {}
+            _raw_method = _yaml_fund_cfg.get('valuation_method') or ''
+            _method = _raw_method if _raw_method else resolve_method('', f_row[3] if len(f_row) > 3 else '')
             fund_cfg = {
                 "code": code,
                 "trade_etf": _YAML_TRADE_ETF.get(code) or f_row[1] or '',

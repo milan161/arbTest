@@ -20,6 +20,18 @@ CLIENT_STARTUP_HINTS = {
     "galaxy": "⚠️ 银河QMT客户端未运行（已检测{retries}次均失败），请前往主面板启动银河QMT并加载v4.0脚本",
 }
 
+def _load_realtime_priority() -> List[str]:
+    """[AI-2026-07-29] 收编：从主 YAML(lof_config.yaml) 读取实时行情源优先级默认值，单一真相源"""
+    try:
+        import yaml, os
+        here = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.normpath(os.path.join(here, '..', '..', 'config', 'lof_config.yaml'))
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            doc = yaml.safe_load(f)
+        return doc.get('realtime_source_priority') or []
+    except Exception:
+        return []
+
 class RealtimeMarketManager:
     """
     实时行情管理器。
@@ -61,7 +73,7 @@ class RealtimeMarketManager:
             full_config = self.db_manager.get_data_source_config("realtime_market")
 
         if not full_config:
-            priority_names = self.priority_list or ["tdx", "guojin", "galaxy", "tencent", "sina"]
+            priority_names = self.priority_list or _load_realtime_priority() or ["tdx", "guojin", "galaxy", "tencent", "sina"]
             full_config = [{"source_name": name, "config_json": "{}"} for name in priority_names]
             self.priority_list = priority_names
         else:
