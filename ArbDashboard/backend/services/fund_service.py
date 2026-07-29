@@ -33,6 +33,14 @@ _YAML_TRADE_ETF: Dict[str, str] = {}
 _YAML_TRADE_FUTURE: Dict[str, str] = {}
 # [AI-2026-07-20] YAML 中的 valuation_portfolio（数据库 unified_fund_list 没有此列）
 _YAML_VALUATION_PORTFOLIO: Dict[str, list] = {}
+
+
+def _normalize_empty_symbol(val) -> str:
+    """DB/配置中常用 '-' / None / 空串 表示"无值"，归一为空串，避免哨兵值被当真实 symbol 路由。"""
+    if val is None:
+        return ''
+    s = str(val).strip()
+    return '' if s in ('', '-') else s
 try:
     with open(_CONFIG_YAML_PATH, 'r', encoding='utf-8') as f:
         yaml_cfg = yaml.safe_load(f)
@@ -1452,7 +1460,7 @@ class FundService:
                         # 获取基金配置(动态从数据库构建，彻底废弃 yaml)
                         # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），YAML 无值时降级用 related_index（.INX）
                         yaml_trade_etf = _YAML_TRADE_ETF.get(code, '')
-                        resolved_trade_etf = yaml_trade_etf or fund.get('related_index', '')
+                        resolved_trade_etf = yaml_trade_etf or _normalize_empty_symbol(fund.get('related_index', ''))
                         fund_cfg = {
                             "code": code,
                             "trade_etf": resolved_trade_etf,
@@ -1583,7 +1591,7 @@ class FundService:
                             # 放在 current_fx 条件外，让无basket基金也能走魔法公式
                             if not metrics.get('rt_val'):
                                 trade_etf = fund_cfg.get('trade_etf', '')
-                                if trade_etf and self.market_data_service:
+                                if trade_etf and trade_etf != '-' and self.market_data_service:
                                     # [V10.9] 跳过指数类符号（HSI/HSTECH等），指数走 get_index_change_percent 路径
                                     from arbcore.config.source_routing import get_symbol_source
                                     if get_symbol_source(trade_etf) == 'SINA':
@@ -2246,7 +2254,7 @@ class FundService:
             _method = _raw_method if _raw_method else resolve_method('', f_row[3] if len(f_row) > 3 else '')
             fund_cfg = {
                 "code": code,
-                "trade_etf": _YAML_TRADE_ETF.get(code) or f_row[1] or '',
+                "trade_etf": _YAML_TRADE_ETF.get(code) or _normalize_empty_symbol(f_row[1]),
                 "position": float(f_row[2] or 0.95) * 100,
                 "trade_future": trade_future,
                 "valuation_method": _method,
@@ -2314,7 +2322,7 @@ class FundService:
             # [V10.8] basket为空时用 trade_etf 兜底获取行情（如162411→XOP）
             if not etf_symbols:
                 trade_etf = fund_cfg.get('trade_etf', '')
-                if trade_etf:
+                if trade_etf and trade_etf != '-':
                     # [V10.9] 跳过指数类符号（HSI/HSTECH/399300等），指数无可用的实时行情
                     from arbcore.config.source_routing import get_symbol_source
                     if get_symbol_source(trade_etf) == 'SINA':

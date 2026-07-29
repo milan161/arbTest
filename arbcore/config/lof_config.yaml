@@ -46,10 +46,10 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 54.99
     anchor: EU
-  - symbol: USO-JP
+  - symbol: ^USO-JP
     weight: 27.29
     anchor: JP
   - symbol: USO
@@ -65,13 +65,13 @@ funds:
   valuation_method: basket
   static_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority:
     - woody
     - IB
   dynamic_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority:
     - IB
     - FUTU
@@ -128,7 +128,7 @@ funds:
   - symbol: USO
     weight: 72.59
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 27.41
     anchor: EU
   trade_etf: USO
@@ -196,13 +196,13 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 49.26
     anchor: EU
   - symbol: USO
     weight: 34.49
     anchor: US
-  - symbol: USO-HK
+  - symbol: ^USO-HK
     weight: 16.24
     anchor: HK
   trade_etf: USO
@@ -215,20 +215,20 @@ funds:
   valuation_method: basket
   static_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority:
     - woody
     - IB
   dynamic_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority:
     - IB
     - FUTU
 - code: '160216'
   name: 国泰大宗商品
   category: 黄金原油
-  trade_etf: GLD,USO
+  trade_etf: GLD
   trade_future: ''
   holdings:
     equity_ratio: 95.13
@@ -267,7 +267,7 @@ funds:
 - code: '161815'
   name: 银华抗通胀
   category: 黄金原油
-  trade_etf: GLD,USO
+  trade_etf: GLD
   trade_future: ''
   holdings:
     equity_ratio: 83.34
@@ -276,7 +276,7 @@ funds:
   - symbol: GLD
     weight: 65.99
     anchor: US
-  - symbol: USO-EU
+  - symbol: ^USO-EU
     weight: 23.93
     anchor: EU
   - symbol: USO
@@ -363,7 +363,7 @@ funds:
   - symbol: GLD
     weight: 52.28
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 47.72
     anchor: EU
   trade_etf: GLD
@@ -398,7 +398,7 @@ funds:
   - symbol: GLD
     weight: 82.94
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 17.06
     anchor: EU
   sina_index_url: ''
@@ -564,10 +564,10 @@ funds:
   - symbol: GLD
     weight: 89.84
     anchor: US
-  - symbol: GLD-EU
+  - symbol: ^GLD-EU
     weight: 7.56
     anchor: EU
-  - symbol: GLD-JP
+  - symbol: ^GLD-JP
     weight: 2.6
     anchor: JP
   trade_etf: GLD
@@ -909,13 +909,13 @@ funds:
   - symbol: INDA
     weight: 71.4
     anchor: US
-  - symbol: INDA-EU
+  - symbol: ^INDA-EU
     weight: 25.74
     anchor: EU
-  - symbol: INDA-JP
+  - symbol: ^INDA-JP
     weight: 1.54
     anchor: JP
-  - symbol: INDA-HK
+  - symbol: ^INDA-HK
     weight: 1.32
     anchor: HK
   sina_index_url: ''
@@ -3311,6 +3311,98 @@ symbol_sources:
   'BRNB.L': 'TDX'
   'H30094': 'TDX'
 
+  '501018': TDX
+  '160723': TDX
+  '161129': TDX
+  '160216': TDX
+  '161815': TDX
+  '160719': TDX
+  '161116': TDX
+  '164701': TDX
+  '165513': TDX
+  '513350': TDX
+  '159518': TDX
+  '162411': TDX
+  '162415': TDX
+  '159502': TDX
+  '161127': TDX
+  '161125': TDX
+  '161130': TDX
+  '164824': TDX
+  '164906': TDX
+  '161126': TDX
+  '163208': TDX
+  '160644': TDX
+  '501225': TDX
+  '501312': TDX
+  '161226': TDX
+  '160322': TDX
+  '501305': TDX
+  '501303': TDX
+  '501302': TDX
+  '160924': TDX
+  '164705': TDX
+  '501306': TDX
+  '161831': TDX
+  '501307': TDX
+  '501301': TDX
+  '160717': TDX
+  '501311': TDX
+  '501025': TDX
+  '161124': TDX
+  '160706': TDX
+  '162711': TDX
+  '163113': TDX
+  '161604': TDX
+  '165523': TDX
+  '161811': TDX
+  '160615': TDX
+  '162509': TDX
+  '511880': TDX
+  '511360': TDX
+  '511520': TDX
+  '161118': TDX
+  '161025': TDX
+  '501048': TDX
+  '165522': TDX
+  '161029': TDX
+  '165511': TDX
+  '502056': TDX
+  '161716': TDX
+  '168204': TDX
+  '501089': TDX
+  '501050': TDX
+  '161812': TDX
+  '501227': TDX
+  '161227': TDX
+  '163109': TDX
+  '161032': TDX
+  '501043': TDX
+  '161715': TDX
+  '161631': TDX
+  '160225': TDX
+  '160643': TDX
+  '501007': TDX
+  '501058': TDX
+  '160925': TDX
+  '163407': TDX
+  '162412': TDX
+  '501057': TDX
+  '160639': TDX
+  '161217': TDX
+  '502000': TDX
+  '160632': TDX
+  '161726': TDX
+  '167301': TDX
+  '161725': TDX
+  '161031': TDX
+  '159561': TDX
+  '513000': TDX
+  '159866': TDX
+  '513520': TDX
+  '513880': TDX
+  '501300': TDX
+  AG0: SINA
 ib_core_symbols: ['XOP', 'GLD', 'USO', 'SLV', 'INDA', 'QQQ', 'SPY']
 
 realtime_source_priority: [tdx, guojin, galaxy, tencent, sina]  # [AI-2026-07-29] 收编：实时行情源优先级默认值（单一真相源）
