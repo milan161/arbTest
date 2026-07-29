@@ -1227,18 +1227,22 @@ class FundService:
                         metrics['prev_close'] = 0
 
                 # ── 4. 实时价格（从预取的 quotes_dict 取，避免逐只序列调用） ──
+                # [AI-2026-07-29] 历史/卡片显示的「收盘价(price)」必须是 DB 官方收盘，
+                #   严禁用腾讯实时盘中价覆盖（东哥发现：重启后端后实时 fetcher 生效，
+                #   会把盘中最新价盖到历史收盘价上，导致与官方收盘差几分钱）。
+                #   实时价单独存 realtime_price，仅供「实时溢价(rt_premium)」使用。
                 if self.market_data_service and code in quotes_dict:
                     rt = quotes_dict[code]
                     p = rt.get('price')
                     if p is not None and float(p) > 0:
-                        metrics['price'] = float(p)
+                        metrics['realtime_price'] = float(p)
                     if rt.get('amount'):
                         metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
                 elif self.market_data_service:
                     try:
                         rt = self.market_data_service.get_realtime_quote(code)
                         if rt and rt.get('price'):
-                            metrics['price'] = rt['price']
+                            metrics['realtime_price'] = float(rt['price'])
                             if rt.get('amount'):
                                 metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
                     except Exception as e:
@@ -1660,7 +1664,13 @@ class FundService:
                     metrics['price_change'] = (cp / pc - 1) * 100
                 else:
                     metrics['price_change'] = 0
-                
+
+                # [AI-2026-07-29] 实时溢价(rt_premium) 用 realtime_price 重算，
+                #   与 static_premium(用官方收盘价) 区分：rt_premium = 实时价/rt_val - 1
+                rt_p = metrics.get('realtime_price')
+                if rt_p and rt_p > 0 and metrics.get('rt_val') and metrics['rt_val'] > 0:
+                    metrics['rt_premium'] = round((rt_p / metrics['rt_val'] - 1) * 100, 3)
+
                 # 4. [V4.0] 精度规范：现价3位、溢价率3位、涨跌幅2位
                 # 先创建 fund_dict 用于存储基金数据
                 fund_dict = fund.to_dict()
@@ -1992,8 +2002,13 @@ class FundService:
                     if sym and sym not in etf_symbols:
                         etf_symbols.append(sym)
 
-                # 判断：单主ETF（有yaml_trade_etf且仅此一个symbol）→ 显示净值；否则显示价格
-                is_single_etf = bool(yaml_trade_etf) and len(etf_symbols) == 1 and etf_symbols[0] == yaml_trade_etf
+                # 判断：单主ETF（有yaml_trade_etf且仅此一个symbol）且【无篮子权重表】→ 显示净值；否则显示价格
+                # [AI-2026-07-29] 修复164701误判：164701篮子仅GLD=100%(SLV权重0未入库)，且 related_index/trade_etf 恰为GLD，
+                #   导致 etf_symbols=['GLD'] 被当成单ETF→显示"GLD净值"。但164701本质是有篮子表的基金，应按多篮子显示"GLD价格"。
+                #   故加 has_basket 约束：凡 fund_basket_weights 有记录者一律视为多篮子→取价格（与 dynamic_valuation 口径一致）。
+                cur.execute("SELECT COUNT(*) FROM fund_basket_weights WHERE fund_code=?", (fund_code,))
+                has_basket = cur.fetchone()[0] > 0
+                is_single_etf = (not has_basket) and bool(yaml_trade_etf) and len(etf_symbols) == 1 and etf_symbols[0] == yaml_trade_etf
                 col_name = 'netvalue' if is_single_etf else 'price'
 
                 # 3) 逐个查询

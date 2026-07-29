@@ -201,7 +201,7 @@ v4.0（子线程并发锁）在交易时段比 v5.0（定时器队列）更优�
 2. QMT策略编辑器 → 打开 Test_Yinhe_qmt_ServerV5.py → 加载/保存
 3. 验证端口：netstat -an | find "8888"（应只有 1 个 LISTENING）
 4. 启动 Dashboard 后端：python main.py
-5. 验证健康：curl http://127.0.0.1:8000/api/health
+5. 验证后端就绪：查看后端日志 backend/logs/app.log（注：/api/health 端点已移除）
 ```
 
 ### 8.2 如果遇到僵尸线程

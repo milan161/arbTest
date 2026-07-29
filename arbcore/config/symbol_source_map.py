@@ -258,6 +258,16 @@ INDEX_MAP = {
     '.SZSC': 'SINA',  # 深证成指
     '.CSI300': 'SINA',  # 沪深300
     '.SH000300': 'SINA',  # 沪深300
+    # [AI-2026-07-29] 国内指数（A股）真实走腾讯历史抓取器(historical/tencent.py:13 注释明写"主要用于A股和国内指数")
+    #   原 auto_classify_symbol 把 6 位数字误归 TDX，而 get_prices 又把 TDX 降级成 sina，sina 不抓国内指数 → 永远取不到。
+    #   改为 TENCENT：get_prices 落到 self.fetchers['tencent']，与真实采集路径一致。
+    '000905': 'TENCENT',  # 中证500
+    '000300': 'TENCENT',  # 沪深300
+    '000001': 'TENCENT',  # 上证指数
+    '399001': 'TENCENT',  # 深证成指
+    '399005': 'TENCENT',  # 中小100
+    '399006': 'TENCENT',  # 创业板指
+    '399330': 'TENCENT',  # 深证100
     # [AI-2026-07-15] 港股指数（必须明确映射，否则会被 auto_classify 误判为美股 → FUTU → 订阅失败熔断）
     'HSCI': 'SINA',    # 恒生综指
     'HSSI': 'SINA',    # 恒生小型股
@@ -280,6 +290,10 @@ WOODY_MAP = {
     '^USO-EU': 'WOODY',  # 原油在欧洲交易所收盘时刻的价格
     '^USO-JP': 'WOODY',  # 原油在日本交易所收盘时刻的价格
     '^USO-HK': 'WOODY',  # 原油在香港交易所收盘时刻的价格
+    # 黄金 ETF（欧洲/日本/香港交易所收盘时刻）
+    '^GLD-EU': 'WOODY',  # 黄金在欧洲交易所收盘时刻的价格
+    '^GLD-JP': 'WOODY',  # 黄金在日本交易所收盘时刻的价格
+    '^GLD-HK': 'WOODY',  # 黄金在香港交易所收盘时刻的价格
     # 印度指数（欧洲/日本/香港交易所收盘时刻）
     '^INDA-EU': 'WOODY',  # 印度 ETF 在欧洲交易所收盘时刻的价格
     '^INDA-HK': 'WOODY',  # 印度 ETF 在香港交易所收盘时刻的价格

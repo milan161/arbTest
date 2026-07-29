@@ -629,44 +629,67 @@ class DailyUpdater(BaseApp):
         self.logger.info(f"🔧 [假期修复] 完成，修复 {fixed_count}/{len(codes_to_fix)} 只基金")
 
     def _step4_fetch_prices(self):
-        """[AI-2026-06-28] 从腾讯行情获取收盘价，和净值补采分离"""
-        self.logger.info("=== 步骤4P：获取各基金收盘价 (腾讯API) ===")
+        """[AI-2026-07-28] 从腾讯日K线获取官方收盘价（非实时快照）
+
+        历史设计遗留：早期为分时溢价图采集盘中价格，后分时采样器已禁用
+        （enable_intraday_sampler=False），但取数源未同步改为官方收盘。
+        2026-07-28 修正：统一使用腾讯日K线 fqkline 接口的 close 字段，
+        与 woody/雪球 收盘价一分钱不差。
+        """
+        self.logger.info("=== 步骤4P：获取各基金收盘价 (腾讯日K线官方收盘) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
         conn_ufl = self.db._get_conn()
         all_codes = [str(r[0]) for r in conn_ufl.execute("SELECT fund_code FROM unified_fund_list").fetchall() if r[0]]
         conn_ufl.close()
-        self.logger.info(f"📋 共 {len(all_codes)} 只基金，开始获取收盘价...")
+        self.logger.info(f"📋 共 {len(all_codes)} 只基金，开始从腾讯日K线获取官方收盘价...")
+
+        import requests
 
         for code in all_codes:
             if not code: continue
-            if not self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
-                import requests
-                tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
-                url = f"https://qt.gtimg.cn/q={tx_code}"
-                headers = {"Referer": "https://finance.qq.com/"}
-                try:
-                    resp = requests.get(url, headers=headers, timeout=10)
-                    resp.encoding = "gbk"
-                    if resp.status_code == 200 and resp.text and '~' in resp.text:
-                        parts = resp.text.split('=')[1].strip('"~;\n\r ')
-                        fields = parts.split('~')
-                        if len(fields) > 30:
-                            ts = fields[30].strip()
-                            if len(ts) >= 8:
-                                date_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
-                                price = float(fields[3]) if fields[3] else 0
-                                amount_wan = round(float(fields[36]) / 10000, 2) if len(fields) > 36 and fields[36] else 0
-                                if price > 0:
-                                    self._safe_save_fund_data(date_str=date_str, fund_code=code, price=price)
-                                    self.db.save_unified_history(date_str=date_str, fund_code=code, volume=amount_wan)
-                                    self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
-                                    self.logger.info(f"✅ [{code}] 收盘价: {date_str} {price}")
-                                else:
-                                    self.logger.warning(f"⚠️ [{code}] 腾讯返回价格为0")
-                    else:
-                        self.logger.warning(f"⚠️ [{code}] 腾讯返回空数据")
-                except Exception as e:
-                    self.logger.error(f"❌ [{code}] 腾讯获取收盘价失败: {e}")
+            if self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
+                continue
+
+            tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
+            try:
+                # 腾讯日K线：返回 [date, open, close, high, low, volume, ...]
+                url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={tx_code},day,,,5,qfq&r=0.{__import__('time').time()}"
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12,
+                                    proxies={"http": None, "https": None})
+                txt = resp.text
+                if "=" in txt:
+                    txt = txt.split("=", 1)[1]
+                data = __import__("json", fromlist=["json"]).loads(txt)
+                node = data["data"].get(tx_code, {})
+                kline = node.get("day") or node.get("qfqday")
+                if not kline:
+                    self.logger.warning(f"⚠️ [{code}] 腾讯K线无数据")
+                    continue
+                items = list(kline.values()) if isinstance(kline, dict) else kline
+
+                written = 0
+                for it in items:
+                    # 腾讯day格式: [date, open, close, high, low, ...]
+                    k_date = str(it[0])
+                    k_close = float(it[2]) if len(it) > 2 and it[2] else 0
+                    if k_close <= 0:
+                        continue
+                    # 今天的数据：仅当确认是收盘后的正式数据才写入
+                    # （盘中K线返回的是当时最新价=快照，不应锁死）
+                    if k_date >= today_str:
+                        # 今天或未来日期：跳过，不打标记，下次调度再试
+                        continue
+                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=k_close)
+                    written += 1
+
+                if written > 0:
+                    self.db.mark_access_synced(today_str, source=f'lof_price_{code}')
+                    self.logger.info(f"✅ [{code}] 写入 {written} 天官方收盘价")
+                else:
+                    self.logger.info(f"⏭️ [{code}] 无新历史收盘价需写入（今日盘中跳过）")
+
+            except Exception as e:
+                self.logger.error(f"❌ [{code}] 腾讯K线获取收盘价失败: {e}")
 
     def step4_fetch_lof_market(self):
         """[AI-2026-06-28] 步骤四：仅获取净值（收盘价已分离到 _step4_fetch_prices）"""

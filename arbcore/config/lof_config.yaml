@@ -5,22 +5,26 @@ currencies:
   symbol: USD
 - currency: JPY
   symbol: USD
-# [AI-2026-07-27] 估值类型路由配置（数据引擎 valuation_data_engine 读取；估值核心 unified_valuation 不感知）
-# static_hedge / dynamic_hedge：该 valuation_method 在「静态 / 实时」估值中是否允许消费 hedge 因子（魔法公式）
-# 背景（2026-07-27 用 woody API 实际 JSON 数值核对）：
-#   hedge = calibration / position（含仓位），calibration = 基准价×基准汇率/净值（不含仓位）；
-#   hedge 的计价标的因基金而异——162411 以 XOP 计价（静态取价同标的→可用）；
-#   161125/161130 以 SPY/QQQ 计价（静态取 .INX/.NDX 指数价→禁用，实时取 SPY/QQQ 价→可用）；
-#   513000/513880 以 NKY 期货计价（静态取 N225 指数价，存在期现基差→统一走矩阵公式）。
 valuation_routing:
   methods:
-    '':           { static_hedge: true,  dynamic_hedge: true }
-    etf:          { static_hedge: true,  dynamic_hedge: true }
-    basket:       { static_hedge: false, dynamic_hedge: false }
-    index:        { static_hedge: false, dynamic_hedge: true }
-    equity_asia:  { static_hedge: false, dynamic_hedge: false }
-    lof_domestic: { static_hedge: false, dynamic_hedge: false }
-  # 基金未显式配置 valuation_method（空串）时，按 category 兜底路由
+    ? ''
+    : static_hedge: true
+      dynamic_hedge: true
+    etf:
+      static_hedge: true
+      dynamic_hedge: true
+    basket:
+      static_hedge: false
+      dynamic_hedge: false
+    index:
+      static_hedge: false
+      dynamic_hedge: true
+    equity_asia:
+      static_hedge: false
+      dynamic_hedge: false
+    lof_domestic:
+      static_hedge: false
+      dynamic_hedge: false
   category_fallback:
     QDII日本: index
     QDII亚洲: equity_asia
@@ -31,8 +35,8 @@ funds:
   name: 南方原油
   category: 黄金原油
   holdings:
-    equity_ratio: 85.61
-    cash_ratio: 14.39
+    equity_ratio: 85.84
+    cash_ratio: 14.16
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -43,17 +47,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 56.77
+    weight: 54.99
     anchor: EU
   - symbol: USO-JP
-    weight: 26.32
+    weight: 27.29
     anchor: JP
   - symbol: USO
-    weight: 16.91
+    weight: 17.72
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 85.61
+  position: 85.84
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -62,8 +66,8 @@ funds:
   name: 嘉实原油
   category: 黄金原油
   holdings:
-    equity_ratio: 81.09
-    cash_ratio: 18.91
+    equity_ratio: 80.95
+    cash_ratio: 19.05
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -109,14 +113,14 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 60.76
+    weight: 72.59
     anchor: US
   - symbol: USO-EU
-    weight: 39.24
+    weight: 27.41
     anchor: EU
   trade_etf: USO
   trade_future: MCL
-  position: 81.09
+  position: 80.95
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -125,8 +129,8 @@ funds:
   name: 易方达原油
   category: 黄金原油
   holdings:
-    equity_ratio: 86.44
-    cash_ratio: 13.56
+    equity_ratio: 86.74
+    cash_ratio: 13.26
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -167,17 +171,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 54.12
+    weight: 49.26
     anchor: EU
   - symbol: USO
-    weight: 31.65
+    weight: 34.49
     anchor: US
   - symbol: USO-HK
-    weight: 14.23
+    weight: 16.24
     anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 86.44
+  position: 86.74
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -188,22 +192,22 @@ funds:
   trade_etf: GLD,USO
   trade_future: ''
   holdings:
-    equity_ratio: 94.1
-    cash_ratio: 5.9
+    equity_ratio: 95.13
+    cash_ratio: 4.87
   valuation_portfolio:
   - symbol: GLD
-    weight: 80.11
+    weight: 81.11
     anchor: US
   - symbol: SLV
-    weight: 13.69
+    weight: 12.72
     anchor: US
   - symbol: USO
-    weight: 6.21
+    weight: 6.17
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 94.1
+  position: 95.13
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -775,8 +779,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 90.0
-    cash_ratio: 10.0
+    equity_ratio: 91.0
+    cash_ratio: 9.0
   valuation_portfolio:
   - symbol: MU
     weight: 13.61
@@ -811,7 +815,7 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 90.0
+  position: 91.0
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -822,19 +826,19 @@ funds:
   trade_etf: SOXX
   trade_future: ''
   holdings:
-    equity_ratio: 90.37
-    cash_ratio: 9.63
+    equity_ratio: 90.34
+    cash_ratio: 9.66
   valuation_portfolio:
   - symbol: SOXX
-    weight: 76.52
+    weight: 76.36
     anchor: US
   - symbol: SZ159560
-    weight: 23.48
+    weight: 23.64
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 90.37
+  position: 90.34
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -845,8 +849,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 97.0
-    cash_ratio: 3.0
+    equity_ratio: 91.0
+    cash_ratio: 9.0
   valuation_portfolio:
   - symbol: ARKK
     weight: 23.82
@@ -881,7 +885,7 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 97.0
+  position: 91.0
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
