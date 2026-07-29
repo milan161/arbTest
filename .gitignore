@@ -40,6 +40,7 @@ ArbDashboard/backend/core/database/
 ArbDashboard/data/
 ArbDashboard/scripts/
 ArbDashboard/logs/
+arbcore/scripts/
 
 # === 文档、日志与测试代码 ===
 # 仅屏蔽未完成草稿目录，正式docs目录全部放行
