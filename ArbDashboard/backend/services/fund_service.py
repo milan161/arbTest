@@ -36,11 +36,17 @@ _YAML_VALUATION_PORTFOLIO: Dict[str, list] = {}
 
 
 def _normalize_empty_symbol(val) -> str:
-    """DB/配置中常用 '-' / None / 空串 表示"无值"，归一为空串，避免哨兵值被当真实 symbol 路由。"""
+    """DB/配置中常用 '-' / None / 空串 表示"无值"，归一为空串，避免哨兵值被当真实 symbol 路由。
+    [2026-07-29] 含中文/全角等非 ASCII 字符的（如 related_index 的 '中小100'/'中证500'）也不是可路由
+    symbol，同样归一为空 —— 这类国内指数 LOF 本就走指数路径，不应被当成 trade_etf 去路由。"""
     if val is None:
         return ''
     s = str(val).strip()
-    return '' if s in ('', '-') else s
+    if not s or s == '-':
+        return ''
+    if any(ord(ch) > 127 for ch in s):  # 含中文等非 ASCII → 不是可路由 symbol
+        return ''
+    return s
 try:
     with open(_CONFIG_YAML_PATH, 'r', encoding='utf-8') as f:
         yaml_cfg = yaml.safe_load(f)
@@ -1994,6 +2000,8 @@ class FundService:
             # 多篮子基金（如161116→GLD+^GLD-EU）显示价格（price），列名"GLD价格/^GLD-EU价格"
             yaml_trade_etf = _YAML_TRADE_ETF.get(fund_code, '')
             etf_price_map = {}  # {symbol: {date: {price, chg}}}
+            is_single_etf = False  # 异常兜底，避免 UnboundLocalError
+            col_name = 'price'
             try:
                 # 1) 从 related_index 获取主 ETF
                 fl_row = conn.execute("SELECT related_index FROM unified_fund_list WHERE fund_code=?", (fund_code,)).fetchone()
@@ -2014,8 +2022,7 @@ class FundService:
                 # [AI-2026-07-29] 修复164701误判：164701篮子仅GLD=100%(SLV权重0未入库)，且 related_index/trade_etf 恰为GLD，
                 #   导致 etf_symbols=['GLD'] 被当成单ETF→显示"GLD净值"。但164701本质是有篮子表的基金，应按多篮子显示"GLD价格"。
                 #   故加 has_basket 约束：凡 fund_basket_weights 有记录者一律视为多篮子→取价格（与 dynamic_valuation 口径一致）。
-                cur.execute("SELECT COUNT(*) FROM fund_basket_weights WHERE fund_code=?", (fund_code,))
-                has_basket = cur.fetchone()[0] > 0
+                has_basket = conn.execute("SELECT COUNT(*) FROM fund_basket_weights WHERE fund_code=?", (fund_code,)).fetchone()[0] > 0
                 is_single_etf = (not has_basket) and bool(yaml_trade_etf) and len(etf_symbols) == 1 and etf_symbols[0] == yaml_trade_etf
                 col_name = 'netvalue' if is_single_etf else 'price'
 
