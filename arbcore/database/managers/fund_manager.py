@@ -51,6 +51,34 @@ class FundManager(BaseManager):
             conn.commit()
             conn.close()
 
+    def prune_fund_basket_weights(self, date: str, fund_code: str, valid_symbols: list):
+        """[AI-2026-07-29] 权重换代清理：删除 (date, fund_code) 下不在新代符号集中的旧残留行。
+
+        背景：woody 篮子参数每日可能"换代"（标的组合变化，如 160723 从
+        USO/^USO-EU/^USO-JP 三标的换成 USO/^USO-EU 双标的）。
+        旧逻辑只 INSERT OR REPLACE 新代符号，换代后消失的旧 symbol 行永远残留，
+        导致该 (date, fund) 权重和 > 100%（实测 160723 2026-07-21 行 102.02%）。
+        修复：每次同步某 (date, fund) 的权重前，先删除不在新代符号集的行。
+        详见 docs_unfinished/权重换代残留bug修复说明_2026-07-29.md（含回滚方法）。
+        """
+        if not valid_symbols:
+            return 0
+        with self.lock:
+            conn = self._get_conn()
+            try:
+                placeholders = ','.join('?' * len(valid_symbols))
+                cur = conn.execute(
+                    f"DELETE FROM fund_basket_weights WHERE date=? AND fund_code=? "
+                    f"AND underlying_symbol NOT IN ({placeholders})",
+                    (date, fund_code, *valid_symbols))
+                deleted = cur.rowcount
+                conn.commit()
+                if deleted:
+                    logger.info(f"🧹 权重换代清理: {fund_code}@{date} 删除旧代残留 {deleted} 行 (新代={valid_symbols})")
+                return deleted
+            finally:
+                conn.close()
+
     def get_latest_fund_factor(self, fund_code: str):
         conn = self._get_conn()
         query = """

@@ -221,6 +221,19 @@ class WoodyAPIService:
             
             sh_data = f_data.get('symbol_hedge')
             if isinstance(sh_data, dict):
+                # [AI-2026-07-29] 修复权重换代残留bug：woody 篮子每日可能换代（标的组合变化），
+                # 旧逻辑只 INSERT OR REPLACE 新代符号，换代后消失的旧 symbol 行残留 → 权重和>100%。
+                # 先按新代符号集删除该 (b_date, fund) 下的旧残留行，再逐个 upsert。
+                # 详见 docs_unfinished/权重换代残留bug修复说明_2026-07-29.md
+                _new_gen_syms = []
+                for _s in sh_data.keys():
+                    if ('-JP' in _s or '-EU' in _s or '-HK' in _s) and not _s.startswith('^'): _s = f"^{_s}"
+                    _new_gen_syms.append(_s)
+                try:
+                    db.prune_fund_basket_weights(date=b_date, fund_code=fund_code, valid_symbols=_new_gen_syms)
+                except Exception as _pe:
+                    logger.warning(f"⚠️ 权重换代清理失败 {fund_code}@{b_date}: {_pe}")
+
                 for etf_sym, etf_info in sh_data.items():
                     clean_etf = etf_sym
                     if ('-JP' in clean_etf or '-EU' in clean_etf or '-HK' in clean_etf) and not clean_etf.startswith('^'): clean_etf = f"^{clean_etf}"
