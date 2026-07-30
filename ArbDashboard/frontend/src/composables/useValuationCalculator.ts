@@ -466,29 +466,40 @@ export function useValuationCalculator() {
     const finalLofQty = Math.round(targetLofQty.value / 100) * 100
     const finalEtfQty = Math.max(1, Math.round(finalLofQty / etfHedge))
 
-    const targetInvestment = finalLofQty * simLofPrice.value
+    // 对冲敞口必须用净值 NAV（不是 LOF 市价）——见 docs/004-2 第九节已定位 bug
+    const baseNav = parseFloat(bd.nav) || simLofPrice.value
+    const navBasedExposure = finalLofQty * baseNav * pos
 
-    // 一篮子拆解
+    // 一篮子拆解——恒定对冲比 H 魔法（与 Excel 四步法一致，不依赖实时 ETF 价，且不踩 cleanSym 折叠 bug）
+    // H = [(Σ wᵢ·base_priceᵢ)·fx_base / nav] / position；qtyᵢ = round(LOF_qty · wᵢ / H)
     let portfolioBreakdown: any[] = []
     const portfolio = cfg.valuation_portfolio || cfg.hedging_portfolio || []
     if (portfolio.length > 1) {
-      const targetExposureRMB = finalLofQty * simLofPrice.value * pos
-      const currentFx = parseFloat(latestExchangeRateInput.value) || 0
-      if (currentFx > 0) {
-        const targetExposureUSD = targetExposureRMB / currentFx
+      const fxBase = parseFloat(bd.exchange_rate) || parseFloat(latestExchangeRateInput.value) || 0
+      const getBasePrice = (sym: string): number =>
+        parseFloat(bd[sym]) || parseFloat(bd[sym.replace(/^\^/, '')]) || 0
+      // 1) 基准日校准值 C 与恒定 H（全部用基准价，零实时价依赖）
+      let sumWBp = 0
+      let basisValid = true
+      for (const p of portfolio) {
+        const w = (parseFloat(p.weight) || 0) / 100.0
+        const bp = getBasePrice(p.symbol || '')
+        if (!(bp > 0) || !(w > 0)) { basisValid = false; break }
+        sumWBp += w * bp
+      }
+      if (basisValid && fxBase > 0 && baseNav > 0 && pos > 0 && sumWBp > 0) {
+        const C = (sumWBp * fxBase) / baseNav   // 基准日篮子校准值（RMB/LOF）
+        const H = C / pos                        // 恒定对冲比 H
+        // 2) 每个 ETF 数量 = round(LOF_qty · 权重 / H)
         for (const p of portfolio) {
-          const fullSym = p.symbol || ''
-          const cleanSym = fullSym.replace(/^\^/, '').split('-')[0].toUpperCase()
-          const cPrice = parseFloat(testEtfPrices[cleanSym]) || 0
-          const weight = (parseFloat(p.weight) || 0) / 100.0
-          if (cPrice > 0 && weight != 0) {
-            const qty = (targetExposureUSD * weight) / cPrice
-            portfolioBreakdown.push({
-              symbol: fullSym,
-              qty: qty.toFixed(1),
-              isShort: qty < 0,
-            })
-          }
+          const w = (parseFloat(p.weight) || 0) / 100.0
+          if (!(w > 0)) continue
+          const qty = Math.round(finalLofQty * w / H)
+          portfolioBreakdown.push({
+            symbol: p.symbol || '',
+            qty: String(qty),
+            isShort: qty < 0,
+          })
         }
       }
     }
@@ -496,7 +507,7 @@ export function useValuationCalculator() {
     return {
       lofQty: finalLofQty,
       etfQty: finalEtfQty,
-      exposure: targetInvestment * pos,
+      exposure: navBasedExposure,
       breakdown: portfolioBreakdown,
     }
   })

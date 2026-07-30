@@ -38,7 +38,8 @@ class CalcQuantity:
         hedge: float,
         position: float = 1.0,
         portfolio: Optional[List[Dict[str, Any]]] = None,
-        exchange_rate: float = 0.0
+        exchange_rate: float = 0.0,
+        nav: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         ETF 对冲数量计算。
@@ -76,8 +77,10 @@ class CalcQuantity:
         # 计算 ETF 股数
         etf_qty = max(1, round(lof_qty / hedge))
         
-        # 实际 RMB 敞口
-        exposure_rmb = lof_qty * lof_price * position
+        # 实际 RMB 敞口：必须用净值 NAV（不是 LOF 市价）——见 docs/004-2 第九节已定位 bug
+        # nav 提供时优先用净值；否则回退 lof_price（兼容旧调用 / 单 ETF 场景）
+        _exposure_basis = nav if (nav is not None and nav > 0) else lof_price
+        exposure_rmb = lof_qty * _exposure_basis * position
         exposure_usd = exposure_rmb / exchange_rate if exchange_rate > 0 else 0.0
         
         result: Dict[str, Any] = {
