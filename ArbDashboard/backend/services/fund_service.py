@@ -1100,10 +1100,10 @@ class FundService:
             hist_df = pd.read_sql_query(
                 f"""
                 SELECT fund_code, date, price, nav, static_val, static_premium,
-                       volume, shares, shares_added, turnover_rate
+                       volume, trade_volume, shares, shares_added, turnover_rate
                 FROM (
                     SELECT fund_code, date, price, nav, static_val,
-                           premium as static_premium, volume, shares,
+                           premium as static_premium, volume, trade_volume, shares,
                            shares_added, turnover_rate,
                            ROW_NUMBER() OVER (
                                PARTITION BY fund_code ORDER BY date DESC
@@ -1188,7 +1188,8 @@ class FundService:
                     metrics_df = pd.DataFrame()
 
                 metrics = {'price': 0, 'nav': 0, 'static_val': 0, 'static_premium': 0,
-                           'rt_val': None, 'rt_premium': None, 'sub_category': _FUNDS_SUB_CATEGORY.get(code, '')}
+                           'rt_val': None, 'rt_premium': None, 'sub_category': _FUNDS_SUB_CATEGORY.get(code, ''),
+                           'volume': 0, 'trade_volume': 0, 'shares': 0, 'shares_added': 0, 'turnover_rate': 0}
 
                 if not metrics_df.empty:
                     valid_navs = metrics_df[metrics_df['nav'] > 0]
@@ -1211,7 +1212,7 @@ class FundService:
                         p = valid_prices.iloc[0]['price']
                         metrics['price'] = float(p) if p is not None and float(p) > 0 else 0.0
 
-                    for col in ['volume', 'shares', 'shares_added', 'turnover_rate']:
+                    for col in ['volume', 'trade_volume', 'shares', 'shares_added']:
                         valid_series = metrics_df.dropna(subset=[col])
                         metrics[col] = float(valid_series.iloc[0][col]) if not valid_series.empty else 0.0
 
@@ -1222,12 +1223,13 @@ class FundService:
                             shares_t1 = float(valid_shares.iloc[1]['shares'])
                             metrics['shares_added'] = float(shares_t - shares_t1)
 
-                    if metrics.get('turnover_rate') == 0.0:
-                        vol = metrics.get('volume', 0)  # 成交额(万元)
-                        sh = metrics.get('shares', 0)  # 份额(万份)
-                        price = metrics.get('price', 0)  # 现价
-                        if vol > 0 and sh > 0 and price > 0:
-                            metrics['turnover_rate'] = (vol / (price * sh)) * 100  # 换手率(%) = 成交额/(现价×份额) × 100
+                    # [2026-07-30] 换手率(%) = 成交量(手) / 份额(万)，与 woody 网页对齐
+                    #   推导：手×100=份；万×10000=份；份/份×100 = 手/万，故 trade_volume/shares 直接为百分比数值
+                    # 注意：历史表 turnover_rate 字段是旧口径残留，主面板不再信任，一律重算
+                    tv = metrics.get('trade_volume', 0)  # 成交量（手）
+                    sh = metrics.get('shares', 0)        # 份额（万份）
+                    if tv > 0 and sh > 0:
+                        metrics['turnover_rate'] = tv / sh
 
                     # [AI-2026-07-09] 修复涨跌幅：prev_close 必须是"昨收"（前一日收盘价），
                     # 不能是 iloc[0]（当日最新价，与现价相同会导致涨跌幅≈0 或错乱）。
@@ -1251,14 +1253,25 @@ class FundService:
                     if p is not None and float(p) > 0:
                         metrics['realtime_price'] = float(p)
                     if rt.get('amount'):
-                        metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
+                        metrics['volume'] = rt['amount']  # 成交额（万元），主面板「成交额」列显示
+                    # [2026-07-30] 实时成交量（股）→ 手；换手率 = 成交量(手) / 份额(万)，与 woody 对齐
+                    if rt.get('volume'):
+                        metrics['trade_volume'] = float(rt['volume']) / 100.0  # 股 → 手
+                        sh = metrics.get('shares', 0)
+                        if sh > 0:
+                            metrics['turnover_rate'] = metrics['trade_volume'] / sh  # 直接为百分比数值
                 elif self.market_data_service:
                     try:
                         rt = self.market_data_service.get_realtime_quote(code)
                         if rt and rt.get('price'):
                             metrics['realtime_price'] = float(rt['price'])
                             if rt.get('amount'):
-                                metrics['volume'] = rt['amount']  # 通达信amount已是万元，直接存储
+                                metrics['volume'] = rt['amount']  # 成交额（万元）
+                            if rt.get('volume'):
+                                metrics['trade_volume'] = float(rt['volume']) / 100.0  # 股 → 手
+                                sh = metrics.get('shares', 0)
+                                if sh > 0:
+                                    metrics['turnover_rate'] = metrics['trade_volume'] / sh  # 直接为百分比数值
                     except Exception as e:
                         logger.error(f"Error getting realtime quote for {code}: {e}")
 
@@ -1349,6 +1362,11 @@ class FundService:
                 try:
                     if code == '161226':
                         import requests
+                        from arbcore.utils.market_calendar import is_shfe_open
+                        # [2026-07-30 FIX] SHFE 沪银交易时段守卫：休市时段（午夜-早盘间隙、周末、节假日）
+                        # 新浪 nf_AG0 仍返回上一交易时段收盘价，若直接当"实时"会误导用户；故非交易时段
+                        # 不采信 AG0 价 → rt_val / si_val 保持 None（前端显示 '-'），与沙盘页一致。
+                        _ag_session_open = is_shfe_open()
                         ag_future_price, settlement_price, vwap = 0.0, 0.0, 0.0
                         
                         # [优先级1] 本程序自带的东财SSE长连接阅读器（最精准，无需程序1）
@@ -1385,6 +1403,11 @@ class FundService:
                             except:
                                 pass
                                 
+                        # [2026-07-30 FIX] 非交易时段丢弃已取到的价格，避免陈旧收盘价当"实时"
+                        if not _ag_session_open:
+                            logger.debug(f"[{code}] SHFE 当前休市，丢弃 AG0 价(最新价={ag_future_price}/昨结算={settlement_price})，rt_val/si_val 置 None")
+                            ag_future_price, settlement_price, vwap = 0.0, 0.0, 0.0
+
                         nav_home = float(metrics.get('nav', 0))
                         if ag_future_price > 0 and settlement_price > 0 and nav_home > 0:
                             # 🚀 为了让前端展示 AG0 盘口数据
@@ -1519,6 +1542,7 @@ class FundService:
                                     portfolio = fund_cfg.get('valuation_portfolio', [])
                                     from arbcore.utils.market_calendar import symbol_to_exchange, is_trading_day
                                     now_dt = datetime.now()
+                                    required_bases = set()
                                     for item in portfolio:
                                         raw_sym = item.get('symbol', '')
                                         sym_base = raw_sym.replace('^', '')
@@ -1529,6 +1553,7 @@ class FundService:
                                                 sym_base = sym_base[:-len(suffix)]
                                                 has_suffix = True
                                                 break
+                                        required_bases.add(sym_base)
                                         # [AI-2026-07-07] 检查该组件对应的交易所今天是否开市
                                         # 有后缀的 → 查对应的区域交易所；无后缀的 → 美股(NYSE)
                                         ex = symbol_to_exchange(raw_sym)
@@ -1541,18 +1566,24 @@ class FundService:
                                             current_etfs[sym_base] = q['bid']
                                         elif q and q.get('price'):
                                             current_etfs[sym_base] = q['price']
-                                    # [AI-2026-07-06] 篮子基金所有ETF组件均无实时行情时标记
-                                    if portfolio and not current_etfs:
+                                    # [2026-07-30 FIX] 实时估值必须每个"去重基准标的"都有活价：
+                                    # 区域后缀(^GLD-EU 等)会折叠到基础代码(GL D)取价，current_etfs 的 key 数恒等于去重基准数，
+                                    # 故按"去重基准数"而非组合长度判定；否则含区域后缀的基金会因 key 数永远少于 portfolio 长度
+                                    # 而误判缺价、永不显示实时估值。任一去重基准缺活价 → 视为无实时行情，保持 rt_val=None。
+                                    if required_bases and len(current_etfs) < len(required_bases):
                                         _basket_missing_etf = True
+                                        logger.debug(f"[{code}] 篮子组件缺活价({len(current_etfs)}/{len(required_bases)})，跳过实时估值，避免显示陈旧基准价")
                                 
-                                # 计算实时估值
-                                res = calculator.calculate(fund_cfg, current_fx, current_etfs)
-                                val_res = res.get('rt_val') if res else None
-                                if val_res and val_res > 0:
-                                    metrics['rt_val'] = round(val_res, 4)
-                                    # 重新计算溢价率
-                                    if metrics.get('price', 0) > 0:
-                                        metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
+                                # 计算实时估值：仅当全部组件都有活价（_basket_missing_etf 未置位）才计算，
+                                # 否则保持 rt_val=None → 前端显示 '-'，与实时沙盘页面一致，不把基准价当实时
+                                if not _basket_missing_etf:
+                                    res = calculator.calculate(fund_cfg, current_fx, current_etfs)
+                                    val_res = res.get('rt_val') if res else None
+                                    if val_res and val_res > 0:
+                                        metrics['rt_val'] = round(val_res, 4)
+                                        # 重新计算溢价率
+                                        if metrics.get('price', 0) > 0:
+                                            metrics['rt_premium'] = round((metrics['price'] / metrics['rt_val'] - 1) * 100, 3)
 
                             # [AI-2026-07-23] QDII日本基金：用 NK 期货 + 在岸价 做实时估值（Woody 公式）
                             if not metrics.get('rt_val') and category == 'QDII日本':
@@ -1644,28 +1675,38 @@ class FundService:
                 if not metrics.get('rt_val') or metrics['rt_val'] <= 0:
                     # [AI-2026-07-06] 篮子基金ETF行情缺失时跳过stale兜底（INDA等低流动性场景）
                     if _basket_missing_etf:
-                        metrics['rt_val'] = 0
-                        metrics['rt_premium'] = 0
+                        # 篮子组件缺活价：实时估值无效，保持空（前端显示 '-'），不显示陈旧基准价
+                        metrics['rt_val'] = None
+                        metrics['rt_premium'] = None
                     else:
                         try:
-                            sample_query = "SELECT rt_val, premium FROM fund_intraday_quotes WHERE fund_code=? ORDER BY date DESC, time DESC LIMIT 1"
+                            sample_query = "SELECT date, rt_val, premium FROM fund_intraday_quotes WHERE fund_code=? ORDER BY date DESC, time DESC LIMIT 1"
                             sample_df = pd.read_sql(sample_query, conn, params=(code,))
                             if not sample_df.empty:
-                                rv = sample_df.iloc[0]['rt_val']
-                                if rv is not None and float(rv) > 0:
-                                    metrics['rt_val'] = float(rv)
-                                    pm = sample_df.iloc[0]['premium']
-                                    metrics['rt_premium'] = float(pm) if pm is not None else 0
+                                sample_date = str(sample_df.iloc[0]['date'])
+                                today_str = datetime.now().strftime('%Y-%m-%d')
+                                # [2026-07-30 FIX] 仅接受"当日"采样作实时兜底，防止展示陈旧历史快照
+                                # （库里曾残留 6 周前的采样，会当成"实时估值"误导用户）
+                                if sample_date != today_str:
+                                    logger.debug(f"[{code}] 采样表最新记录({sample_date})非当日，跳过实时兜底")
+                                    metrics['rt_val'] = None
+                                    metrics['rt_premium'] = None
                                 else:
-                                    metrics['rt_val'] = 0
-                                    metrics['rt_premium'] = 0
+                                    rv = sample_df.iloc[0]['rt_val']
+                                    if rv is not None and float(rv) > 0:
+                                        metrics['rt_val'] = float(rv)
+                                        pm = sample_df.iloc[0]['premium']
+                                        metrics['rt_premium'] = float(pm) if pm is not None else 0
+                                    else:
+                                        metrics['rt_val'] = None
+                                        metrics['rt_premium'] = None
                             else:
-                                metrics['rt_val'] = 0
-                                metrics['rt_premium'] = 0
+                                metrics['rt_val'] = None
+                                metrics['rt_premium'] = None
                         except Exception as e:
                             logger.error(f"从采样表获取 {code} 历史记录失败: {e}")
-                            metrics['rt_val'] = 0
-                            metrics['rt_premium'] = 0
+                            metrics['rt_val'] = None
+                            metrics['rt_premium'] = None
 
                 # 3. [V4.0] 灵魂逻辑重算 (确保静态溢价率和涨跌幅不为 0)
                 cp = float(metrics.get('price') or 0)
@@ -1749,10 +1790,10 @@ class FundService:
             SELECT h.date, h.price, 
                    COALESCE(h.nav, f.nav) as nav,
                    h.static_val, h.premium as static_premium, h.calibration,
-                   h.index_close, h.index_pct, h.shares, h.shares_added, h.turnover_rate, h.volume,
+                   h.index_close, h.index_pct, h.shares, h.shares_added, h.trade_volume, h.turnover_rate, h.volume,
                    h.valuation_error,
                     r.usd_cny_mid, r.hkd_cny_mid, r.jpy_cny_mid,
-                    f.hedge
+                    f.hedge, f.position
             FROM unified_fund_history h
             LEFT JOIN exchange_rate r ON h.date = r.date
             LEFT JOIN fund_daily_factors f ON h.date = f.date AND h.fund_code = f.fund_code
@@ -1824,6 +1865,16 @@ class FundService:
                     prev_shares = df['shares'].shift(-1)
                     calc = df['shares'] - prev_shares
                     df.loc[mask_sa, 'shares_added'] = calc[mask_sa]
+
+            # [2026-07-30] 换手率（与 woody 网页对齐，彻底修正此前用成交额错算）
+            #   成交量(份) = trade_volume(手) × 100，份额(份) = shares(万) × 10000
+            #   换手率% = 成交量(份)/份额(份) × 100 = trade_volume(手) / shares(万)
+            #   新增换手% = trade_volume(手) / shares_added(万)（仅当场内新增>0 才有意义，否则 woody 留空）
+            if 'trade_volume' in df.columns and 'shares' in df.columns:
+                tv = pd.to_numeric(df['trade_volume'], errors='coerce')
+                sh = pd.to_numeric(df['shares'], errors='coerce')
+                rate = tv / sh
+                df['turnover_rate'] = rate.where((tv > 0) & (sh > 0))
 
             # 清理 NaN/Inf（不填充 0，保留 None 让前端显示 '-'）
             import numpy as np
@@ -2046,6 +2097,31 @@ class FundService:
             except Exception as e:
                 logger.warning(f"[FundHistory] 获取ETF历史价格失败 {fund_code}: {e}")
 
+            # [2026-07-30] 构建 per-symbol 的 date->weight 映射，供历史行附加 {sym}_weight 列（权重以百分比存储）
+            # 部分日期可能缺失篮子权重行（同步间隙），lookup_weight 回退到"该标的最近一个 <= 该日期"的权重
+            weight_by_sym = {}
+            try:
+                wrows = conn.execute(
+                    "SELECT date, underlying_symbol, weight FROM fund_basket_weights WHERE fund_code=?",
+                    (fund_code,)
+                ).fetchall()
+                for wd, wsym, wval in wrows:
+                    if wval is not None:
+                        weight_by_sym.setdefault(wsym, {})[str(wd)[:10]] = float(wval)
+            except Exception as e:
+                logger.warning(f"[FundHistory] 读取篮子权重失败 {fund_code}: {e}")
+
+            def lookup_weight(row_date: str, sym: str):
+                dmap = weight_by_sym.get(sym)
+                if not dmap:
+                    return None
+                if row_date in dmap:
+                    return dmap[row_date]
+                cand = [d for d in dmap if d <= row_date]
+                if cand:
+                    return dmap[max(cand)]
+                return None
+
             # [AI] 从 index_history 获取真正的指数数据，覆盖可能被错误写入 SPY 的 index_close
             real_index_map = {}
             if trade_etf:
@@ -2155,6 +2231,10 @@ class FundService:
                         if ed:
                             item[f'{etf_sym}_price'] = ed['price']
                             item[f'{etf_sym}_price_chg'] = ed.get('chg')
+                            # [2026-07-30] 附加该底层标的当日权重（百分比），供历史页 "标的权重" 列显示（缺失日回退最近权重）
+                            w = lookup_weight(row_date, etf_sym)
+                            if w is not None:
+                                item[f'{etf_sym}_weight'] = round(w, 4)
 
                 item['is_single_etf'] = is_single_etf
                 data_list.append(item)

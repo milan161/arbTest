@@ -77,26 +77,39 @@
       </n-gi>
     </n-grid>
 
-    <!-- 历史对账详情弹窗 -->
-    <n-modal v-model:show="showHistoryModal" preset="card" :title="`[历史记录] ${selectedFund?.fund_code} - ${selectedFund?.fund_name}`" style="width: 95%; max-width: 1500px;">
-      <div v-if="selectedFund && !isCashManagementFund" style="margin-bottom: 16px; display: flex; gap: 24px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px;">
-        <div>
-          <strong>跟踪标的：</strong> 
-          {{ getIdxDisplayName(selectedFund) }}
+    <!-- 历史对账详情弹窗（2026-07-30：近全屏 + 单一滚动容器方案，根治横向滚动条被推到表底的问题） -->
+    <n-modal v-model:show="showHistoryModal" preset="card" :title="`[历史记录] ${selectedFund?.fund_code} - ${selectedFund?.fund_name}`" style="width: 96vw; max-width: 96vw; height: 90vh;">
+      <div class="history-modal-body">
+        <div v-if="selectedFund && !isCashManagementFund" class="history-info">
+          <div><strong>仓位：</strong> {{ fundHistoryPositionDisplay }}</div>
+          <div>
+            <strong>跟踪标的：</strong> 
+            {{ getIdxDisplayName(selectedFund) }}
+          </div>
+          <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
+          <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
         </div>
-        <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
-        <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
-      </div>
-      <div class="history-table-wrapper">
-        <n-data-table
-          :columns="historyColumns"
-          :data="fundHistory"
-          size="small"
-          flex-height
-          style="height: 600px;"
-          bordered
-          :scroll-x="historyColumns.length * 105"
-        />
+        <div class="history-table-wrapper">
+          <n-data-table
+            :columns="historyColumns"
+            :data="pagedHistory"
+            size="small"
+            bordered
+            style="width: 100%;"
+          />
+        </div>
+        <div class="history-pagination">
+          <n-pagination
+            v-model:page="historyPage"
+            :page-size="historyPageSize"
+            :item-count="fundHistory.length"
+            :page-slot="7"
+            show-size-picker
+            :page-sizes="[10, 15, 20, 30]"
+            size="small"
+          />
+          <span class="history-page-info">共 {{ fundHistory.length }} 条 · 每页 {{ historyPageSize }} 条</span>
+        </div>
       </div>
     </n-modal>
 
@@ -113,7 +126,7 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   NGrid, NGi, NCard, NIcon, NText, NInput,
-  NButton, NDataTable, NTag, NTabs, NTabPane, NModal
+  NButton, NDataTable, NTag, NTabs, NTabPane, NModal, NPagination
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { Zap, Star, StarOff, History } from 'lucide-vue-next'
@@ -142,6 +155,15 @@ const { milestones } = storeToRefs(appStore)
 const showHistoryModal = ref(false)
 const showSilverRatioModal = ref(false)
 const selectedFund = ref<any>(null)
+// [2026-07-30] 历史弹窗分页：每页 10 个交易日，彻底消除长表纵向滚动把横向滚动条推到表底的问题
+const historyPage = ref(1)
+const historyPageSize = 10
+const pagedHistory = computed(() => {
+  const all = fundHistory.value || []
+  const start = (historyPage.value - 1) * historyPageSize
+  return all.slice(start, start + historyPageSize)
+})
+watch(fundHistory, () => { historyPage.value = 1 })
 const isCashManagementFund = computed(() => {
   return ['511880', '511360', '511520'].includes(selectedFund.value?.fund_code)
 })
@@ -565,17 +587,22 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
             { title: '指数价', key: 'index_close', width: 95, align: 'center', render(row: any) { return renderValWithChg(row.index_close, row.index_close_chg) } },
             { title: '指数涨跌', key: 'index_pct', width: 85, align: 'center', render(row: any) { if (row.index_pct == null) return '-'; return h('span', { style: { color: priceColor(row.index_pct), fontWeight: '500' } }, row.index_pct.toFixed(2) + '%') } },
         ] : []),
-        // 现金管理不显示份额/新增/换手率
-        ...(isCash ? [] : [
-            { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { const v = row.shares; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(0)) } },
-            { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { const v = row.shares_added; if (v == null) return '-'; const n = Number(v); return h('span', { style: { color: priceColor(n), fontSize: '11px' } }, (n >= 0 ? '+' : '') + n.toFixed(0)) } },
-            { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { const v = row.turnover_rate; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(2) + '%') } },
-        ]),
+        // [2026-07-30] 份额/新增/换手率 不再内联，改为最右侧（见下方 shareCols）
     ]
 
+    // [2026-07-30] 份额/新增/换手率 列（移到最右侧）
+    const shareCols: DataTableColumns<any> = isCash ? [] : [
+        { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { const v = row.shares; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(0)) } },
+        { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { const v = row.shares_added; if (v == null) return '-'; const n = Number(v); return h('span', { style: { color: priceColor(n), fontSize: '11px' } }, (n >= 0 ? '+' : '') + n.toFixed(0)) } },
+        { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { const v = row.turnover_rate; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(2) + '%') } },
+    ]
+
+    // [2026-07-30] 动态底层标的列：价格 + 紧随其后的权重列（权重紧贴价格右侧）
+    const dynCols: DataTableColumns<any> = []
     if (fundHistory.value.length > 0) {
-        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'volume', 'valuation_error', 'hkd_cny_mid', 'jpy_cny_mid', 'latest_nav', 'futures_close', 'futures_pct', 'hedge']
-        // Scan ALL rows to find dynamic keys (first row may lack data, e.g. 06-19 has no XOP_price)
+        // position/is_single_etf 为已知字段，避免被当作动态数值列
+        const knownKeys = ['date', 'price', 'nav', 'static_val', 'static_premium', 'calibration', 'usd_cny_mid', 'turnover_amt', 'price_change', 'price_chg', 'nav_chg', 'static_val_chg', 'usd_cny_mid_chg', 'index_close', 'index_pct', 'idx_close', 'idx_pct', 'val_error_pct', 'shares', 'shares_added', 'turnover_rate', 'trade_volume', 'volume', 'valuation_error', 'hkd_cny_mid', 'jpy_cny_mid', 'latest_nav', 'futures_close', 'futures_pct', 'hedge', 'position', 'is_single_etf']
+        // 扫描所有行收集动态键（首行可能缺数据，如 06-19 无 XOP_price）
         const dynamicKeys = new Set<string>()
         for (const row of fundHistory.value) {
             for (const key of Object.keys(row)) {
@@ -584,30 +611,55 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 }
             }
         }
-        
-        // [AI] 如果是指数类基金，不显示底层的 SPY/QQQ 动态列，只看指数
-        const isIndexFund = selectedFund.value?.sub_category?.includes('指数');
-        
+
+        // [AI] 指数类基金不显示底层 SPY/QQQ 动态列，只看指数
+        const isIndexFund = selectedFund.value?.sub_category?.includes('指数')
+        const firstRow = fundHistory.value[0]
+        const isSingleEtf = firstRow && 'is_single_etf' in firstRow ? (firstRow as any).is_single_etf : true
+
+        // 归集：每个底层标的生成 价格列 + (若有)权重列，权重列紧贴价格列右侧
+        const priceKeys: string[] = []
+        const weightOf: Record<string, string> = {}
         dynamicKeys.forEach(key => {
-            if (isIndexFund && key.endsWith('_price')) {
-                return; // 跳过指数基金的动态 ETF 列
+            if (isIndexFund && key.endsWith('_price')) return
+            const pm = key.match(/^(.+)_price$/)
+            if (pm) {
+                const wkey = pm[1] + '_weight'
+                if (dynamicKeys.has(wkey)) weightOf[key] = wkey
+                priceKeys.push(key)
             }
-            
-            let title = key
-            const priceMatch = key.match(/^(.+)_price$/)
-            if (priceMatch) {
-                // [AI-2026-07-21] 单主ETF基金（如162411→XOP）显示净值；多篮子基金（如161116→GLD+^GLD-EU）显示价格
-                const firstRow = fundHistory.value.length > 0 ? fundHistory.value[0] : null
-                const isSingleEtf = firstRow !== null && 'is_single_etf' in firstRow ? firstRow.is_single_etf : true  // 旧后端无此字段时兼容
-                title = priceMatch[1] + (isSingleEtf ? '净值' : '价格')
-            }
-            baseCols.push({
+        })
+        priceKeys.forEach(key => {
+            const pm = key.match(/^(.+)_price$/)!
+            const sym = pm[1]
+            // [AI-2026-07-21] 单主ETF（如162411→XOP）显示净值；多篮子（如161116→GLD+^GLD-EU）显示价格
+            const title = sym + (isSingleEtf ? '净值' : '价格')
+            dynCols.push({
                 title: title, key: key, width: 95, align: 'center',
                 render(row: any) { return renderValWithChg(row[key], row[`${key}_chg`], 2) }
             })
+            if (weightOf[key]) {
+                const wkey = weightOf[key]
+                dynCols.push({
+                    title: sym + '权重', key: wkey, width: 85, align: 'center',
+                    render(row: any) { const v = row[wkey]; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(2) + '%') }
+                })
+            }
         })
     }
-    return baseCols
+
+    return [...baseCols, ...dynCols, ...shareCols]
+})
+
+// [2026-07-30] 历史弹窗表头"仓位"展示（取最新非空 position，按百分比显示；position 以分数存储，如 0.9599 → 95.99%）
+const fundHistoryPositionDisplay = computed(() => {
+    for (const r of fundHistory.value) {
+        const p = r.position
+        if (p != null && p !== '' && !isNaN(Number(p))) {
+            return (Number(p) * 100).toFixed(2) + '%'
+        }
+    }
+    return '-'
 })
 
 const columns = computed<DataTableColumns<any>>(() => {
@@ -896,6 +948,100 @@ const tableScrollX = computed(() => {
   width: 100%;
   height: calc(100vh - 220px);
   overflow: auto;
+}
+
+/* 历史弹窗：单一滚动容器方案（与 017 主表同原则，根治"横条被推到表底"）
+   - 弹窗近全屏(96vw/90vh)：横向容纳更多列，160719 等典型基金整表直接放下
+   - 卡片内容设为 flex 列；body flex:1 + min-height:0 撑满，表格外层再 flex:1 + overflow:auto
+   - 移除了 n-data-table 的 flex-height / scroll-x，避免内层再生成独立横向滚动容器
+   - 水平+垂直滚动统一由 .history-table-wrapper 接管，横条恒在弹窗底部、始终可见
+*/
+:deep(.n-card__content) {
+  display: flex;
+  flex-direction: column;
+}
+.history-modal-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+.history-info {
+  flex: 0 0 auto;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 24px;
+  font-size: 14px;
+  background: #f8fafc;
+  padding: 12px;
+  border-radius: 8px;
+}
+.history-table-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+  /* Firefox 滚动条配色（宽度受浏览器限制，无法自定义像素） */
+  scrollbar-width: auto;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+
+/* 加大水平滚动条拖拽块：高度 16px，圆角滑块，hover 变深 */
+.history-table-wrapper::-webkit-scrollbar {
+  width: 12px;
+  height: 16px;
+}
+.history-table-wrapper::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 8px;
+}
+.history-table-wrapper::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 8px;
+  border: 3px solid #f1f5f9;
+}
+.history-table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* [2026-07-30] 历史弹窗表格字体：改用截图同款 sans-serif 栈
+   数字优先 Tahoma（与 woody 网页/截图里数字风格最接近），
+   中文回退 Microsoft YaHei，等宽数字 tabular-nums 让列对齐更整齐 */
+.history-table-wrapper :deep(.n-data-table),
+.history-table-wrapper :deep(.n-data-table-td),
+.history-table-wrapper :deep(.n-data-table-th) {
+  font-family: Tahoma, "Microsoft YaHei", Arial, sans-serif !important;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+.history-table-wrapper :deep(.n-data-table-th) {
+  font-weight: 600;
+}
+
+/* 表头吸顶：即便某页行数多导致纵向滚动，表头也始终可见 */
+.history-table-wrapper :deep(.n-data-table-thead) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.history-table-wrapper :deep(.n-data-table-thead .n-data-table-th) {
+  background: #f8fafc;
+}
+
+/* 分页栏：固定在表格下方，不随表格滚动 */
+.history-pagination {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.history-page-info {
+  font-size: 13px;
+  color: #64748b;
 }
 
 /* 整列底色 - 覆盖奇偶行交替背景 */

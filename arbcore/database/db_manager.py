@@ -165,6 +165,7 @@ class DatabaseManager:
                     nav REAL,
                     nav_date TEXT,
                     volume REAL,
+                    trade_volume REAL,
                     shares REAL,
                     shares_added REAL,
                     turnover_rate TEXT,

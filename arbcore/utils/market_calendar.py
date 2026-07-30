@@ -15,7 +15,7 @@
     symbol_to_exchange('^GLD-EU')  # 'XSWX'
 """
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
@@ -203,6 +203,45 @@ def is_us_trading_day(d: date = None) -> bool:
 def is_hk_trading_day(d: date = None) -> bool:
     """港股是否交易日"""
     return is_trading_day('XHKG', d)
+
+
+def is_shfe_open(now_dt: datetime = None) -> bool:
+    """
+    [2026-07-30] 判断上海期货交易所(SHFE)当前是否处于连续交易时段。
+    用于实时估值守卫：休市时段（含午夜-早盘间隙、周末、节假日）新浪 nf_AG0
+    仍返回上一交易时段的收盘价，若直接当作"实时"会误导用户，故非交易时段
+    不应产生 rt_val / si_val。
+
+    沪银(AG)交易时段（北京时间）：
+      - 夜盘 21:00 ~ 次日 02:30（跨零点，归属前一交易日）
+      - 上午 09:00 ~ 10:15
+      - 上午 10:30 ~ 11:30
+      - 下午 13:30 ~ 15:00
+    SHFE 仅在 A 股交易日开市（与 A 股同休假日历）。
+    """
+    if now_dt is None:
+        now_dt = datetime.now()
+    t = now_dt.time()
+    # 夜盘 00:00~02:30 在时间上属于"前一交易日"的开盘延续；
+    # 若前一交易日非 A 股交易日，则不视为开盘（避免周末凌晨误判为开盘）。
+    session_date = now_dt.date()
+    if t < time(2, 30):
+        session_date = session_date - timedelta(days=1)
+    if not is_trading_day('A_SHARE', session_date):
+        return False
+    # 夜盘
+    if t >= time(21, 0) or t < time(2, 30):
+        return True
+    # 上午盘（两段）
+    if time(9, 0) <= t < time(10, 15):
+        return True
+    if time(10, 30) <= t < time(11, 30):
+        return True
+    # 下午盘
+    if time(13, 30) <= t < time(15, 0):
+        return True
+    return False
+
 
 
 # ---------------------------------------------------------------------------

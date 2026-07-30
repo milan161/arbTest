@@ -533,7 +533,7 @@ class DailyUpdater(BaseApp):
 
         self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价/日元）采集结束。")
 
-    def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None):
+    def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None, trade_volume=None):
         """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
         conn = self.db._get_conn()
         row = None
@@ -563,7 +563,8 @@ class DailyUpdater(BaseApp):
             fund_code=fund_code, 
             price=new_price, 
             nav=new_nav, 
-            premium=premium
+            premium=premium,
+            trade_volume=trade_volume
         )
 
     def _step4_fix_holiday_prices(self, codes_to_fix=None):
@@ -669,9 +670,11 @@ class DailyUpdater(BaseApp):
 
                 written = 0
                 for it in items:
-                    # 腾讯day格式: [date, open, close, high, low, ...]
+                    # 腾讯day格式: [date, open, close, high, low, volume(手), amount?]
                     k_date = str(it[0])
                     k_close = float(it[2]) if len(it) > 2 and it[2] else 0
+                    # [2026-07-30] 成交量(手)：1 手 = 100 份；换手率 = 成交量(手) / 份额(万) × 100，与 woody 网页对齐
+                    k_volume = float(it[5]) if len(it) > 5 and it[5] else 0
                     if k_close <= 0:
                         continue
                     # 今天的数据：仅当确认是收盘后的正式数据才写入
@@ -679,7 +682,7 @@ class DailyUpdater(BaseApp):
                     if k_date >= today_str:
                         # 今天或未来日期：跳过，不打标记，下次调度再试
                         continue
-                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=k_close)
+                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=k_close, trade_volume=k_volume)
                     written += 1
 
                 if written > 0:
