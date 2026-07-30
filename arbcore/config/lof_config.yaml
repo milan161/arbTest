@@ -7,8 +7,8 @@ currencies:
   symbol: USD
 valuation_routing:
   methods:
-    '':
-      static_hedge: true
+    ? ''
+    : static_hedge: true
       dynamic_hedge: true
     etf:
       static_hedge: true
@@ -35,8 +35,8 @@ funds:
   name: 南方原油
   category: 黄金原油
   holdings:
-    equity_ratio: 85.84
-    cash_ratio: 14.16
+    equity_ratio: 85.61
+    cash_ratio: 14.39
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -46,18 +46,18 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: ^USO-EU
-    weight: 54.99
+  - symbol: USO-EU
+    weight: 55.79
     anchor: EU
-  - symbol: ^USO-JP
-    weight: 27.29
+  - symbol: USO-JP
+    weight: 28.68
     anchor: JP
   - symbol: USO
-    weight: 17.72
+    weight: 15.54
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 85.84
+  position: 85.61
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -79,8 +79,8 @@ funds:
   name: 嘉实原油
   category: 黄金原油
   holdings:
-    equity_ratio: 80.95
-    cash_ratio: 19.05
+    equity_ratio: 80.04
+    cash_ratio: 19.96
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -126,14 +126,14 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 72.59
+    weight: 65.28
     anchor: US
-  - symbol: ^USO-EU
-    weight: 27.41
+  - symbol: USO-EU
+    weight: 34.72
     anchor: EU
   trade_etf: USO
   trade_future: MCL
-  position: 80.95
+  position: 80.04
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -155,8 +155,8 @@ funds:
   name: 易方达原油
   category: 黄金原油
   holdings:
-    equity_ratio: 86.74
-    cash_ratio: 13.26
+    equity_ratio: 86.22
+    cash_ratio: 13.78
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -196,18 +196,18 @@ funds:
     exchange: SMART
     name: 微原油期货
   valuation_portfolio:
-  - symbol: ^USO-EU
-    weight: 49.26
+  - symbol: USO-EU
+    weight: 54.0
     anchor: EU
   - symbol: USO
-    weight: 34.49
+    weight: 30.71
     anchor: US
-  - symbol: ^USO-HK
-    weight: 16.24
+  - symbol: USO-HK
+    weight: 15.29
     anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 86.74
+  position: 86.22
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -231,22 +231,22 @@ funds:
   trade_etf: GLD
   trade_future: ''
   holdings:
-    equity_ratio: 95.13
-    cash_ratio: 4.87
+    equity_ratio: 94.1
+    cash_ratio: 5.9
   valuation_portfolio:
   - symbol: GLD
-    weight: 81.11
+    weight: 80.11
     anchor: US
   - symbol: SLV
-    weight: 12.72
+    weight: 13.69
     anchor: US
   - symbol: USO
-    weight: 6.17
+    weight: 6.21
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 95.13
+  position: 94.1
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -270,17 +270,17 @@ funds:
   trade_etf: GLD
   trade_future: ''
   holdings:
-    equity_ratio: 83.34
-    cash_ratio: 16.66
+    equity_ratio: 84.05
+    cash_ratio: 15.95
   valuation_portfolio:
   - symbol: GLD
-    weight: 65.99
+    weight: 67.33
     anchor: US
-  - symbol: ^USO-EU
-    weight: 23.93
+  - symbol: USO-EU
+    weight: 22.83
     anchor: EU
   - symbol: USO
-    weight: 10.08
+    weight: 9.84
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
@@ -297,7 +297,7 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 83.34
+  position: 84.05
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -319,8 +319,8 @@ funds:
   name: 嘉实黄金
   category: 黄金原油
   holdings:
-    equity_ratio: 96.34
-    cash_ratio: 3.66
+    equity_ratio: 95.99
+    cash_ratio: 4.01
   holdings_portfolio:
   - symbol: GLD
     weight: 19.02
@@ -361,14 +361,14 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 52.28
+    weight: 51.47
     anchor: US
-  - symbol: ^GLD-EU
-    weight: 47.72
+  - symbol: GLD-EU
+    weight: 48.53
     anchor: EU
   trade_etf: GLD
   trade_future: MGC
-  position: 96.34
+  position: 95.99
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -550,8 +550,8 @@ funds:
   name: 中信保诚
   category: 黄金原油
   holdings:
-    equity_ratio: 98.14
-    cash_ratio: 1.86
+    equity_ratio: 98.2
+    cash_ratio: 1.8
   holdings_portfolio: []
   future_hedging:
   - symbol: MGC
@@ -562,17 +562,17 @@ funds:
     name: ''
   valuation_portfolio:
   - symbol: GLD
-    weight: 89.84
+    weight: 89.45
     anchor: US
-  - symbol: ^GLD-EU
-    weight: 7.56
+  - symbol: GLD-EU
+    weight: 7.84
     anchor: EU
-  - symbol: ^GLD-JP
-    weight: 2.6
+  - symbol: GLD-JP
+    weight: 2.71
     anchor: JP
   trade_etf: GLD
   trade_future: MGC
-  position: 98.14
+  position: 98.2
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -1010,19 +1010,19 @@ funds:
   trade_etf: XLE
   trade_future: ''
   holdings:
-    equity_ratio: 91.24
-    cash_ratio: 8.76
+    equity_ratio: 90.45
+    cash_ratio: 9.55
   valuation_portfolio:
   - symbol: XLE
-    weight: 87.77
+    weight: 85.83
     anchor: US
   - symbol: USO
-    weight: 12.23
+    weight: 14.17
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 91.24
+  position: 90.45
   sub_category: 黄金原油
   woody_supported: true
   data_source: woody
@@ -1046,8 +1046,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 91.0
-    cash_ratio: 9.0
+    equity_ratio: 95.0
+    cash_ratio: 5.0
   valuation_portfolio:
   - symbol: MU
     weight: 13.61
@@ -1082,7 +1082,7 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 91.0
+  position: 95.0
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -1106,19 +1106,19 @@ funds:
   trade_etf: SOXX
   trade_future: ''
   holdings:
-    equity_ratio: 90.34
-    cash_ratio: 9.66
+    equity_ratio: 96.36
+    cash_ratio: 3.64
   valuation_portfolio:
   - symbol: SOXX
-    weight: 76.36
+    weight: 81.12
     anchor: US
   - symbol: SZ159560
-    weight: 23.64
+    weight: 18.88
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 90.34
+  position: 96.36
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -2740,13 +2740,13 @@ funds:
   valuation_method: lof_domestic
   static_valuation:
     basis: index
-    symbol: '000905'
+    symbol: 000905
     source_priority:
     - tencent
     - sina
   dynamic_valuation:
     basis: index
-    symbol: '000905'
+    symbol: 000905
     source_priority:
     - tdx
     - guojin
@@ -3012,7 +3012,7 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
-  valuation_method: 'index'
+  valuation_method: index
   rate_type: spot
   pos_ratio: 0.91
   related_index: N225
@@ -3062,255 +3062,254 @@ last_futures_settlement_date: '2026-04-07'
 161125_calibration: 16399.583345
 161130_calibration: 44691.210786
 symbol_sources:
-  'SPY': 'IB'
-  'QQQ': 'IB'
-  'IWM': 'IB'
-  'DIA': 'IB'
-  'XLK': 'IB'
-  'XLF': 'IB'
-  'XLE': 'IB'
-  'XLV': 'IB'
-  'XLI': 'IB'
-  'XLP': 'IB'
-  'XLY': 'IB'
-  'XLU': 'IB'
-  'XLRE': 'IB'
-  'XLB': 'IB'
-  'SOXX': 'IB'
-  'SMH': 'IB'
-  'ARKK': 'IB'
-  'ARKG': 'IB'
-  'ARKQ': 'IB'
-  'AIQ': 'IB'
-  'BOTZ': 'IB'
-  'FINX': 'IB'
-  'GLD': 'IB'
-  'SLV': 'IB'
-  'IAU': 'IB'
-  'GDX': 'IB'
-  'GDXJ': 'IB'
-  'USO': 'IB'
-  'XOP': 'IB'
-  'OIL': 'IB'
-  'BNO': 'IB'
-  'CPER': 'IB'
-  'DBC': 'IB'
-  'PDBC': 'IB'
-  'EWA': 'IB'
-  'EWC': 'IB'
-  'EWJ': 'IB'
-  'EWZ': 'IB'
-  'EWY': 'IB'
-  'EWH': 'IB'
-  'EWI': 'IB'
-  'EWG': 'IB'
-  'EWU': 'IB'
-  'FXI': 'IB'
-  'MCHI': 'IB'
-  'KWEB': 'IB'
-  'INDA': 'IB'
-  'VIX': 'IB'
-  '510050': 'TDX'
-  '510300': 'TDX'
-  '510500': 'TDX'
-  '159919': 'TDX'
-  '510100': 'TDX'
-  '510310': 'TDX'
-  '515000': 'TDX'
-  '515880': 'TDX'
-  '516160': 'TDX'
-  '516150': 'TDX'
-  '515790': 'TDX'
-  '516110': 'TDX'
-  '516180': 'TDX'
-  '516400': 'TDX'
-  '516580': 'TDX'
-  '516950': 'TDX'
-  '159985': 'TDX'
-  '159560': 'TDX'
-  '127001': 'TDX'
-  '127003': 'TDX'
-  '513100': 'TDX'
-  '513500': 'TDX'
-  '510900': 'TDX'
-  '159915': 'TDX'
-  '00700': 'FUTU'
-  '09988': 'FUTU'
-  '01810': 'FUTU'
-  '09618': 'FUTU'
-  '00941': 'FUTU'
-  '01398': 'FUTU'
-  '02318': 'FUTU'
-  '00883': 'FUTU'
-  'TSM': 'FUTU'
-  'NVDA': 'FUTU'
-  'SNDK': 'FUTU'
-  'MU': 'FUTU'
-  'GOOGL': 'FUTU'
-  'AVGO': 'FUTU'
-  'ASML': 'FUTU'
-  'AAPL': 'FUTU'
-  'MSFT': 'FUTU'
-  'AMZN': 'FUTU'
-  'META': 'FUTU'
-  'TSLA': 'FUTU'
-  'CU': 'TDX'
-  'AL': 'TDX'
-  'ZN': 'TDX'
-  'PB': 'TDX'
-  'NI': 'TDX'
-  'AU': 'TDX'
-  'AG': 'TDX'
-  'SI': 'TDX'
-  'RB': 'TDX'
-  'HC': 'TDX'
-  'I': 'TDX'
-  'J': 'TDX'
-  'JM': 'TDX'
-  'PP': 'TDX'
-  'EG': 'TDX'
-  'L': 'TDX'
-  'V': 'TDX'
-  'D': 'TDX'
-  'B': 'TDX'
-  'Y': 'TDX'
-  'C': 'TDX'
-  'CS': 'TDX'
-  'TA': 'TDX'
-  'MA': 'TDX'
-  'CF': 'TDX'
-  'SR': 'TDX'
-  'OI': 'TDX'
-  'FG': 'TDX'
-  'SA': 'TDX'
-  'SC': 'TDX'
-  'RU': 'TDX'
-  'NR': 'TDX'
-  'PG': 'TDX'
-  'IF': 'TDX'
-  'IC': 'TDX'
-  'IH': 'TDX'
-  'IM': 'TDX'
-  'MGC': 'SINA'
-  'MCL': 'SINA'
-  'MES': 'SINA'
-  'MNQ': 'SINA'
-  'NK': 'SINA'
-  'NQ': 'SINA'
-  '.INX': 'SINA'
-  '.NDX': 'SINA'
-  '.DJI': 'SINA'
-  '.IXIC': 'SINA'
-  '.HSI': 'SINA'
-  'HSI': 'SINA'
-  'HSTECH': 'SINA'
-  'HSCEI': 'SINA'
-  'CES300.HI': 'SINA'
-  '.SSEC': 'SINA'
-  '.SZSC': 'SINA'
-  '.CSI300': 'SINA'
-  '.SH000300': 'SINA'
-  '000905': 'TENCENT'
-  '000300': 'TENCENT'
-  '000001': 'TENCENT'
-  '399001': 'TENCENT'
-  '399005': 'TENCENT'
-  '399006': 'TENCENT'
-  '399330': 'TENCENT'
-  'HSCI': 'SINA'
-  'HSSI': 'SINA'
-  'HSMI': 'SINA'
-  'HSCCI': 'SINA'
-  'HSSCNE': 'SINA'
-  '869': 'SINA'
-  '930914': 'SINA'
-  '930917': 'SINA'
-  '^USO-EU': 'WOODY'
-  '^USO-JP': 'WOODY'
-  '^USO-HK': 'WOODY'
-  '^GLD-EU': 'WOODY'
-  '^GLD-JP': 'WOODY'
-  '^GLD-HK': 'WOODY'
-  '^INDA-EU': 'WOODY'
-  '^INDA-HK': 'WOODY'
-  '^INDA-JP': 'WOODY'
-  'AUUSI.SW': 'TDX'
-  '03690': 'FUTU'
-  '399417': 'TDX'
-  '000979': 'TDX'
-  '01888': 'FUTU'
-  '1699.T': 'TDX'
-  '930720.CSI': 'TDX'
-  '000961': 'TDX'
-  '399807': 'TDX'
-  '399707': 'TDX'
-  '1671.T': 'TDX'
-  '399803': 'TDX'
-  '.SPHCMSHP': 'SINA'
-  '399997': 'TDX'
-  'HKMES': 'IB'
-  'SGOL': 'IB'
-  'GC': 'IB'
-  'CES300': 'TDX'
-  'AAAU': 'IB'
-  '000903': 'TDX'
-  '000922': 'TDX'
-  '399989': 'TDX'
-  'H30094.CSI': 'TDX'
-  '399986': 'TDX'
-  '000869': 'TDX'
-  'HKHSCI': 'IB'
-  'GLDM': 'IB'
-  '950090.CSI': 'TDX'
-  'HKTOP': 'IB'
-  '930997': 'TDX'
-  '00148': 'FUTU'
-  'AMD': 'IB'
-  'BRNT.L': 'TDX'
-  'VNQ': 'IB'
-  'CL': 'IB'
-  '399975': 'TDX'
-  'RSPH': 'IB'
-  'NKY': 'SINA'
-  '000852': 'TDX'
-  '03175.HK': 'TDX'
-  '930875.CSI': 'TDX'
-  'UGL': 'IB'
-  'HSMC': 'IB'
-  '.SPACEVCP': 'SINA'
-  'VGT': 'IB'
-  '399363': 'TDX'
-  '399987': 'TDX'
-  '00992': 'FUTU'
-  '399809': 'TDX'
-  'DAX': 'IB'
-  '930713': 'TDX'
-  'CRUD.L': 'TDX'
-  'H11136.CSI': 'TDX'
-  'ARKX': 'IB'
-  '.SP500-45': 'SINA'
-  '399998': 'TDX'
-  'DBO': 'IB'
-  '399300': 'TDX'
-  'SIVR': 'IB'
-  'H11136': 'TDX'
-  'IAUM': 'IB'
-  '930875': 'TDX'
-  'CSI_H11136': 'TDX'
-  'XBI': 'IB'
-  '950090': 'TDX'
-  '930720': 'TDX'
-  'CSGLDC': 'IB'
-  'ZGLD': 'IB'
-  'AGG': 'IB'
-  'BAR': 'IB'
-  '399441': 'TDX'
-  'HKBK': 'IB'
-  'N225': 'SINA'
-  'HSCCE': 'IB'
-  'BRNB.L': 'TDX'
-  'H30094': 'TDX'
-
+  SPY: IB
+  QQQ: IB
+  IWM: IB
+  DIA: IB
+  XLK: IB
+  XLF: IB
+  XLE: IB
+  XLV: IB
+  XLI: IB
+  XLP: IB
+  XLY: IB
+  XLU: IB
+  XLRE: IB
+  XLB: IB
+  SOXX: IB
+  SMH: IB
+  ARKK: IB
+  ARKG: IB
+  ARKQ: IB
+  AIQ: IB
+  BOTZ: IB
+  FINX: IB
+  GLD: IB
+  SLV: IB
+  IAU: IB
+  GDX: IB
+  GDXJ: IB
+  USO: IB
+  XOP: IB
+  OIL: IB
+  BNO: IB
+  CPER: IB
+  DBC: IB
+  PDBC: IB
+  EWA: IB
+  EWC: IB
+  EWJ: IB
+  EWZ: IB
+  EWY: IB
+  EWH: IB
+  EWI: IB
+  EWG: IB
+  EWU: IB
+  FXI: IB
+  MCHI: IB
+  KWEB: IB
+  INDA: IB
+  VIX: IB
+  '510050': TDX
+  '510300': TDX
+  '510500': TDX
+  '159919': TDX
+  '510100': TDX
+  '510310': TDX
+  '515000': TDX
+  '515880': TDX
+  '516160': TDX
+  '516150': TDX
+  '515790': TDX
+  '516110': TDX
+  '516180': TDX
+  '516400': TDX
+  '516580': TDX
+  '516950': TDX
+  '159985': TDX
+  '159560': TDX
+  '127001': TDX
+  '127003': TDX
+  '513100': TDX
+  '513500': TDX
+  '510900': TDX
+  '159915': TDX
+  '00700': FUTU
+  09988: FUTU
+  01810: FUTU
+  09618: FUTU
+  00941: FUTU
+  01398: FUTU
+  02318: FUTU
+  00883: FUTU
+  TSM: FUTU
+  NVDA: FUTU
+  SNDK: FUTU
+  MU: FUTU
+  GOOGL: FUTU
+  AVGO: FUTU
+  ASML: FUTU
+  AAPL: FUTU
+  MSFT: FUTU
+  AMZN: FUTU
+  META: FUTU
+  TSLA: FUTU
+  CU: TDX
+  AL: TDX
+  ZN: TDX
+  PB: TDX
+  NI: TDX
+  AU: TDX
+  AG: TDX
+  SI: TDX
+  RB: TDX
+  HC: TDX
+  I: TDX
+  J: TDX
+  JM: TDX
+  PP: TDX
+  EG: TDX
+  L: TDX
+  V: TDX
+  D: TDX
+  B: TDX
+  Y: TDX
+  C: TDX
+  CS: TDX
+  TA: TDX
+  MA: TDX
+  CF: TDX
+  SR: TDX
+  OI: TDX
+  FG: TDX
+  SA: TDX
+  SC: TDX
+  RU: TDX
+  NR: TDX
+  PG: TDX
+  IF: TDX
+  IC: TDX
+  IH: TDX
+  IM: TDX
+  MGC: SINA
+  MCL: SINA
+  MES: SINA
+  MNQ: SINA
+  NK: SINA
+  NQ: SINA
+  .INX: SINA
+  .NDX: SINA
+  .DJI: SINA
+  .IXIC: SINA
+  .HSI: SINA
+  HSI: SINA
+  HSTECH: SINA
+  HSCEI: SINA
+  CES300.HI: SINA
+  .SSEC: SINA
+  .SZSC: SINA
+  .CSI300: SINA
+  .SH000300: SINA
+  000905: TENCENT
+  '000300': TENCENT
+  '000001': TENCENT
+  '399001': TENCENT
+  '399005': TENCENT
+  '399006': TENCENT
+  '399330': TENCENT
+  HSCI: SINA
+  HSSI: SINA
+  HSMI: SINA
+  HSCCI: SINA
+  HSSCNE: SINA
+  '869': SINA
+  '930914': SINA
+  '930917': SINA
+  ^USO-EU: WOODY
+  ^USO-JP: WOODY
+  ^USO-HK: WOODY
+  ^GLD-EU: WOODY
+  ^GLD-JP: WOODY
+  ^GLD-HK: WOODY
+  ^INDA-EU: WOODY
+  ^INDA-HK: WOODY
+  ^INDA-JP: WOODY
+  AUUSI.SW: TDX
+  03690: FUTU
+  '399417': TDX
+  000979: TDX
+  01888: FUTU
+  1699.T: TDX
+  930720.CSI: TDX
+  000961: TDX
+  '399807': TDX
+  '399707': TDX
+  1671.T: TDX
+  '399803': TDX
+  .SPHCMSHP: SINA
+  '399997': TDX
+  HKMES: IB
+  SGOL: IB
+  GC: IB
+  CES300: TDX
+  AAAU: IB
+  000903: TDX
+  000922: TDX
+  '399989': TDX
+  H30094.CSI: TDX
+  '399986': TDX
+  000869: TDX
+  HKHSCI: IB
+  GLDM: IB
+  950090.CSI: TDX
+  HKTOP: IB
+  '930997': TDX
+  00148: FUTU
+  AMD: IB
+  BRNT.L: TDX
+  VNQ: IB
+  CL: IB
+  '399975': TDX
+  RSPH: IB
+  NKY: SINA
+  000852: TDX
+  03175.HK: TDX
+  930875.CSI: TDX
+  UGL: IB
+  HSMC: IB
+  .SPACEVCP: SINA
+  VGT: IB
+  '399363': TDX
+  '399987': TDX
+  00992: FUTU
+  '399809': TDX
+  DAX: IB
+  '930713': TDX
+  CRUD.L: TDX
+  H11136.CSI: TDX
+  ARKX: IB
+  .SP500-45: SINA
+  '399998': TDX
+  DBO: IB
+  '399300': TDX
+  SIVR: IB
+  H11136: TDX
+  IAUM: IB
+  '930875': TDX
+  CSI_H11136: TDX
+  XBI: IB
+  '950090': TDX
+  '930720': TDX
+  CSGLDC: IB
+  ZGLD: IB
+  AGG: IB
+  BAR: IB
+  '399441': TDX
+  HKBK: IB
+  N225: SINA
+  HSCCE: IB
+  BRNB.L: TDX
+  H30094: TDX
   '501018': TDX
   '160723': TDX
   '161129': TDX
@@ -3403,6 +3402,17 @@ symbol_sources:
   '513880': TDX
   '501300': TDX
   AG0: SINA
-ib_core_symbols: ['XOP', 'GLD', 'USO', 'SLV', 'INDA', 'QQQ', 'SPY']
-
-realtime_source_priority: [tdx, guojin, galaxy, tencent, sina]  # [AI-2026-07-29] 收编：实时行情源优先级默认值（单一真相源）
+ib_core_symbols:
+- XOP
+- GLD
+- USO
+- SLV
+- INDA
+- QQQ
+- SPY
+realtime_source_priority:
+- tdx
+- guojin
+- galaxy
+- tencent
+- sina

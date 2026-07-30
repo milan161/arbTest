@@ -22,7 +22,7 @@ arbcore/config/lof_config.yaml
 
 绝对路径：`D:\Study\arbTest\arbcore\config\lof_config.yaml`
 
-> 💡 跟它同目录的还有 `fund_categories.json`（基金分类）、`symbol_source_map.py`（数据源映射），它们是一家人。
+> 💡 跟它同目录的还有 `fund_categories.json`（基金分类）、`source_routing.py`（符号级数据源路由，从 `lof_config.yaml` 的 `symbol_sources` 读取），它们是一家人。
 
 ---
 
@@ -212,7 +212,7 @@ A：最常见原因是 YAML 格式不对（缩进错误）。检查报错信息�
 | 文件 | 说明 |
 |------|------|
 | `arbcore/config/fund_categories.json` | ⚠️ 历史遗留文件，已废弃。前端 TAB 现由 `GET /api/config/categories` 动态读取数据库分类生成，不再需要此映射文件 |
-| `arbcore/config/symbol_source_map.py` | 数据源（IB/富途/通达信）映射规则 |
+| `arbcore/config/source_routing.py` | 符号级数据源路由（IB/富途/通达信等），从 `lof_config.yaml` 的 `symbol_sources` 读取；原 `symbol_source_map.py` 已收编删除 |
 | `arbcore/scripts/daily_updater.py` | 每日数据同步脚本，会读写本文件 |
 | `docs/003_基金分类与估值体系权威指南.md` | 估值算法详解 |
 | `docs/005_前后端服务与组件架构.md` | 后端 config_manager_service 及系统架构说明 |

@@ -1,0 +1,35 @@
+<svg viewBox="0 0 680 620" width="100%" role="img">
+  <title>微信小程序化目标架构</title>
+  <desc>现有估值核心与数据采集100%复用，仅需前端换小程序、后端上云、数据存云库</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <text class="th" x="40" y="34" font-family="sans-serif" font-size="14" font-weight="500" fill="#26215C">微信小程序化目标架构（估值核心与采集 100% 复用）</text>
+  <rect x="40" y="52" width="600" height="548" rx="20" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text class="ts" x="56" y="74" font-family="sans-serif" font-size="12" fill="#5F5E5A">arbTest 小程序版</text>
+
+  <rect x="60" y="88" width="560" height="96" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text class="th" x="80" y="112" font-family="sans-serif" font-size="14" font-weight="500" fill="#042C53">展示层 · 微信小程序前端 (WXML/WXSS/JS)</text>
+  <text class="ts" x="80" y="134" font-family="sans-serif" font-size="12" fill="#0C447C">基金列表 · 详情 · 历史记录 · 溢价趋势 · 自选 / 预警</text>
+  <text class="ts" x="80" y="156" font-family="sans-serif" font-size="12" fill="#0C447C">需重写（替代现有 Vue 浏览器端，工作量中等）</text>
+
+  <rect x="60" y="204" width="560" height="160" rx="12" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+  <text class="th" x="80" y="228" font-family="sans-serif" font-size="14" font-weight="500" fill="#173404">后端层 · 云服务器 (腾讯云) Flask 估值 API</text>
+  <text class="ts" x="80" y="250" font-family="sans-serif" font-size="12" fill="#27500A">定时任务：每日净值补采 + 实时价拉取（替代本地调度）</text>
+  <rect x="80" y="264" width="520" height="86" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text class="th" x="100" y="288" font-family="sans-serif" font-size="14" font-weight="500" fill="#26215C">100% 复用（无需重写）</text>
+  <text class="ts" x="100" y="310" font-family="sans-serif" font-size="12" fill="#3C3489">basket_valuation 统一估值核心 · valuation_data_engine 数据引擎</text>
+  <text class="ts" x="100" y="332" font-family="sans-serif" font-size="12" fill="#3C3489">lof_config.yaml 基金分类 · woody/IB/新浪/腾讯 采集层</text>
+
+  <rect x="60" y="384" width="560" height="116" rx="12" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="th" x="80" y="408" font-family="sans-serif" font-size="14" font-weight="500" fill="#412402">数据层 · 云数据库 + 外部数据源</text>
+  <text class="ts" x="80" y="430" font-family="sans-serif" font-size="12" fill="#633806">云数据库 MySQL/PostgreSQL 替代本地 SQLite（结构可直接迁移）</text>
+  <text class="ts" x="80" y="452" font-family="sans-serif" font-size="12" fill="#633806">数据源：Woody API · IB · 新浪 · 腾讯K线（与现有一致）</text>
+  <text class="ts" x="80" y="474" font-family="sans-serif" font-size="12" fill="#633806">实时价经服务端定时拉取后由 API 推给小程序</text>
+
+  <text class="ts" x="56" y="528" font-family="sans-serif" font-size="12" fill="#444441">微信要求：HTTPS + ICP备案域名 + 小程序账号认证（300元/年；个人号金融内容受限，建议企业号）</text>
+  <text class="ts" x="56" y="552" font-family="sans-serif" font-size="12" fill="#444441">交易仍走本地 QMT，小程序只做展示与预警，不触碰下单</text>
+  <text class="ts" x="56" y="580" font-family="sans-serif" font-size="12" fill="#444441">投入：云服务器 + 域名备案（约 1-2 周）+ 小程序前端重写（约 2-3 周），后端几乎零成本</text>
+</svg>
