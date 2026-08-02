@@ -1,3 +1,4 @@
+import os
 import logging
 import re
 import time
@@ -25,19 +26,25 @@ class MarketDataService:
         
         # [FIX] 初始化 IB Reader（用于美股ETF实时行情）
         self.ib_reader = None
-        try:
-            # [V10.0] IBReader 启动时不自动连接，用户点击页面"IB"按钮才重连
-            self.ib_reader = IBReader(db_manager=db_manager)
-            logger.info("IB Reader 已初始化，待用户手动连接")
-        except Exception as e:
-            logger.warning(f"IB Reader 初始化失败: {e}")
-            self.ib_reader = None
+        # [AI-2026-08-02] 看板模式不连 IB（美股走 OpenD 内网），直接置 None 省资源且明确无 IB 源
+        if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1':
+            logger.info("[DASHBOARD_MODE] IB Reader 已禁用（看板美股走 OpenD）")
+        else:
+            try:
+                # [V10.0] IBReader 启动时不自动连接，用户点击页面"IB"按钮才重连
+                self.ib_reader = IBReader(db_manager=db_manager)
+                logger.info("IB Reader 已初始化，待用户手动连接")
+            except Exception as e:
+                logger.warning(f"IB Reader 初始化失败: {e}")
+                self.ib_reader = None
         
         # [NEW] 初始化富途 Reader（IB 的备用数据源）
         self.futu_reader = None
         try:
             # [V10.0] FutuReader 启动时不自动连接，用户点击页面"富途"按钮才重连
-            self.futu_reader = FutuReader()
+            # [AI-2026-08-02] 云端看板模式：富途 OpenD 地址经 FUTU_HOST 环境变量覆盖（默认本地 127.0.0.1，ARM 设 10.0.0.83 走内网）
+            futu_host = os.environ.get('FUTU_HOST', '127.0.0.1')
+            self.futu_reader = FutuReader(host=futu_host)
             logger.info("富途 Reader 已初始化，待用户手动连接")
         except Exception as e:
             logger.warning(f"富途 Reader 初始化失败: {e}")

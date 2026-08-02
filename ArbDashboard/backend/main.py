@@ -66,6 +66,9 @@ logger = logging.getLogger("ArbNext")
 # 强制设为 False，防止 opencode cli 等占用 5000 端口导致误判为 Slave 只读模式
 lof_is_running = False
 
+# [AI-2026-08-02] 云端看板模式开关：ARM 部署瘦身看板时设 ARB_DASHBOARD_MODE=1，禁用下单相关私有插件，纯展示
+DASHBOARD_MODE = os.environ.get('ARB_DASHBOARD_MODE', '0') == '1'
+
 # [V4.4] 强力补丁：全局唯一 TQ 抢占与锁定
 # [V10.0] 启动时不自动连接通达信，跳过 TQ 全局初始化（用户点击"通达信"按钮时才需要）
 # 用户手动重连通达信时，TdxRealtimeFetcher.connect() 会自行完成 TQ 初始化
@@ -173,7 +176,7 @@ def _print_data_source_banners():
 # 2. Initialize Services with DB instance
 config_service = ConfigService(db)
 # [V4.5 紧急隔离重构] 采用主从架构动态判断交易服务
-if lof_is_running:
+if lof_is_running or DASHBOARD_MODE:  # [AI-2026-08-02] 看板模式也禁用交易服务
     trading_service = None
     logger.warning("[主从架构] 已禁用交易服务(TradingService)，以避免与运行中的主程序冲突。")
 else:
@@ -253,18 +256,22 @@ except (ImportError, NameError) as e:
 
 try:
     from private.lazy_trader import lazy_trader_instance
-    # 注入实盘驱动
-    ib_reader = getattr(market_data_service, 'ib_reader', None)
-    galaxy_qmt = None
-    guojin_qmt = None
-    if getattr(market_data_service, 'realtime_manager', None):
-        rt = market_data_service.realtime_manager
-        galaxy_qmt = rt.active_fetchers.get('galaxy')
-        guojin_qmt = rt.active_fetchers.get('guojin')
-    lazy_trader_instance.inject_drivers(ib_reader=ib_reader, galaxy_qmt=galaxy_qmt, guojin_qmt=guojin_qmt)
-    # [AI-2026-07-15] 注入自动开仓所需服务
-    lazy_trader_instance.inject_services(fund_service=fund_service, trading_service=trading_service)
-    logger.info("✅ Lazy Trader plugin loaded.")
+    if DASHBOARD_MODE:
+        # [AI-2026-08-02] 看板模式：仅加载不注入任何实盘驱动，纯展示（下单接口因无 driver 安全失败）
+        logger.info("[DASHBOARD_MODE] Lazy Trader 仅加载不注入驱动（看板纯展示）")
+    else:
+        # 注入实盘驱动
+        ib_reader = getattr(market_data_service, 'ib_reader', None)
+        galaxy_qmt = None
+        guojin_qmt = None
+        if getattr(market_data_service, 'realtime_manager', None):
+            rt = market_data_service.realtime_manager
+            galaxy_qmt = rt.active_fetchers.get('galaxy')
+            guojin_qmt = rt.active_fetchers.get('guojin')
+        lazy_trader_instance.inject_drivers(ib_reader=ib_reader, galaxy_qmt=galaxy_qmt, guojin_qmt=guojin_qmt)
+        # [AI-2026-07-15] 注入自动开仓所需服务
+        lazy_trader_instance.inject_services(fund_service=fund_service, trading_service=trading_service)
+        logger.info("✅ Lazy Trader plugin loaded.")
 except (ImportError, NameError) as e:
     lazy_trader_instance = None
     logger.info(f"Lazy Trader plugin not found: {e}")
@@ -278,38 +285,53 @@ except (ImportError, NameError) as e:
     logger.info(f"Lazy Simulator not found: {e}")
 
 # [AI-2026-07-01] 导入 DB 驱动规则引擎（LazyMode 自动化规则）
-try:
-    from private.rule_engine import rule_engine
-    # 注入依赖
-    rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, trading_service=trading_service, db_path=root_db_path)
-    logger.info("✅ RuleEngine (DB驱动) loaded.")
-except (ImportError, NameError) as e:
+if DASHBOARD_MODE:
+    # [AI-2026-08-02] 看板模式：不加载规则引擎（禁用真实下单）
     rule_engine = None
-    logger.info(f"RuleEngine not found: {e}")
+    logger.info("[DASHBOARD_MODE] RuleEngine 已禁用（看板纯展示）")
+else:
+    try:
+        from private.rule_engine import rule_engine
+        # 注入依赖
+        rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, trading_service=trading_service, db_path=root_db_path)
+        logger.info("✅ RuleEngine (DB驱动) loaded.")
+    except (ImportError, NameError) as e:
+        rule_engine = None
+        logger.info(f"RuleEngine not found: {e}")
 
 # [AI-2026-07-17] SmartOpenMonitor（智能开仓/平仓监控器）
-try:
-    from private.smart_open_monitor import start_monitor as _smart_start, stop_monitor as _smart_stop, get_monitor_status as _smart_status, update_monitor_target as _smart_update_target
-    # 注入依赖的全局实例
-    _smart_mds = market_data_service
-    _smart_fs = fund_service
-    _smart_ts = trading_service
-    _smart_lt = lazy_trader_instance
-    logger.info("✅ SmartOpenMonitor loaded.")
-except (ImportError, NameError) as e:
-    _smart_start = _smart_stop = _smart_status = None
-    logger.info(f"SmartOpenMonitor not loaded: {e}")
+if DASHBOARD_MODE:
+    # [AI-2026-08-02] 看板模式：不加载 SmartMonitor（禁用开/平仓监控下单）
+    _smart_start = _smart_stop = _smart_status = _smart_update_target = None
+    logger.info("[DASHBOARD_MODE] SmartOpenMonitor 已禁用（看板纯展示）")
+else:
+    try:
+        from private.smart_open_monitor import start_monitor as _smart_start, stop_monitor as _smart_stop, get_monitor_status as _smart_status, update_monitor_target as _smart_update_target
+        # 注入依赖的全局实例
+        _smart_mds = market_data_service
+        _smart_fs = fund_service
+        _smart_ts = trading_service
+        _smart_lt = lazy_trader_instance
+        logger.info("✅ SmartOpenMonitor loaded.")
+    except (ImportError, NameError) as e:
+        _smart_start = _smart_stop = _smart_status = None
+        logger.info(f"SmartOpenMonitor not loaded: {e}")
 
-try:
-    from services.signal_detector import signal_detector
-    signal_detector.inject(
-        rule_engine=auto_trade_runner.engine,
-        fund_service=fund_service,
-    )
-    logger.info("✅ SignalDetector loaded.")
-except (ImportError, NameError) as e:
+if DASHBOARD_MODE:
+    # [AI-2026-08-02] 看板模式：不加载 SignalDetector（避免与下单引擎耦合）
     signal_detector = None
-    logger.info(f"SignalDetector not loaded: {e}")
+    logger.info("[DASHBOARD_MODE] SignalDetector 已禁用（看板纯展示）")
+else:
+    try:
+        from services.signal_detector import signal_detector
+        signal_detector.inject(
+            rule_engine=auto_trade_runner.engine,
+            fund_service=fund_service,
+        )
+        logger.info("✅ SignalDetector loaded.")
+    except (ImportError, NameError) as e:
+        signal_detector = None
+        logger.info(f"SignalDetector not loaded: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
