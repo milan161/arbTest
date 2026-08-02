@@ -16,6 +16,8 @@ import yaml
 from arbcore.calculators.valuation_data_engine import resolve_method
 # [AI-2026-07-27] 统一估值核心（估值引擎+数据引擎分离）：QDII日本实时复用篮子公式，NK期货价作单组件
 from arbcore.calculators.unified_valuation import basket_valuation
+# [2026-07-31] 收盘后冻结实时估值（15:00 快照覆盖 live 值）
+from services.realtime_freeze import apply_freeze_to_dashboard, update_rt_cache
 
 # [AI-2026-07-23] 期货结算价缓存（30秒 TTL），避免前端轮询刷屏新浪
 _FUTURES_CACHE_TTL = 30
@@ -1762,6 +1764,17 @@ class FundService:
                         fund_dict[k] = None
 
                 result.append(fund_dict)
+
+            # [2026-07-31] ① 盘中持续缓存最后有效估值 → ② 收盘后冻结/回退覆盖 live 值并标记 rt_frozen
+            try:
+                update_rt_cache(result)
+            except Exception as e:
+                logger.warning(f"[FREEZE] 更新估值缓存失败: {e}")
+            try:
+                apply_freeze_to_dashboard(result)
+            except Exception as e:
+                logger.error(f"[FREEZE] 应用冻结值失败: {e}")
+
             logger.debug(f"Dashboard数据生成完成，共 {len(result)} 只基金")
             _dashboard_cache.set(cache_key, result)
             return result

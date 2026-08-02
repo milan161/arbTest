@@ -335,10 +335,14 @@ const allColumns: DataTableColumns<any> = [
     className: 'col-rt-val',
     render(row: any) {
       const val = row.rt_val && row.rt_val > 0 ? row.rt_val.toFixed(4) : '-'
-      return h('span', { 
-        class: 'num-cell strong clickable-cell',
-        onClick: () => router.push({ path: '/analysis', query: { code: row.fund_code, name: row.fund_name } })
-      }, val)
+      const onClick = () => router.push({ path: '/analysis', query: { code: row.fund_code, name: row.fund_name } })
+      if (row.rt_frozen) {
+        return h('span', { class: 'num-cell strong clickable-cell frozen-cell', onClick }, [
+          val,
+          h('span', { class: 'freeze-badge', title: row.rt_frozen_note || '收盘冻结估值' }, '冻')
+        ])
+      }
+      return h('span', { class: 'num-cell strong clickable-cell', onClick }, val)
     }
   },
   {
@@ -346,7 +350,9 @@ const allColumns: DataTableColumns<any> = [
     render(row: any) {
       if (!row.rt_val || !row.price) return h('span', { class: 'num-cell muted' }, '-')
       const p = (row.price / row.rt_val - 1) * 100
-      return h('span', { class: 'num-cell strong compact', style: { color: priceColor(p) } }, formatPremium(p))
+      const children = [formatPremium(p)]
+      if (row.rt_frozen) children.push(h('span', { class: 'freeze-badge sm', title: row.rt_frozen_note || '收盘冻结估值' }, '冻'))
+      return h('span', { class: 'num-cell strong compact', style: { color: priceColor(p) } }, children)
     }
   },
   {
@@ -878,6 +884,21 @@ const tableScrollX = computed(() => {
 .date-cell, .index-cell { font-size: 11px; color: #64748b; }
 .clickable-cell { cursor: pointer; text-decoration: underline; color: #2563eb !important; }
 .clickable-cell:hover { color: #1d4ed8 !important; }
+/* [2026-07-31] 收盘冻结估值标签 */
+.frozen-cell { display: inline-flex; align-items: center; gap: 2px; }
+.freeze-badge {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 3px;
+  font-size: 9px;
+  line-height: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: #0ea5e9;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.freeze-badge.sm { font-size: 8px; padding: 0 2px; line-height: 11px; }
 .col-title-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px 0; width: 100%; }
 .bg-blue-light { background-color: #dbeafe; }
 .bg-orange-light { background-color: #ffedd5; }

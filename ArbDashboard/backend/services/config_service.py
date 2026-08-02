@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,4 +58,16 @@ class ConfigService:
         project_root = os.path.abspath(os.path.join(backend_dir, "..", ".."))
         cms = ConfigManagerService(project_root)
         return cms.load_config()
+
+    def get_fund_config(self, code: str) -> Optional[Dict[str, Any]]:
+        """获取单只基金的 YAML 配置（委托 ConfigManagerService）
+
+        供 fund_service.get_valuation_meta 调用，按 code 从 lof_config.yaml 查单只基金。
+        """
+        from .config_manager_service import ConfigManagerService
+        import os
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        project_root = os.path.abspath(os.path.join(backend_dir, "..", ".."))
+        cms = ConfigManagerService(project_root)
+        return cms.get_fund_config(code)
 

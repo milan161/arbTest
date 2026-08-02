@@ -17,6 +17,9 @@ export interface FundItem {
   static_premium: number
   rt_val: number | null
   rt_premium: number | null
+  rt_frozen?: boolean
+  rt_frozen_note?: string
+  rt_frozen?: boolean
   volume: number
   shares: number
   shares_added: number

@@ -493,11 +493,82 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(nav_update_scheduler())
         logger.info("⏰ [自动净值更新] 定时器已注册 (18:00 / 19:30 / 21:00)")
 
+        # 7.5 [2026-07-31] 收盘后数据流水线定时：15:35 自动跑 daily-close → export → upload
+        # 取代原 Windows 计划任务（目录改名后已失效），改为后端内部调度，零外部组件。依赖后端常驻。
+        # 调一个封装脚本顺序执行三步（避免 Popen 并发竞态）；_popen_script_once 自带防重复运行保护。
+        _daily_close_done_date = set()
+
+        async def daily_close_scheduler():
+            while True:
+                await asyncio.sleep(120)
+                now = datetime.now()
+                if now.weekday() in (5, 6):
+                    _daily_close_done_date.clear()
+                    continue
+                today = now.strftime("%Y-%m-%d")
+                # 15:35 触发；若后端盘中才启动且已过 15:35，则当日补跑一次（best-effort）
+                if today not in _daily_close_done_date and now.strftime("%H:%M") >= "15:35":
+                    _daily_close_done_date.add(today)
+                    logger.info("⏰ [收盘后流水线] 自动触发 15:35 daily-close 更新...")
+                    system_status.add_milestone("INFO", "⏰ 15:35 收盘后数据更新")
+                    sp = os.path.normpath(os.path.join(project_root, "deploy", "H5web", "daily_close_pipeline.py"))
+                    pe = _find_python()
+                    if pe and os.path.exists(sp):
+                        if _popen_script_once([pe, sp], project_root, "daily_close_pipeline.py"):
+                            logger.info("✅ [收盘后流水线] daily_close_pipeline 已启动")
+                        else:
+                            logger.warning("⚠️ [收盘后流水线] 启动被拒（可能已在运行）")
+                    else:
+                        logger.warning(f"⚠️ [收盘后流水线] 未找到脚本或Python: {sp}")
+
+        asyncio.create_task(daily_close_scheduler())
+        logger.info("⏰ [收盘后流水线] 定时器已注册 (15:35 自动 daily-close → export → upload)")
+
     except Exception as e:
         logger.error(f"❌ Failed during backend startup: {e}")
         system_status.add_milestone("ERROR", f"系统启动自检异常: {e}")
 
+    # 4.6 [2026-07-31] 实时估值冻结调度器：每日 15:00:05 把当时 rt_val/rt_premium 快照到 database/rt_freeze.json
+    # 主看板收盘后直接显示冻结值 + 「15:00冻结」标签。依赖后端常驻，无需人工。
+    freeze_scheduler = None
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from services.realtime_freeze import snapshot_realtime_freeze, load_realtime_freeze
+        from datetime import datetime as _dt
+
+        freeze_scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
+        freeze_scheduler.add_job(
+            lambda: snapshot_realtime_freeze(fund_service),
+            CronTrigger(day_of_week='mon-fri', hour=15, minute=0, second=5, timezone='Asia/Shanghai'),
+            id='realtime_freeze_daily',
+            replace_existing=True,
+        )
+        freeze_scheduler.start()
+        logger.info("[FREEZE] 实时估值冻结调度器已启动（每日 15:00:05）")
+        system_status.add_milestone("SUCCESS", "实时估值冻结调度器已启动")
+
+        # 启动兜底：若此刻已过 15:00 且今日尚未冻结（如后端盘中才启动），立即补快照一次
+        _now = _dt.now()
+        if _now.hour >= 15:
+            _fz = load_realtime_freeze()
+            if not _fz or _fz.get('date') != _now.strftime('%Y-%m-%d'):
+                snapshot_realtime_freeze(fund_service)
+                logger.info("[FREEZE] 启动兜底：补拍今日冻结快照")
+    except Exception as e:
+        logger.error(f"[FREEZE] 调度器启动失败（冻结功能停用，其余正常）: {e}")
+        system_status.add_milestone("ERROR", f"冻结调度器启动失败: {e}")
+        freeze_scheduler = None
+
     yield
+
+    # [2026-07-31] 关闭冻结调度器，避免后台线程泄漏
+    if freeze_scheduler is not None:
+        try:
+            freeze_scheduler.shutdown(wait=False)
+            logger.info("[FREEZE] 冻结调度器已关闭")
+        except Exception:
+            pass
 
     logger.info("🛠️ Shutting down ArbNext Backend...")
     await dashboard_snapshot_service.stop()
@@ -2564,6 +2635,33 @@ async def get_realtime_quote(code: str):
     if quote:
         return {"status": "ok", "data": quote}
     return JSONResponse(status_code=404, content={"status": "error", "message": "Quote not found"})
+
+
+@app.get("/api/funds/realtime_est")
+async def get_funds_realtime_est():
+    """批量实时估值快照 —— 与主页主面板同源(fund_service.get_unified_dashboard_data)。
+
+    直接复用主面板已经算好的 rt_val / rt_premium，不在 VPS 上重算。
+    供本地 push_rt.py 推送到 VPS / H5 使用。
+    返回: {status, funds: {code: {price, rt_val, rt_premium, category, name}}}
+    """
+    try:
+        data = fund_service.get_unified_dashboard_data()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    out = {}
+    for r in (data or []):
+        code = r.get("fund_code")
+        if not code:
+            continue
+        out[code] = {
+            "price": r.get("price"),
+            "rt_val": r.get("rt_val"),
+            "rt_premium": r.get("rt_premium"),
+            "category": r.get("category"),
+            "name": r.get("fund_name"),
+        }
+    return {"status": "ok", "funds": out}
 
 @app.get("/api/market/historical/nav/{code}")
 async def get_hist_nav(code: str, start_date: str = None):

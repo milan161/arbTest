@@ -558,11 +558,14 @@ class DailyUpdater(BaseApp):
         if new_price is not None and t1_nav is not None and t1_nav > 0:
             premium = round((float(new_price) - t1_nav) / t1_nav * 100, 4)
             
+        # [AI-2026-07-31] 净值日期一并落库：本表约定「行内 nav 即 date 当日净值」
+        # （东财 nav_df 每行自带日期，date_str 就是净值日期；此前只写 nav 不写 nav_date 属遗漏）
         self.db.save_unified_history(
             date_str=date_str, 
             fund_code=fund_code, 
             price=new_price, 
             nav=new_nav, 
+            nav_date=date_str if new_nav is not None else None,
             premium=premium,
             trade_volume=trade_volume
         )
@@ -648,9 +651,10 @@ class DailyUpdater(BaseApp):
 
         for code in all_codes:
             if not code: continue
-            if self.db.is_access_synced_today(today_str, source=f'lof_price_{code}'):
-                continue
-
+            # [FIX 2026-07-31] 移除盘前 mark 导致的"收盘后跳过今天价"问题：
+            # 原先盘前跑写入历史价后会 mark lof_price_*，使收盘后跑被 is_access_synced
+            # 直接 continue 跳过，当天收盘价永远延迟到次日才入库。改为每次都尝试
+            # upsert（幂等无害），今日价是否写入由下方 k_date==today 的时间判断控制。
             tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
             try:
                 # 腾讯日K线：返回 [date, open, close, high, low, volume, ...]
@@ -677,11 +681,18 @@ class DailyUpdater(BaseApp):
                     k_volume = float(it[5]) if len(it) > 5 and it[5] else 0
                     if k_close <= 0:
                         continue
-                    # 今天的数据：仅当确认是收盘后的正式数据才写入
-                    # （盘中K线返回的是当时最新价=快照，不应锁死）
-                    if k_date >= today_str:
-                        # 今天或未来日期：跳过，不打标记，下次调度再试
+                    if k_date > today_str:
+                        # 未来日期：防御性跳过（腾讯 K 线不应返回未来）
                         continue
+                    if k_date == today_str:
+                        # [FIX 2026-07-31] 仅"盘中(15:10 前)"跳过当天快照价；
+                        # 收盘后(>=15:10)应写入当天正式收盘价。
+                        # 原逻辑 k_date >= today_str 一刀切，导致当天收盘价
+                        # 永远延迟到次日才入库（主看板"现价"显示成昨天的）。
+                        _now = datetime.now()
+                        if _now.hour < 15 or (_now.hour == 15 and _now.minute < 10):
+                            continue
+                    # 收盘后 / 历史日期：正常写入官方收盘价
                     self._safe_save_fund_data(date_str=k_date, fund_code=code, price=k_close, trade_volume=k_volume)
                     written += 1
 
@@ -1471,7 +1482,7 @@ class DailyUpdater(BaseApp):
         conn.close()
         self.logger.info(f"✅ [简单估值] 完成，共更新 {total_updated} 条记录")
 
-    def run(self, nav_only=False, refresh_morning=False, static_valuation=False):
+    def run(self, nav_only=False, refresh_morning=False, static_valuation=False, daily_close=False):
         today_str = datetime.now().strftime('%Y-%m-%d')
         now = datetime.now()
 
@@ -1480,6 +1491,15 @@ class DailyUpdater(BaseApp):
             self._step10_calculate_static_valuation()
             self.step11_simple_static_valuation()
             self.logger.info("🎉 [静态估值模式] 静态估值计算完成！")
+            return
+
+        if daily_close:
+            self.logger.info("🚀 [收盘后更新] 仅写当日官方收盘价 + 净值 + 静态估值（公共API，不依赖VPS）...")
+            self._step4_fetch_prices()
+            self.step4_fetch_lof_market()
+            self._step10_calculate_static_valuation()
+            self.step11_simple_static_valuation()
+            self.logger.info("🎉 [收盘后更新] 收盘价/净值/静态估值已更新！")
             return
 
         if refresh_morning:
@@ -1544,6 +1564,7 @@ if __name__ == "__main__":
     parser.add_argument("--nav-only", action="store_true", help="仅更新基金净值 (step4)")
     parser.add_argument("--refresh-morning", action="store_true", help="清除上午标记后重新抓取 Woody/汇率/VPS")
     parser.add_argument("--static-valuation", action="store_true", help="仅计算静态估值 (step10 + step11)")
+    parser.add_argument("--daily-close", action="store_true", help="收盘后专用: 写当日收盘价+净值+静态估值(公共API)")
     args = parser.parse_args()
 
     # 进程互斥锁（跨平台）：用 PID 文件防多实例
@@ -1552,12 +1573,14 @@ if __name__ == "__main__":
     def _is_pid_alive(pid):
         try:
             if os.name == 'nt':
-                result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}'], capture_output=True, text=True, timeout=5)
-                return str(pid) in result.stdout
+                # 中文Windows下tasklist输出GBK，text=True默认utf-8会解码崩溃，故用errors='ignore'
+                result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}'],
+                                       capture_output=True, encoding='gbk', errors='ignore', timeout=5)
+                return str(pid) in (result.stdout or '')
             else:
                 os.kill(pid, 0)
                 return True
-        except (OSError, subprocess.TimeoutExpired):
+        except Exception:
             return False
 
     locked = False
@@ -1582,7 +1605,7 @@ if __name__ == "__main__":
             locked = True
 
     try:
-        DailyUpdater().run(nav_only=args.nav_only, refresh_morning=args.refresh_morning, static_valuation=args.static_valuation)
+        DailyUpdater().run(nav_only=args.nav_only, refresh_morning=args.refresh_morning, static_valuation=args.static_valuation, daily_close=args.daily_close)
     finally:
         if locked:
             try:
