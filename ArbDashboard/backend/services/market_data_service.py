@@ -2,6 +2,7 @@ import os
 import logging
 import re
 import time
+import threading
 from typing import List, Dict, Any, Optional
 from arbcore.fetchers.realtime import RealtimeMarketManager
 from arbcore.fetchers.historical import HistoricalDataManager
@@ -49,6 +50,16 @@ class MarketDataService:
         except Exception as e:
             logger.warning(f"富途 Reader 初始化失败: {e}")
             self.futu_reader = None
+
+        # [AI-2026-08-02] 云端看板模式：无头运行，启动即自动连 OpenD 内网（FUTU_HOST），不依赖人工点按钮
+        if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1' and self.futu_reader is not None:
+            def _auto_connect_futu():
+                try:
+                    self.futu_reader.reconnect()
+                except Exception as e:
+                    logger.warning(f"[DASHBOARD_MODE] 富途 OpenD 自动连接失败: {e}")
+            threading.Thread(target=_auto_connect_futu, daemon=True).start()
+            logger.info("[DASHBOARD_MODE] 已派发富途 OpenD 自动连接任务（后台）")
         
         # [白银] 初始化 DataFetcher（新浪数据源）
         self.data_fetcher = DataFetcher()

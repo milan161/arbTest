@@ -400,6 +400,30 @@ async def lifespan(app: FastAPI):
                 market_data_service.realtime_manager.start()
                 logger.info("实时行情引擎已在后台启动")
                 system_status.add_milestone("SUCCESS", "实时行情引擎已启动")
+
+                # [AI-2026-08-02] 云端看板：无头环境无前端触发订阅，启动即播种全部基金代码，使实时行情流动
+                if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1':
+                    try:
+                        import sqlite3, json
+                        _con = sqlite3.connect(root_db_path)
+                        _lof = [r[0] for r in _con.execute("SELECT fund_code FROM unified_fund_list")]
+                        _us = []
+                        _w = _con.execute("SELECT config_json FROM data_source_config WHERE module='ib_config' AND source_name='whitelist'").fetchone()
+                        if _w:
+                            _us += json.loads(_w[0]).get('symbols', [])
+                        try:
+                            _bw = _con.execute("SELECT DISTINCT symbol FROM fund_basket_weights").fetchall()
+                            _us += [r[0] for r in _bw]
+                        except Exception:
+                            pass
+                        _con.close()
+                        _us = sorted(set(_us))
+                        market_data_service.realtime_manager.subscribe(_lof)
+                        if market_data_service.futu_reader and not getattr(market_data_service.futu_reader, 'disabled', True):
+                            market_data_service.futu_reader.get_prices(_us)
+                        logger.info(f"[DASHBOARD_MODE] 已播种实时订阅: A股{len(_lof)}只, 美股ETF{len(_us)}只")
+                    except Exception as e:
+                        logger.warning(f"[DASHBOARD_MODE] 实时订阅播种失败: {e}")
             except Exception as e:
                 logger.error(f"实时行情引擎启动失败: {e}")
                 system_status.add_milestone("ERROR", f"实时行情引擎启动失败: {e}")
