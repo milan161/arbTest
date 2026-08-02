@@ -3413,6 +3413,6 @@ ib_core_symbols:
 realtime_source_priority:
 - tdx
 - guojin
-- galaxy
 - tencent
+- sina
 - sina

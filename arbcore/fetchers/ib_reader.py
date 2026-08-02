@@ -86,6 +86,13 @@ class IBReader(EWrapper, EClient):
         self.last_connect_time = 0
         # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
 
+        # [AI-2026-08-02] 陈旧数据强制重连看门狗参数（详见 014 文档第九节）
+        self.stale_reconnect_threshold = 300   # 已连接但行情停滞超过此秒数(夜盘)则强制重连
+        self.stale_reconnect_cooldown = 600    # 两次强制重连最小间隔(秒)，防抖动
+        self._last_forced_reconnect = 0
+        self._stale_watchdog_running = False
+        self._stale_watchdog_thread = None
+
     def is_us_night_session(self):
         """判断当前是否为IBKR美股夜盘交易时段 (北京时间)"""
         now = datetime.now()
@@ -199,16 +206,86 @@ class IBReader(EWrapper, EClient):
             self.prev_closes = {sym: 0.0 for sym in self.symbols}
 
     def start_polling(self):
+        # [AI-2026-08-02] 防重入：若轮询线程已在运行则跳过，避免强制重连时新旧线程叠加
+        if self.running and self.polling_thread and self.polling_thread.is_alive():
+            logger.debug("[IB] 轮询线程已在运行，跳过重复启动")
+            return
         if not self.running:
             self.running = True
             self.polling_thread = threading.Thread(target=self._polling_loop, daemon=True)
             self.polling_thread.start()
             print("[IBReader] 启动 IB 后台轮询线程")
+        # [AI-2026-08-02] 陈旧数据看门狗随轮询一同启动（独立线程，避免自 join 死锁）
+        if not self._stale_watchdog_running:
+            self._stale_watchdog_running = True
+            self._stale_watchdog_thread = threading.Thread(target=self._stale_watchdog_loop, daemon=True)
+            self._stale_watchdog_thread.start()
 
     def stop_polling(self):
         self.running = False
         if self.polling_thread:
             self.polling_thread.join(timeout=5)
+        # [AI-2026-08-02] 停止看门狗；若在看门狗线程内调用则不自 join（防死锁）
+        self._stale_watchdog_running = False
+        if self._stale_watchdog_thread and threading.current_thread() is not self._stale_watchdog_thread:
+            self._stale_watchdog_thread.join(timeout=5)
+            self._stale_watchdog_thread = None
+
+    def _stale_watchdog_loop(self):
+        """[AI-2026-08-02] 陈旧数据强制重连看门狗（独立线程，避免与轮询线程相互 join 死锁）
+
+        触发条件（全部满足才动作）：
+          1) self.connected 且 EClient.isConnected() 为真（确实"连着"）
+          2) 当前为美股夜盘时段 is_us_night_session()（此时本应有持续盘口推送）
+          3) self.last_update_time 已停滞超过 stale_reconnect_threshold 秒（"假连接无数据"）
+          4) 距上次强制重连已超过 stale_reconnect_cooldown 秒（防抖动）
+
+        动作：stop_polling() -> disconnect_from_ib() -> reconnect()
+          - 严守 014 文档红线：disconnect_from_ib 内含 sleep(1)(红线7) 与 prices/last_update_time 清空(红线9)；
+            reconnect() 内含 next_order_id=None 重置(红线3) 与 start_polling()(红线4)；重新订阅保持
+            reqMktData(snapshot=False)(红线10) 与全 tickType 保留(红线11)。本函数绝不动 exchange/
+            primaryExchange/order 字段(红线1/2/5)。
+          - 仅当长连接与历史快照兜底双双失败（前端长时间无盘口）才触发，正常行情下永不动。
+          - 即时停用开关：环境变量 ARB_IB_STALE_GUARD=0 可不经改代码关闭本看门狗。
+        """
+        # 即时停用开关：无需改代码即可关闭看门狗
+        if os.environ.get('ARB_IB_STALE_GUARD', '1') == '0':
+            self._stale_watchdog_running = False
+            logger.info("[IB] 陈旧数据看门狗已被环境变量 ARB_IB_STALE_GUARD=0 禁用")
+            return
+        while self._stale_watchdog_running:
+            time.sleep(30)
+            try:
+                if not self.connected or not self.isConnected():
+                    continue
+                if not self.is_us_night_session():
+                    continue
+                if self.last_update_time is None:
+                    continue
+                stale = (datetime.now() - self.last_update_time).total_seconds()
+                if stale < self.stale_reconnect_threshold:
+                    continue
+                now_ts = time.time()
+                if now_ts - self._last_forced_reconnect < self.stale_reconnect_cooldown:
+                    continue
+                self._last_forced_reconnect = now_ts
+                logger.warning(
+                    f"[IB] 陈旧数据看门狗触发：已连接但行情停滞 {stale:.0f}s 无更新"
+                    f"（夜盘时段本应有数据），强制断开重连以自愈"
+                )
+                # 红线6/7/9：先停轮询（本看门狗线程调用，安全 join 轮询线程），再断连
+                self.stop_polling()
+                try:
+                    self.disconnect_from_ib()
+                except Exception as e:
+                    logger.warning(f"[IB] 强制重连-断连异常: {e}")
+                # 红线3/4：重连并重启轮询（新线程）；本看门狗线程不阻塞
+                try:
+                    self.reconnect()
+                except Exception as e:
+                    logger.warning(f"[IB] 强制重连异常: {e}")
+            except Exception as e:
+                logger.warning(f"[IB] 看门狗循环异常: {e}")
 
     def _polling_loop(self):
         while self.running:
