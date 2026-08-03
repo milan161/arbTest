@@ -205,27 +205,31 @@
                      <span>📊 {{ item.symbol }} 实时盘口</span>
                      <span style="font-size: 10px; color: #64748b; font-weight: normal;">({{ item.currency }})</span>
                   </div>
-                  <!-- IB 主源（用于实时估值计算，点击可填入） -->
-                  <div style="display: flex; justify-content: space-between; align-items:center; font-size: 12px;">
-                     <span style="color:#0369a1; font-weight:bold; font-size:11px;">IB(主)</span>
-                     <span style="color:#2e7d32; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) ?? hedgePrice" title="点击填入买一价(IB)">
-                        买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) }}</span>
-                        <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.bid_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid_size) }}</span>
-                     </span>
-                     <span style="color:#d32f2f; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) ?? hedgePrice" title="点击填入卖一价(IB)">
-                        卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) }}</span>
-                        <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.ask_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask_size) }}</span>
-                     </span>
+                  <!-- IB 主源（用于实时估值计算，点击可填入）。标签独占一行，买一/卖一另起一行，避免挤换行 -->
+                  <div style="display: flex; flex-direction: column; gap: 3px;">
+                    <div style="color:#0369a1; font-weight:bold; font-size:11px; white-space:nowrap;">IB（主力）</div>
+                    <div style="display: flex; justify-content: space-between; align-items:center; font-size: 12px;">
+                       <span style="color:#2e7d32; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) ?? hedgePrice" title="点击填入买一价(IB)">
+                          买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) }}</span>
+                          <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.bid_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid_size) }}</span>
+                       </span>
+                       <span style="color:#d32f2f; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) ?? hedgePrice" title="点击填入卖一价(IB)">
+                          卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) }}</span>
+                          <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.ask_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask_size) }}</span>
+                       </span>
+                    </div>
                   </div>
-                  <!-- 富途对比（只读，不参与计算） -->
-                  <div style="display: flex; justify-content: space-between; align-items:center; font-size: 11px; color:#64748b;">
-                     <span style="color:#0891b2; font-weight:bold;">富途(对比)</span>
-                     <span>买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.bid) }}</span>
-                        <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.bid_size) }}</span>
-                     </span>
-                     <span>卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.ask) }}</span>
-                        <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.ask_size) }}</span>
-                     </span>
+                  <!-- 富途对比（只读，不参与计算）。同样标签独占一行 -->
+                  <div style="display: flex; flex-direction: column; gap: 3px;">
+                    <div style="color:#0891b2; font-weight:bold; font-size:11px; white-space:nowrap;">富途（对比）</div>
+                    <div style="display: flex; justify-content: space-between; align-items:center; font-size: 11px; color:#64748b;">
+                       <span>买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.bid) }}</span>
+                          <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.bid_size) }}</span>
+                       </span>
+                       <span>卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.ask) }}</span>
+                          <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.ask_size) }}</span>
+                       </span>
+                    </div>
                   </div>
                </div>
                </template>

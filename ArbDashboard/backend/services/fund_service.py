@@ -1041,6 +1041,209 @@ class FundService:
                 logger.error(f"初始化估值计算器失败: {e}")
         return self._calculator
 
+    def get_realtime_valuation_detail(self, code: str) -> Optional[Dict[str, Any]]:
+        """获取单只基金实时估值明细（供 H5 详情页展示计算依据）。
+
+        [AI-2026-08-03] 目前完整支持「篮子基金」（黄金原油/QDII欧美/白银/混合跨境）路径；
+        其他类别返回基础信息 + 当前可得行情，rt_val 细节逐步补齐。
+        返回字段：
+          fund_code, fund_name, category, nav, nav_date,
+          price, realtime_price, rt_val, rt_premium,
+          position, fx_base, fx_current, hedge, base_date,
+          components[symbol/weight/base_price/current_price/bid/ask/bid_size/ask_size/source],
+          lof_quote{bid/ask/bid_size/ask_size/price/source}
+        """
+        code = str(code or '').strip()
+        if not code:
+            return None
+        conn = self.db._get_conn()
+        try:
+            # 1. 基金基本信息
+            fund_df = pd.read_sql(
+                "SELECT fund_code, fund_name, category, pos_ratio, related_index FROM unified_fund_list WHERE fund_code=?",
+                conn, params=(code,)
+            )
+            if fund_df.empty:
+                return None
+            fund = fund_df.iloc[0].to_dict()
+            category = str(fund.get('category') or '').strip()
+            name = str(fund.get('fund_name') or '').strip()
+
+            # 2. 最新净值(T-1)与历史收盘价（分别取最近有值记录，避免当天 price 已更新但 nav 未公布时 nav 为空）
+            nav_df = pd.read_sql(
+                "SELECT date, nav FROM unified_fund_history WHERE fund_code=? AND nav IS NOT NULL AND nav > 0 ORDER BY date DESC LIMIT 1",
+                conn, params=(code,)
+            )
+            nav = float(nav_df.iloc[0]['nav']) if not nav_df.empty else None
+            nav_date = nav_df.iloc[0]['date'] if not nav_df.empty else None
+            price_df = pd.read_sql(
+                "SELECT date, price FROM unified_fund_history WHERE fund_code=? AND price IS NOT NULL AND price > 0 ORDER BY date DESC LIMIT 1",
+                conn, params=(code,)
+            )
+            close_price = float(price_df.iloc[0]['price']) if not price_df.empty else None
+
+            # 3. LOF 实时盘口（A股）
+            lof_quote = None
+            if self.market_data_service:
+                try:
+                    lof_quote = self.market_data_service.get_realtime_quote(code)
+                except Exception as e:
+                    logger.debug(f"[{code}] 获取LOF实时盘口失败: {e}")
+            realtime_price = None
+            if lof_quote and lof_quote.get('price', 0) > 0:
+                realtime_price = float(lof_quote['price'])
+            price = realtime_price if realtime_price else close_price
+
+            # 4. 当前实时估值
+            rt_val = None
+            rt_premium = None
+
+            # 5. 篮子基金：直接本地计算明细（避免并发 detail 请求反复重算主面板全量）
+            components = []
+            position = None
+            fx_base = None
+            fx_current = None
+            hedge = None
+            base_date = None
+            basket_categories = {'黄金原油', 'QDII欧美', '白银', '混合跨境'}
+            if category in basket_categories:
+                yaml_trade_etf = _YAML_TRADE_ETF.get(code, '')
+                resolved_trade_etf = yaml_trade_etf or _normalize_empty_symbol(fund.get('related_index', ''))
+                fund_cfg = {
+                    "code": code,
+                    "trade_etf": resolved_trade_etf,
+                    "holdings": {"equity_ratio": float(fund.get('pos_ratio') or 0.95) * 100},
+                    "category": category,
+                }
+                # portfolio
+                try:
+                    basket_df = pd.read_sql(
+                        "SELECT underlying_symbol as symbol, weight FROM fund_basket_weights "
+                        "WHERE fund_code=? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)",
+                        conn, params=(code, code)
+                    )
+                    if not basket_df.empty:
+                        fund_cfg["valuation_portfolio"] = basket_df.to_dict('records')
+                    else:
+                        yaml_portfolio = _YAML_VALUATION_PORTFOLIO.get(code) or fund.get('valuation_portfolio') or fund.get('hedging_portfolio')
+                        if yaml_portfolio:
+                            fund_cfg["valuation_portfolio"] = yaml_portfolio
+                except Exception as e:
+                    logger.debug(f"[{code}] 读取 basket weights 失败: {e}")
+
+                if fund_cfg.get('valuation_portfolio'):
+                    # 当前汇率
+                    current_fx = None
+                    try:
+                        _ensure_daily_snapshot(conn)
+                        if category == 'QDII日本':
+                            current_fx = _daily_snapshot.get('jpy_cny_mid')
+                        else:
+                            current_fx = _daily_snapshot.get('usd_cny_mid')
+                        if code in _FUNDS_WITH_SPOT_RATE:
+                            spot_fx = _daily_snapshot.get('usd_cny_spot') or 0
+                            if spot_fx > 0:
+                                current_fx = spot_fx
+                    except Exception as e:
+                        logger.debug(f"[{code}] 取快照汇率失败: {e}")
+
+                    # 当前 ETF 完整盘口
+                    current_quotes = {}
+                    if self.market_data_service and current_fx and current_fx > 0:
+                        portfolio = fund_cfg['valuation_portfolio']
+                        required_bases = set()
+                        for item in portfolio:
+                            raw_sym = item.get('symbol', '')
+                            sym_base = raw_sym.replace('^', '')
+                            for suffix in ['-EU', '-JP', '-HK']:
+                                if sym_base.endswith(suffix):
+                                    sym_base = sym_base[:-len(suffix)]
+                                    break
+                            required_bases.add(sym_base)
+                        for sym_base in required_bases:
+                            try:
+                                q = self.market_data_service.get_realtime_quote(sym_base)
+                                if q and (q.get('bid', 0) > 0 or q.get('price', 0) > 0):
+                                    current_quotes[sym_base] = q
+                            except Exception as e:
+                                logger.debug(f"[{code}] 取 {sym_base} 行情失败: {e}")
+
+                    calculator = self._get_calculator()
+                    if calculator and current_fx and current_fx > 0 and current_quotes:
+                        try:
+                            fund_cfg['current_price'] = price or 0
+                            detail = calculator.calculate_detail(fund_cfg, current_fx, current_quotes)
+                            if detail:
+                                rt_val = detail['rt_val']
+                                rt_premium = detail.get('premium')
+                                components = detail.get('components', [])
+                                position = detail.get('position')
+                                fx_base = detail.get('fx_base')
+                                fx_current = detail.get('fx_current')
+                                hedge = detail.get('hedge')
+                                base_date = detail.get('base_date')
+                                # [AI-2026-08-03] 显示用 hedge 直取 fund_daily_factors（woody 推导的近恒定 H）：
+                                # 仅详情页展示，不参与估值（估值仍走矩阵公式，避免陈旧 H 污染魔法公式）。
+                                # 仅单 ETF（portfolio 单组件）补；多篮子无单一 H，保持 None 显示 '--'。
+                                if hedge is None and len(fund_cfg.get('valuation_portfolio') or []) == 1:
+                                    try:
+                                        _hw = pd.read_sql(
+                                            "SELECT hedge FROM fund_daily_factors "
+                                            "WHERE fund_code=? AND hedge IS NOT NULL AND hedge>0 "
+                                            "ORDER BY date DESC LIMIT 1",
+                                            conn, params=(code,))
+                                        if not _hw.empty:
+                                            hedge = float(_hw.iloc[0]['hedge'])
+                                    except Exception as _e:
+                                        logger.debug(f"[{code}] 回填显示 hedge 失败: {_e}")
+                        except Exception as e:
+                            logger.warning(f"[{code}] calculate_detail 失败: {e}")
+            else:
+                # 非篮子基金：复用主面板已算好的 rt_val / rt_premium
+                try:
+                    dashboard_data = self.get_unified_dashboard_data(watchlist=[code])
+                    if dashboard_data:
+                        row = dashboard_data[0]
+                        rt_val = row.get('rt_val')
+                        rt_premium = row.get('rt_premium')
+                        if row.get('realtime_price'):
+                            realtime_price = float(row['realtime_price'])
+                            price = realtime_price
+                except Exception as e:
+                    logger.debug(f"[{code}] 取主面板实时估值失败: {e}")
+
+            return {
+                'fund_code': code,
+                'fund_name': name,
+                'category': category,
+                'nav': nav,
+                'nav_date': nav_date,
+                'price': price,
+                'realtime_price': realtime_price,
+                'close_price': close_price,
+                'rt_val': rt_val,
+                'rt_premium': rt_premium,
+                'position': position,
+                'fx_base': fx_base,
+                'fx_current': fx_current,
+                'hedge': hedge,
+                'base_date': base_date,
+                'components': components,
+                'lof_quote': {
+                    'bid': lof_quote.get('bid') if lof_quote else None,
+                    'ask': lof_quote.get('ask') if lof_quote else None,
+                    'bid_size': lof_quote.get('bid_size') if lof_quote else None,
+                    'ask_size': lof_quote.get('ask_size') if lof_quote else None,
+                    'price': lof_quote.get('price') if lof_quote else None,
+                    'source': lof_quote.get('source') if lof_quote else None,
+                } if lof_quote else None,
+            }
+        except Exception as e:
+            logger.error(f"[{code}] get_realtime_valuation_detail 异常: {e}")
+            return None
+        finally:
+            conn.close()
+
     def get_unified_dashboard_data(self, watchlist: List[str] = None, category: str = None) -> List[Dict[str, Any]]:
         """
         [V8.1] 性能大修：SQL 级过滤 + 5秒缓存 + 批量历史查询

@@ -44,6 +44,7 @@ class FutuReader:
         self.connect_timeout = connect_timeout
         self.prices = {}  # {symbol: {'bid': ..., 'ask': ..., 'last': ...}}
         self.subscribed_codes = set()
+        self._order_book_subscribed = set()  # [AI-2026-08-03] ORDER_BOOK 订阅跟踪（get_order_book 取真实盘口用）
         self.last_connect_time = 0
         self.last_log_time = 0
         self.connected = False  # [AI-2026-07-15] 实时连接标志（与 IB 一致），reconnect 成功=True，断开=False
@@ -274,7 +275,8 @@ class FutuReader:
             ret, data = self.ctx.get_stock_quote(futu_codes)
             if ret == 0:
                 for _, row in data.iterrows():
-                    code = row['code'].replace('US.', '').replace('HK.', '')
+                    futu_code = row['code']
+                    code = futu_code.replace('US.', '').replace('HK.', '')
                     bid = 0.0
                     ask = 0.0
                     last = 0.0
@@ -286,38 +288,27 @@ class FutuReader:
                         except:
                             return 0.0
 
-                    # 【核心逻辑】优先使用真正的买一价/卖一价
-                    bid_0 = safe_float(row.get('bid_price_0'))
-                    ask_0 = safe_float(row.get('ask_price_0'))
+                    # [AI-2026-08-03] 富途 QUOTE 快照不含 bid/ask 列，必须 ORDER_BOOK + get_order_book 取真实买一卖一。
+                    # _fetch_order_book 返回 (bid, ask, bid_size, ask_size)；取不到则全 0（前端走"等待数据"）。
                     last_0 = safe_float(row.get('last_price'))
-                    overnight_0 = safe_float(row.get('overnight_price'))
-                    pre_0 = safe_float(row.get('pre_price'))
-                    after_0 = safe_float(row.get('after_price'))
-                    
-                    # [V10.13] 打印富途裸数据排查盘口问题
-                    logger.info(f"【富途裸数据】 {code}: bid={bid_0} ask={ask_0} last={last_0} overnight={overnight_0} pre={pre_0} after={after_0}")
-                    
-                    if bid_0 > 0: bid = bid_0
-                    if ask_0 > 0: ask = ask_0
-                    if last_0 > 0: last = last_0
-                    
-                    # [V10.13] 真实盘口修补逻辑
-                    # 规则：有真实 bid/ask 时用真实数据；没有时存 last_price（上游显示价格,"等待数据"）
-                    if bid > 0 or ask > 0:
-                        # 一边有真实盘口，另一边缺失 → 用 last 补齐
-                        if bid > 0 and ask <= 0:
-                            ask = last if last > 0 else bid
-                        elif ask > 0 and bid <= 0:
-                            bid = last if last > 0 else ask
-                        # 两边都有 → 真实价差
-                    # 两边都缺失（bid=0, ask=0）：保留 last 作为价格，bid/ask 为 0
-                    
-                    # 只要有 last 就存，上游决定 bid/ask 的显示
-                    if last > 0:
+                    ob_bid, ob_ask, ob_bid_sz, ob_ask_sz = self._fetch_order_book(futu_code)
+
+                    bid = ob_bid if ob_bid and ob_bid > 0 else 0.0
+                    ask = ob_ask if ob_ask and ob_ask > 0 else 0.0
+                    bid_size = ob_bid_sz if ob_bid_sz and ob_bid_sz > 0 else 0.0
+                    ask_size = ob_ask_sz if ob_ask_sz and ob_ask_sz > 0 else 0.0
+                    last = last_0
+
+                    logger.info(f"【富途盘口】 {code}: bid={bid}(×{bid_size}) ask={ask}(×{ask_size}) last={last}")
+
+                    # 只要有真实盘口或 last 就存，上游决定显示/估值（全 0 视为无数据由门禁处理）
+                    if last > 0 or bid > 0 or ask > 0:
                         self.prices[code] = {
                             'bid': bid,
                             'ask': ask,
-                            'last': last
+                            'last': last,
+                            'bid_size': bid_size,
+                            'ask_size': ask_size,
                         }
                         self.last_data_time = time.time()  # [AI-2026-07-15] 记录成功获取数据的时间戳
                 
@@ -354,6 +345,38 @@ class FutuReader:
             self.ctx = None
             return False, f"富途接口异常: {err_msg}", self.prices
     
+    # [AI-2026-08-03] 富途 QUOTE 快照不含买一卖一，必须 ORDER_BOOK 订阅 + get_order_book 取真实盘口。
+    # 返回 (bid, ask, bid_size, ask_size)，取不到返回 (None, None, 0, 0)。
+    def _fetch_order_book(self, futu_code):
+        if self.ctx is None:
+            return (None, None, 0, 0)
+        try:
+            if futu_code not in self._order_book_subscribed:
+                ret, _ = self.ctx.subscribe([futu_code], [SubType.ORDER_BOOK], session=Session.ALL)
+                if ret == 0:
+                    self._order_book_subscribed.add(futu_code)
+                else:
+                    return (None, None, 0, 0)
+            ret, ob = self.ctx.get_order_book(futu_code)
+            if ret != 0 or not isinstance(ob, dict):
+                return (None, None, 0, 0)
+            bid_list = ob.get('Bid') or []
+            ask_list = ob.get('Ask') or []
+            if not bid_list or not ask_list:
+                return (None, None, 0, 0)
+            b0 = bid_list[0]
+            a0 = ask_list[0]
+            b_price = float(b0[0]) if b0 and len(b0) > 0 else 0.0
+            b_vol = float(b0[1]) if b0 and len(b0) > 1 else 0.0
+            a_price = float(a0[0]) if a0 and len(a0) > 0 else 0.0
+            a_vol = float(a0[1]) if a0 and len(a0) > 1 else 0.0
+            if b_price <= 0 or a_price <= 0:
+                return (None, None, 0, 0)
+            return (b_price, a_price, b_vol, a_vol)
+        except Exception as e:
+            logger.debug(f"[富途] get_order_book {futu_code} 失败: {e}")
+            return (None, None, 0, 0)
+
     def get_price(self, symbol):
         """
         获取单个股票的最新买一价

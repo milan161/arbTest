@@ -51,16 +51,6 @@ class MarketDataService:
             logger.warning(f"富途 Reader 初始化失败: {e}")
             self.futu_reader = None
 
-        # [AI-2026-08-02] 云端看板模式：无头运行，启动即自动连 OpenD 内网（FUTU_HOST），不依赖人工点按钮
-        if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1' and self.futu_reader is not None:
-            def _auto_connect_futu():
-                try:
-                    self.futu_reader.reconnect()
-                except Exception as e:
-                    logger.warning(f"[DASHBOARD_MODE] 富途 OpenD 自动连接失败: {e}")
-            threading.Thread(target=_auto_connect_futu, daemon=True).start()
-            logger.info("[DASHBOARD_MODE] 已派发富途 OpenD 自动连接任务（后台）")
-        
         # [白银] 初始化 DataFetcher（新浪数据源）
         self.data_fetcher = DataFetcher()
         
@@ -71,15 +61,78 @@ class MarketDataService:
         self._source_failures: Dict[str, int] = {}
         # [V10.1] 熔断器冷却：{source_key: tripped_at_timestamp}
         self._source_tripped: Dict[str, float] = {}
+
+        # [AI-2026-08-03] 云端看板模式（ARM 无人值守）：富途必须自动连接且断线自愈。
+        # 原实现只在启动时 reconnect 一次，OpenD 若晚起/重启/掉线就永久 disabled，无人可点按钮 → 看板实时源全废。
+        # 改为常驻守护线程：巡检 disabled/connected，掉线即重连（重连前顺带清富途熔断），失败指数退避。
+        # 必须放在熔断器状态字典初始化之后（守护线程会调用 _circuit_reset）。
+        if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1' and self.futu_reader is not None:
+            threading.Thread(target=self._futu_autoconnect_loop, daemon=True,
+                             name='futu-autoconnect').start()
+            logger.info("[DASHBOARD_MODE] 富途 OpenD 自动连接守护线程已启动（断线自愈）")
         
         # 启动实时引擎（A股数据源）
         # [V4.2] 移至 lifespan 异步启动，避免与 TradingService 冲突
         # self.realtime_manager.start()
 
+    # ── [AI-2026-08-03] 富途 OpenD 自动连接守护（仅 ARB_DASHBOARD_MODE=1 无头看板启用）──
+    FUTU_AUTOCONNECT_OK_INTERVAL = 60    # 连接健康时的巡检间隔（秒）
+    FUTU_AUTOCONNECT_MIN_BACKOFF = 30    # 重连失败首次退避（秒）
+    FUTU_AUTOCONNECT_MAX_BACKOFF = 300   # 重连失败最大退避（秒）
+
+    def _futu_autoconnect_loop(self):
+        """常驻守护：保证无人值守环境下富途 OpenD 始终在线。
+
+        触发重连的两种情况：
+          1) 启动时 OpenD 尚未就绪（reconnect 失败被置 disabled）
+          2) 运行中 OpenD 重启/网络抖动（get_prices 异常把 connected 置 False 或 disabled 置 True）
+        重连前必须先清富途熔断，否则连上了也会被 _circuit_is_tripped 挡住取不到价。
+        """
+        backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
+        while True:
+            try:
+                reader = self.futu_reader
+                if reader is None:
+                    time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
+                    continue
+
+                healthy = (not getattr(reader, 'disabled', True)) and getattr(reader, 'connected', False)
+                if healthy:
+                    backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
+                    time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
+                    continue
+
+                self._circuit_reset('富途')
+                ok, msg = reader.reconnect()
+                if ok:
+                    backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
+                    logger.info(f"[DASHBOARD_MODE] 富途 OpenD 自动连接成功: {msg}")
+                    time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
+                else:
+                    logger.warning(f"[DASHBOARD_MODE] 富途 OpenD 自动连接失败: {msg}；{backoff}s 后重试")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.FUTU_AUTOCONNECT_MAX_BACKOFF)
+            except Exception as e:
+                logger.warning(f"[DASHBOARD_MODE] 富途自动连接守护异常: {e}")
+                time.sleep(self.FUTU_AUTOCONNECT_MAX_BACKOFF)
+
     # ── 熔断器方法 ──
+    # [AI-2026-08-03] 熔断半开：原实现一旦 tripped 就 return None 永不再试，
+    # 也就永远等不到 _circuit_record_success 复位 → 无人值守环境等同永久失明。
+    # 超过冷却时长后自动放行一次（半开），成功则由 _circuit_record_success 彻底恢复。
+    CIRCUIT_HALF_OPEN_SEC = 180
+
     def _circuit_is_tripped(self, source_key: str) -> bool:
-        """检查数据源是否被熔断"""
-        return source_key in self._source_tripped
+        """检查数据源是否被熔断（超过冷却时长自动半开重试）"""
+        tripped_at = self._source_tripped.get(source_key)
+        if tripped_at is None:
+            return False
+        if time.time() - tripped_at >= self.CIRCUIT_HALF_OPEN_SEC:
+            self._source_failures.pop(source_key, None)
+            self._source_tripped.pop(source_key, None)
+            logger.info(f"🟡 [半开] {source_key} 熔断冷却 {self.CIRCUIT_HALF_OPEN_SEC}s 到期，放行重试")
+            return False
+        return True
 
     def _circuit_record_failure(self, source_key: str):
         """记录一次失败，达到阈值则熔断"""

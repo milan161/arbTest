@@ -900,16 +900,16 @@ const tableScrollX = computed(() => {
 .freeze-badge {
   display: inline-block;
   margin-left: 2px;
-  padding: 0 3px;
-  font-size: 9px;
-  line-height: 13px;
-  font-weight: 700;
-  color: #fff;
-  background: #0ea5e9;
-  border-radius: 3px;
+  padding: 0;
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 900;
+  color: #334155;
+  background: transparent;
+  border-radius: 0;
   vertical-align: middle;
 }
-.freeze-badge.sm { font-size: 8px; padding: 0 2px; line-height: 11px; }
+.freeze-badge.sm { font-size: 7px; }
 .col-title-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px 0; width: 100%; }
 .bg-blue-light { background-color: #dbeafe; }
 .bg-orange-light { background-color: #ffedd5; }

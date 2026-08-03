@@ -25,6 +25,10 @@
   >> node --version     # 应显示 v18.x.x 或更高
   >> npm --version      # 应显示 9.x.x 或更高
 
+⚠️ 重要：后端依赖（ibapi 盈透 / futu_api 富途 / apscheduler / xtquant 等）**只装在项目自带的
+   虚拟环境 `ArbDashboard/.venv/` 里**。请务必读完下方【第十节 虚拟环境（.venv）必读】，
+   否则极易出现"IB/富途 绿了但盘口是空的"——那是解释器用错了，不是程序坏了。
+
 -------------------------------------------------------------------------------
 三、 安装与启动
 
@@ -50,17 +54,18 @@
   然后启动后端（8000端口）+ 前端（5173端口），并自动打开浏览器。
 
 【手动启动】
-  1) 安装 Python 依赖：
-     >> cd backend
-     >> pip install -r requirements.txt
+  1) 安装 Python 依赖（务必装进项目虚拟环境，别用裸 pip）：
+     >> cd ArbDashboard
+     >> .venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 
   2) 安装前端依赖：
      >> cd frontend
      >> npm install
 
-  3) 启动后端（端口 8000）：
-     >> cd backend
-     >> python main.py
+  3) 启动后端（端口 8000）——【必须用 .venv 解释器，否则 IB/富途无行情】：
+     >> cd ArbDashboard\backend
+     >> ..\.venv\Scripts\python.exe main.py
+   （嫌麻烦就直接双击 `ArbDashboard\backend\runback.bat`，它会自动释放 8000 端口并用 .venv 启动）
 
   4) 启动前端（端口 5173）：
      >> cd frontend
@@ -177,9 +182,11 @@ ArbDashboard/
      >> npm run dev          # 开发模式（热重载）
      >> npm run build        # 构建生产版本（启动脚本会自动调用此命令）
 
-  2) 重启后端（数据不更新或报错时）：
+  2) 重启后端（数据不更新或报错时）——【必须用 .venv 解释器】：
      >> cd D:\Study\arbTest\ArbDashboard\backend
-     >> python main.py       # 启动后端服务（端口 8000）
+     >> ..\.venv\Scripts\python.exe main.py       # 启动后端服务（端口 8000）
+     （推荐直接双击同目录下的 runback.bat：它会先杀掉残留占用 8000 的旧后端，再用 .venv 启动，
+       一次排除"端口冲突 + 解释器用错"两大坑）
 
   3) 一键重启（推荐）：
      >> 双击 D:\Study\arbTest\ArbDashboard\start_dashboard.bat
@@ -227,5 +234,44 @@ ArbDashboard/
       3. 如果是周末非交易时段，QMT 可能处于休眠状态，部分功能受限
 
 --------------------------------------------------------------------------------
+十、⚠️ 虚拟环境（.venv）必读 —— 90% 的"IB / 富途无行情"都栽在这里
+
+本项目的后端依赖【只】装在项目自带的虚拟环境 `ArbDashboard/.venv/` 里：
+  ibapi（盈透 IB）、futu_api（富途）、apscheduler、xtquant（QMT）等。
+你机器上通常还有"系统 Python 3.11"或"WorkBuddy 内置 Python 3.13"，它们【都没装这些包】。
+
+【致命误区（新手最常犯）】
+直接敲 `python main.py` 时，若调用的是系统 Python，后端能启动、8000 端口也能占，
+但 ibapi / futu_api 根本 import 不到 → IB、富途行情【静默全空】（界面显示"等待数据"）。
+你以为程序坏了，其实只是解释器用错了。
+
+【正确做法：永远用 .venv 的解释器】
+   >> cd D:\Study\arbTest\ArbDashboard\backend
+   >> ..\.venv\Scripts\python.exe main.py
+
+【最省事：用 runback.bat（强烈推荐）】
+   >> 双击 D:\Study\arbTest\ArbDashboard\backend\runback.bat
+   它会：① 先强制释放被占用的 8000 端口（杀掉残留的旧后端）；
+         ② 用 .venv 解释器启动后端。
+   一次性排除"端口被旧进程占用 / 用错解释器"两大最常见坑。
+
+【怎么确认自己用对了】
+   后端启动日志首行若打印类似：
+     [venv 检查] 已使用虚拟环境 D:\Study\arbTest\ArbDashboard\.venv
+   说明用对了。若看到"必须用项目虚拟环境"红字警告，说明在用系统 Python，立即 Ctrl+C 重来。
+   更彻底的确认：主看板 IB / 富途 标签点绿后，等 15–30 秒，盘口（买一/卖一）应出现真实数字。
+
+【装依赖也要装进 .venv】
+   >> cd D:\Study\arbTest\ArbDashboard
+   >> .venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+   不要用裸 `pip install`，那会装进系统环境，.venv 里依然缺包。
+
+【富途盘口特别说明（2026-08-03 已修复）】
+   富途的"连接"标签变绿，只代表 TCP 已连上 OpenD，不代表有行情流出。
+   买一/卖一必须用富途 ORDER_BOOK 接口（`get_order_book`）取，不能用普通 QUOTE 快照
+   （QUOTE 快照里根本没有 bid/ask 列）。该 bug 已修复，富途（对比）栏现在能显示真实盘口。
+
+更完整的排查决策树（含端口冲突、重连热身、看门狗自愈）见：
+  docs/008_夜盘卖空IB和富途的下单调试.md → 第十二节「确保 IB / 富途有行情的操作手册」。
 
 ===============================================================================

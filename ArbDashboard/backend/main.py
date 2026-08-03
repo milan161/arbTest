@@ -7,7 +7,13 @@ import importlib.util
 # ibapi + apscheduler + xtquant + akshare 等全部依赖。用错解释器会导致 IB 行情 / 冻结调度器
 # 静默失效（典型症状：No module named 'apscheduler'、IB 盘口全空）。用关键包是否可导入来判定，
 # 任何非 .venv 解释器都会在此处明确拒绝，从源头杜绝“用错 python”这类反复出现的问题。
+# [AI-2026-08-03] 守卫只针对 Windows 本机开发环境：那里存在多个 python 容易点错。
+# 云端 Linux 看板（ARM，ARB_DASHBOARD_MODE=1）用精简依赖 requirements-arm.txt，本就不装
+# ibapi/apscheduler（看板模式不连 IB、不跑本地调度），解释器由 systemd 固定，无需护栏。
+# 早前漏判平台导致 ARM 服务开机自杀重启 31 次，此处必须先判平台再判依赖。
 def _require_project_venv():
+    if sys.platform != 'win32' or os.environ.get('ARB_DASHBOARD_MODE', '0') == '1':
+        return
     missing = [pkg for pkg in ("ibapi", "apscheduler")
                if importlib.util.find_spec(pkg) is None]
     if missing:
@@ -30,7 +36,7 @@ import pandas as pd
 import logging
 from logging.handlers import RotatingFileHandler
 import uvicorn
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -2802,6 +2808,17 @@ async def get_funds_realtime_est():
             "name": r.get("fund_name"),
         }
     return {"status": "ok", "funds": out}
+
+@app.get("/api/funds/realtime_detail")
+async def get_fund_realtime_detail(code: str = Query(..., description="基金代码")):
+    """单只基金实时估值明细（H5 详情页计算依据）。"""
+    try:
+        detail = fund_service.get_realtime_valuation_detail(code)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    if not detail:
+        return JSONResponse(status_code=404, content={"status": "error", "message": f"未找到 {code} 的实时估值明细"})
+    return {"status": "ok", "data": detail}
 
 @app.get("/api/market/historical/nav/{code}")
 async def get_hist_nav(code: str, start_date: str = None):

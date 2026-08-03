@@ -192,3 +192,82 @@ class DynamicValuationCalculator:
                 'premium': (fund_config.get('current_price', 0) / rt_val - 1) if fund_config.get('current_price', 0) > 0 else None
             }
         return None
+
+    def calculate_detail(self, fund_config: Dict, current_fx: float,
+                         current_quotes: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """实时估值明细推演（供 H5 详情页展示计算依据）。
+
+        [AI-2026-08-03] 与 calculate() 数学等价，但额外返回每个组件的盘口/来源/权重/基准价，
+        以及仓位、汇率、hedge、基准净值等中间变量，方便用户验证 rt_val 是怎么算出来的。
+
+        current_quotes: {基础代码: {'bid','ask','bid_size','ask_size','price','source',...}}，
+                        由 fund_service 通过 market_data_service.get_realtime_quote() 获取。
+        返回: {
+            'rt_val': float, 'base_date': str, 'premium': float|None,
+            'base_nav': float, 'position': float, 'fx_base': float, 'fx_current': float,
+            'hedge': float|None,
+            'components': [
+                {'symbol': str, 'weight': float, 'base_price': float, 'current_price': float,
+                 'bid': float, 'ask': float, 'bid_size': float, 'ask_size': float, 'source': str}
+            ]
+        } 或 None
+        """
+        code = str(fund_config.get('code', ''))
+        base_data = self.get_base_data(code)
+        if not base_data:
+            return None
+
+        # 提取实时价（优先 bid）用于估值核心计算
+        current_prices = {
+            sym: (q.get('bid') or q.get('price') or 0)
+            for sym, q in current_quotes.items()
+        }
+        assembled = assemble_dynamic_components(fund_config, base_data, current_prices)
+        if not assembled['ok']:
+            return None
+
+        rt_val = basket_valuation(
+            assembled['base_nav'],
+            assembled['position'],
+            assembled['components'],
+            assembled['fx_base'],
+            current_fx,
+            hedge=assembled['hedge'],
+        )
+        if rt_val is None:
+            return None
+
+        # 把完整盘口/来源补进 components
+        detailed_components = []
+        for c in assembled['components']:
+            full_sym = c.get('symbol', '')
+            base_sym = full_sym.lstrip('^')
+            for suffix in ('-EU', '-JP', '-HK'):
+                if base_sym.endswith(suffix):
+                    base_sym = base_sym[:-len(suffix)]
+                    break
+            q = current_quotes.get(base_sym) or {}
+            detailed_components.append({
+                'symbol': full_sym,
+                'weight': round(c.get('weight', 0), 6),
+                'base_price': round(c.get('base_price', 0), 4),
+                'current_price': round(c.get('current_price', 0), 4),
+                'bid': round(q.get('bid', 0), 4) if q.get('bid') else None,
+                'ask': round(q.get('ask', 0), 4) if q.get('ask') else None,
+                'bid_size': q.get('bid_size') if q.get('bid_size') else None,
+                'ask_size': q.get('ask_size') if q.get('ask_size') else None,
+                'source': q.get('source', '-'),
+            })
+
+        return {
+            'rt_val': round(rt_val, 4),
+            'base_date': base_data['date'],
+            'premium': round((fund_config.get('current_price', 0) / rt_val - 1) * 100, 3)
+            if fund_config.get('current_price', 0) > 0 else None,
+            'base_nav': round(assembled['base_nav'], 4),
+            'position': round(assembled['position'], 6),
+            'fx_base': round(assembled['fx_base'], 6) if assembled['fx_base'] else None,
+            'fx_current': round(current_fx, 6) if current_fx else None,
+            'hedge': round(assembled['hedge'], 6) if assembled['hedge'] else None,
+            'components': detailed_components,
+        }
