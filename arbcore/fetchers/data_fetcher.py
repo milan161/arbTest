@@ -497,7 +497,44 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"获取 JPY/CNY 汇率失败: {e}")
         return None
-    
+
+    def fetch_jpy_cny_spot_rate(self):
+        """从新浪财经获取 JPY/CNY 日元在岸价实时汇率（仅新浪，×100 转每100日元）
+
+        用途：ETF 实时估值的 fx_base 历史在岸价（QDII日本 4 只都是 ETF）。
+        注意：此函数只取新浪在岸价，不取官方中间价（中间价用于静态估值）。
+        由 daily_updater step3 在 15:35 收盘流水线调用并落库为历史。
+
+        Returns:
+            dict { '日期', '时间', 'jpy_cny_spot', '来源' } 或 None
+        """
+        logger.info("从新浪财经获取 JPY/CNY 日元在岸价（spot）")
+        try:
+            url = "https://hq.sinajs.cn/list=fx_sjpycny"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://finance.sina.com.cn/"
+            }
+            response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
+            response.encoding = 'gbk'
+            if response.status_code == 200 and 'hq_str_fx_sjpycny' in response.text:
+                values = response.text.split('"')[1].split(',')
+                if len(values) >= 18:
+                    update_time = values[0]
+                    spot_rate = float(values[1]) * 100  # ×100 转每100日元（与 jpy_cny_mid 同口径）
+                    date = values[17]
+                    logger.debug(f"JPY/CNY 在岸价: {spot_rate} (每100日元, 时间: {update_time})")
+                    return {
+                        '日期': date,
+                        '时间': update_time,
+                        'jpy_cny_spot': spot_rate,
+                        '来源': '新浪财经 fx_sjpycny'
+                    }
+            logger.error(f"API接口获取 JPY/CNY 在岸价失败，状态码: {response.status_code}")
+        except Exception as e:
+            logger.error(f"获取 JPY/CNY 在岸价失败: {e}")
+        return None
+
     def fetch_lof_nav_data(self, fund_code, existing_data=None):
         """从东财获取LOF基金历史净值数据
         

@@ -252,127 +252,135 @@ class WoodyWebCrawler:
         return calibration_values if calibration_values else None
     
     def get_woody_backup_data(self, config):
-        """从Woody网页爬取数据作为API失败时的备份"""
-        print("\n=== 从Woody网页爬取备份数据 ===")
-        
+        """从Woody网页(C基金主页)爬取 仓位/校准值/对冲值/ETF价格 作为API失败时的备份。
+        注意：权重(旧比例%)不在本页，由 get_woody_holdings_data(B页) 提供，由上层合并。
+        2026-08-02 实测：C页【免登录】即可访问。
+        """
+        print("\n=== 从Woody网页(C基金主页)爬取备份数据 ===")
         backup_data = {}
-        
-        # 从配置文件中获取所有LOF基金
+
         if not config or 'funds' not in config:
             print("  [ERROR] 配置文件无效，无法爬取备份数据")
             return backup_data
-        
+
+        # 纯期货代码 / 汇率代码（出现在参考数据中，但不是篮子ETF，不应入库）
+        SKIP_TICKERS = {'GC', 'CL', 'ES', 'NQ', 'SI', 'MGC', 'MCL',
+                        'USDCNY', 'USDCNH', 'USCNY'}
+
         for fund in config['funds']:
-            code = fund.get('code', '')
+            code = str(fund.get('code', ''))
             name = fund.get('name', '')
             category = fund.get('category', '')
-            
+
             if not code or code == '161226':
                 continue  # 跳过无效代码和特殊基金
-            
+
             print(f"  爬取基金: {name} ({code})")
-            
-            # 构建Woody网页URL
+
             prefix = "sh" if code.startswith('5') else "sz"
             url = f"https://palmmicro.com/woody/res/{prefix}{code}cn.php"
-            
+
             try:
-                # 每次请求前等待2秒，避免被封
                 import time
                 time.sleep(2)
-                
+
                 response = self._make_request(url, timeout=15)
-                if response.status_code == 200:
-                    # 尝试自动检测编码
-                    response.encoding = response.apparent_encoding
-                    page_text = response.text
-                    
-                    # 初始化基金数据
-                    fund_data = {
-                        'type': self._get_fund_type(category),
-                        'position': None,
-                        'calibration': None,
-                        'hedge': None,
-                        'symbol_hedge': {}
-                    }
-                    
-                    # 提取仓位数据（使用正则表达式）
-                    import re
-                    position_pattern = r'仓位估算值使用([\d.]+)'
-                    position_match = re.search(position_pattern, page_text)
-                    if position_match:
-                        position = position_match.group(1)
-                        try:
-                            position_float = float(position)
-                            # 检查数据范围，判断是否需要转换
-                            if position_float < 10:
-                                position_float = position_float * 100
-                            fund_data['position'] = position_float
-                            print(f"    [BACKUP] 仓位: {fund_data['position']}%")
-                        except ValueError:
-                            pass
-                    
-                    # 使用BeautifulSoup解析HTML
-                    soup = BeautifulSoup(page_text, 'html.parser')
-                    
-                    # 提取校准值数据
-                    calibration_element = soup.find('td', text='校准值')
-                    if calibration_element and calibration_element.next_sibling:
-                        calibration = calibration_element.next_sibling.text.strip()
-                        try:
-                            fund_data['calibration'] = float(calibration)
-                            print(f"    [BACKUP] 校准值: {fund_data['calibration']}")
-                        except ValueError:
-                            pass
-                    
-                    # 提取对冲值数据
-                    hedge_element = soup.find('td', text='对冲值')
-                    if hedge_element and hedge_element.next_sibling:
-                        hedge = hedge_element.next_sibling.text.strip()
-                        try:
-                            fund_data['hedge'] = float(hedge)
-                            print(f"    [BACKUP] 对冲值: {fund_data['hedge']}")
-                        except ValueError:
-                            pass
-                    
-                    # 提取ETF价格和权重数据
-                    symbol_hedge = {}
-                    table = None
-                    for t in soup.find_all('table'):
-                        if '基金指数对照表' in t.text or 'ETF' in t.text:
-                            table = t
-                            break
-                    
-                    if table:
-                        rows = table.find_all('tr')
-                        for row in rows[1:]:  # 跳过表头
-                            cols = row.find_all('td')
-                            if len(cols) >= 4:
-                                etf_code = cols[0].text.strip()
-                                etf_price = cols[1].text.strip()
-                                etf_ratio = cols[2].text.strip().replace('%', '')
-                                
-                                try:
-                                    symbol_hedge[etf_code] = {
-                                        'price': float(etf_price),
-                                        'ratio': float(etf_ratio) / 100  # 转换为小数形式
-                                    }
-                                    print(f"    [BACKUP] {etf_code} 价格: {symbol_hedge[etf_code]['price']}, 权重: {symbol_hedge[etf_code]['ratio'] * 100}%")
-                                except ValueError:
-                                    pass
-                    
-                    if symbol_hedge:
-                        fund_data['symbol_hedge'] = symbol_hedge
-                    
-                    # 添加到备份数据
+                if response.status_code != 200:
+                    print(f"    [ERROR] 请求失败，状态码: {response.status_code}")
+                    continue
+
+                page_text = response.text
+                # ⚠️ 关键：页面里 "仓位估算值使用" 被 <a> 标签劈开（仓位估算</a>值使用），
+                # 直接正则匹配不到，必须先剥掉所有 HTML 标签再匹配。
+                import re
+                clean_text = re.sub(r'<[^>]+>', '', page_text)
+
+                pos_m = re.search(r'仓位估算值使用([\d.]+)', clean_text)
+                date_m = re.search(r'基金持仓更新于([\d-]+)', clean_text)
+                position = None
+                if pos_m:
+                    p = float(pos_m.group(1))
+                    if p < 10:
+                        p *= 100
+                    position = p
+                update_date = date_m.group(1) if date_m else datetime.now().strftime('%Y-%m-%d')
+
+                fund_data = {
+                    'type': self._get_fund_type(category),
+                    'position': position,
+                    'date': update_date,
+                    'calibration': None,
+                    'hedge': None,
+                    'symbol_hedge': {},
+                }
+
+                soup = BeautifulSoup(page_text, 'html.parser')
+
+                # --- 全部表格只解析一次（默认 flavor，避免 lxml 的 MultiIndex 乱表）---
+                try:
+                    all_tables = pd.read_html(StringIO(response.text))
+                except Exception:
+                    all_tables = []
+
+                # --- 校准值：真正的「基金指数对照表」（列含 跟踪代码 + 校准值）---
+                for t in all_tables:
+                    cols = [str(c) for c in t.columns]
+                    if '校准值' in cols and '跟踪代码' in cols:
+                        code_c = next(c for c in t.columns if '代码' in str(c) and '跟踪' not in str(c))
+                        calib_c = next(c for c in t.columns if '校准值' in str(c))
+                        for _, row in t.iterrows():
+                            etf = str(row[code_c]).strip()
+                            if etf.upper().endswith(code):  # 跳过基金自身行
+                                continue
+                            try:
+                                fund_data['calibration'] = float(str(row[calib_c]).replace(',', ''))
+                                break
+                            except (ValueError, TypeError):
+                                pass
+                        break
+
+                # --- 对冲值 ---
+                hedge_element = soup.find('td', string='对冲值')
+                if hedge_element and hedge_element.next_sibling:
+                    try:
+                        fund_data['hedge'] = float(hedge_element.next_sibling.text.strip())
+                    except ValueError:
+                        pass
+
+                # --- ETF 价格：参考数据表（代码/价格/涨幅/日期/时间/名称）---
+                for t in all_tables:
+                    cols = [str(c) for c in t.columns]
+                    if '代码' in cols and '价格' in cols and '名称' in cols:
+                        code_c = next(c for c in t.columns if '代码' in str(c))
+                        price_c = next(c for c in t.columns if '价格' in str(c))
+                        for _, row in t.iterrows():
+                            etf = row[code_c]
+                            if pd.isna(etf):
+                                continue
+                            etf = str(etf).strip()
+                            if (not etf) or etf.lower() == 'nan' \
+                               or etf.upper().startswith(('SZ', 'SH')) \
+                               or etf in SKIP_TICKERS \
+                               or etf.upper().startswith('USD'):
+                                continue
+                            try:
+                                price = float(str(row[price_c]).replace(',', ''))
+                            except (ValueError, TypeError):
+                                continue
+                            if price <= 0:
+                                continue
+                            fund_data['symbol_hedge'][etf] = {'price': price, 'ratio': 0.0}
+                        break
+
+                if fund_data['symbol_hedge'] or fund_data['calibration'] is not None or position is not None:
                     fund_key = f"{'SH' if code.startswith('5') else 'SZ'}{code}"
                     backup_data[fund_key] = fund_data
-                    
+                    print(f"    [OK] {name}({code}) 仓位={position} 校准={fund_data['calibration']} ETF价格数={len(fund_data['symbol_hedge'])}")
                 else:
-                    print(f"    [ERROR] 请求失败，状态码: {response.status_code}")
+                    print(f"    [WARN] {code} 未提取到有效因子，跳过")
             except Exception as e:
                 print(f"    [ERROR] 爬取失败: {e}")
-        
+
         return backup_data
     
     def get_woody_position_data(self, symbol):
@@ -453,8 +461,8 @@ class WoodyWebCrawler:
         """从Woody网页爬取基金持仓数据"""
         print(f"\n=== woody网页爬取基金 {symbol} 的持仓数据 ===")
         
-        # 构建URL
-        prefix = self._fund_market_prefix(symbol)
+        # 构建URL（B页查询参数需大写 SZ/SH 前缀，对齐已验证可跑程序）
+        prefix = 'SH' if str(symbol).startswith('5') else 'SZ'
         url = f"https://palmmicro.com/woody/res/holdingscn.php?symbol={prefix}{symbol}"
         print(f"  [爬虫] URL: {url}")
         
@@ -472,15 +480,13 @@ class WoodyWebCrawler:
                 # 尝试自动检测编码
                 response.encoding = response.apparent_encoding
                 
-                # 🚀 核心修复：绕过 bs4(4.13.0) 的 SoupStrainer Bug
+                # 用默认 flavor 解析（lxml 会给表头加 MultiIndex，导致
+                # '旧比例(%)' 列名判定失败；旧版可跑程序即使用默认 flavor）
                 try:
-                    tables = pd.read_html(StringIO(response.text), flavor='lxml')
-                except Exception:
-                    try:
-                        tables = pd.read_html(response.text)
-                    except Exception as e:
-                        print(f"  [ERROR] 解析错误: HTML 表格提取失败 - {e}")
-                        return None
+                    tables = pd.read_html(StringIO(response.text))
+                except Exception as e:
+                    print(f"  [ERROR] 解析错误: HTML 表格提取失败 - {e}")
+                    return None
 
                 print(f"  ℹ️  找到 {len(tables)} 个表格")
                 
@@ -803,7 +809,8 @@ class WoodyWebCrawler:
         for lof in lof_list:
             code = lof['code']
             name = lof['name']
-            url = f"https://palmmicro.com/woody/res/sz{code}cn.php"
+            prefix = "sh" if str(code).startswith('5') else "sz"
+            url = f"https://palmmicro.com/woody/res/{prefix}{code}cn.php"
             
             print(f"爬取{name}({code})校准值...")
             

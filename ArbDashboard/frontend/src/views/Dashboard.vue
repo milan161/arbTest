@@ -146,6 +146,14 @@ const fundStore = useFundStore()
 const marketStore = useMarketStore()
 const appStore = useAppStore()
 
+// [AI-2026-08-03] 主看板「现价」应显示盘中 LOF 实时价(realtime_price)，而非数据库收盘价(price)。
+// 非交易时段 realtime_price 为空/0 时回退到收盘价，避免显示 0 或误导。
+const curPrice = (row: any): number => {
+  const rp = row?.realtime_price
+  if (rp && rp > 0) return rp
+  return row?.price || 0
+}
+
 // ===== 从 Store 解构响应式状态（保持与模板同名的变量，避免改模板） =====
 const { tableData, loading, currentTab, searchKeyword, watchlist,
         filteredTableData, fundHistory, dashboardMeta, dashboardTabs } = storeToRefs(fundStore)
@@ -314,15 +322,18 @@ const allColumns: DataTableColumns<any> = [
   },
   {
     title: '现价', key: 'price', width: 62, align: 'center',
-    sorter: (a: any, b: any) => (a.price || 0) - (b.price || 0),
-    render(row: any) { return h('span', { class: 'num-cell' }, formatPrice(row.price)) }
+    sorter: (a: any, b: any) => curPrice(a) - curPrice(b),
+    render(row: any) { return h('span', { class: 'num-cell' }, formatPrice(curPrice(row))) }
   },
   {
     title: '涨跌幅', key: 'price_change', width: 66, align: 'center',
-    sorter: (a: any, b: any) => (a.price_change || 0) - (b.price_change || 0),
+    sorter: (a: any, b: any) => {
+      const c = (r: any) => r.prev_close ? (curPrice(r) - r.prev_close) / r.prev_close * 100 : (r.price_change || 0)
+      return c(a) - c(b)
+    },
     render(row: any) {
-      const chg = row.price_change || 0
-      if (chg === 0 && (!row.price || row.price === 0)) return '-'
+      const chg = row.prev_close ? (curPrice(row) - row.prev_close) / row.prev_close * 100 : (row.price_change || 0)
+      if (chg === 0 && (!curPrice(row) || curPrice(row) === 0)) return '-'
       return h('span', { class: 'num-cell strong', style: { color: priceColor(chg) } }, formatPercent(chg, 2))
     }
   },
@@ -348,8 +359,8 @@ const allColumns: DataTableColumns<any> = [
   {
     title: '实时溢价', key: 'rt_premium', width: 80, align: 'center',
     render(row: any) {
-      if (!row.rt_val || !row.price) return h('span', { class: 'num-cell muted' }, '-')
-      const p = (row.price / row.rt_val - 1) * 100
+      if (!row.rt_val || !curPrice(row)) return h('span', { class: 'num-cell muted' }, '-')
+      const p = (curPrice(row) / row.rt_val - 1) * 100
       const children = [formatPremium(p)]
       if (row.rt_frozen) children.push(h('span', { class: 'freeze-badge sm', title: row.rt_frozen_note || '收盘冻结估值' }, '冻'))
       return h('span', { class: 'num-cell strong compact', style: { color: priceColor(p) } }, children)

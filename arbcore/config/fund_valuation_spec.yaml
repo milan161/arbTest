@@ -445,26 +445,6 @@ funds:
     basis: index
     symbol: '399300'
     source_priority: *id009
-- code: '161604'
-  valuation_method: lof_domestic
-  static_valuation:
-    basis: index
-    symbol: '399330'
-    source_priority: *id005
-  dynamic_valuation:
-    basis: index
-    symbol: '399330'
-    source_priority: *id009
-- code: '165523'
-  valuation_method: lof_domestic
-  static_valuation:
-    basis: index
-    symbol: '399300'
-    source_priority: *id005
-  dynamic_valuation:
-    basis: index
-    symbol: '399300'
-    source_priority: *id009
 - code: '161811'
   valuation_method: lof_domestic
   static_valuation:

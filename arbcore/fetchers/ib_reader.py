@@ -87,7 +87,7 @@ class IBReader(EWrapper, EClient):
         # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
 
         # [AI-2026-08-02] 陈旧数据强制重连看门狗参数（详见 014 文档第九节）
-        self.stale_reconnect_threshold = 300   # 已连接但行情停滞超过此秒数(夜盘)则强制重连
+        self.stale_reconnect_threshold = 600   # [AI-2026-08-03] 已连接但长连接零 tick 超过此秒数(夜盘)则强制重连自愈；无兜底机制，纯靠长连接真实 tick 时间判定
         self.stale_reconnect_cooldown = 600    # 两次强制重连最小间隔(秒)，防抖动
         self._last_forced_reconnect = 0
         self._stale_watchdog_running = False
@@ -155,6 +155,8 @@ class IBReader(EWrapper, EClient):
             self.last_update_time = None
             time.sleep(1)  # 给 TCP FIN 包传播到 TWS/Gateway 的时间，防止进程立即退出导致连接残留
             logger.info("[IB] 已断开与 Gateway 的连接")
+        # [AI-2026-08-03] 断连清空心跳时间戳，重连后看门狗从零计时，避免误判"已连接无数据"
+        self.last_tick_time = {}
 
     def fetch_prev_closes_once(self):
         """如果昨收数据为空，则尝试获取一次。"""
@@ -180,7 +182,8 @@ class IBReader(EWrapper, EClient):
             c_prev = Contract()
             c_prev.symbol = sym
             c_prev.secType = "IND" if sym == "VIX" else "STK"
-            c_prev.exchange = "CBOE" if sym == "VIX" else "SMART"
+            # [AI-2026-08-03] 铁律 TOP1：夜盘任何情况禁止 SMART/ISLAND/ARCA。前收盘兜底抓取改走 OVERNIGHT。
+            c_prev.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
             c_prev.currency = "USD"
             self.req_events[req_id_prev] = threading.Event()
             self.reqHistoricalData(req_id_prev, c_prev, "", "1 D", "1 day", "TRADES", 1, 1, False, [])
@@ -245,7 +248,7 @@ class IBReader(EWrapper, EClient):
             reconnect() 内含 next_order_id=None 重置(红线3) 与 start_polling()(红线4)；重新订阅保持
             reqMktData(snapshot=False)(红线10) 与全 tickType 保留(红线11)。本函数绝不动 exchange/
             primaryExchange/order 字段(红线1/2/5)。
-          - 仅当长连接与历史快照兜底双双失败（前端长时间无盘口）才触发，正常行情下永不动。
+          - 仅当长连接长时间零 tick（前端无真实盘口）才触发重连自愈，正常行情下永不动。
           - 即时停用开关：环境变量 ARB_IB_STALE_GUARD=0 可不经改代码关闭本看门狗。
         """
         # 即时停用开关：无需改代码即可关闭看门狗
@@ -260,9 +263,12 @@ class IBReader(EWrapper, EClient):
                     continue
                 if not self.is_us_night_session():
                     continue
-                if self.last_update_time is None:
+                # [AI-2026-08-03] 用长连接真实 tick 时间(last_tick_time)判定陈旧：
+                # 只要长连接持续无实时 tick 超过阈值即强制重连重新订阅（自愈零 tick）。
+                last_tick_ts = min(self.last_tick_time.values()) if self.last_tick_time else None
+                if last_tick_ts is None:
                     continue
-                stale = (datetime.now() - self.last_update_time).total_seconds()
+                stale = (datetime.now() - datetime.fromtimestamp(last_tick_ts)).total_seconds()
                 if stale < self.stale_reconnect_threshold:
                     continue
                 now_ts = time.time()
@@ -288,6 +294,14 @@ class IBReader(EWrapper, EClient):
                 logger.warning(f"[IB] 看门狗循环异常: {e}")
 
     def _polling_loop(self):
+        # [AI-2026-08-03] 外层 try/except 防线程意外退出后 self.running 卡在 True 导致 start_polling 防重入误判
+        try:
+            self._polling_loop_inner()
+        except Exception as e:
+            logger.error(f"[IB] 轮询线程异常退出: {e}", exc_info=True)
+            self.running = False
+
+    def _polling_loop_inner(self):
         while self.running:
             # 兼容原有的 YAML 动态读取，并且优先支持从数据库加载白名单
             try:
@@ -343,66 +357,14 @@ class IBReader(EWrapper, EClient):
                     self.sources[sym] = "订阅请求中..."
                     # 💡 核心修复：初始化时间戳，给予长连接 60 秒的建立宽限期，防止开局就误触兜底机制
                     self.last_tick_time[sym] = time.time()
-                    logger.debug(f"[IBReader] 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
+                    # [AI-2026-08-03] 提升为 print 级别：用户需要看到订阅是否成功发出，debug 级别在控制台不可见
+                    print(f"[IBReader] 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
             
-            # 2. 安全兜底看门狗 (Watchdog) - 检查长连接是否生效
-            current_timestamp = time.time()
-            fallback_needed = []
-            if not hasattr(self, '_last_fallback_time'):
-                self._last_fallback_time = {}
-                
-            for sym in self.symbols:
-                last_tick = self.last_tick_time.get(sym, 0)
-                last_fallback = self._last_fallback_time.get(sym, 0)
-                # 如果超过 60 秒没收到真实推送，并且距离上次历史快照请求已超过 300 秒，则允许再次加入兜底队列
-                if (current_timestamp - last_tick > 60) and (current_timestamp - last_fallback > 300):
-                    fallback_needed.append(sym)
- 
-            if fallback_needed:
-                for sym in fallback_needed:
-                    self._last_fallback_time[sym] = current_timestamp
-                    req_id_snap = self._get_next_req_id()
-                    c_snap = Contract()
-                    c_snap.symbol = sym
-                    c_snap.secType = "IND" if sym == "VIX" else "STK"
-                    # [AI-2026-07-07] 用 TRADES 获取夜盘最近成交价，替代 BID（低流动性标的无连续盘口）
-                    c_snap.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
-                    c_snap.currency = "USD"
-                    # [AI-2026-07-17] 先尝试 BID 获取盘口价（修复 07-07 改动：TRADES 不含买卖盘口）
-                    price = None
-                    req_id_bid = self._get_next_req_id()
-                    self.req_events[req_id_bid] = threading.Event()
-                    self.reqHistoricalData(req_id_bid, c_snap, "", "1800 S", "1 min", "BID", 0, 1, False, [])
-                    self.req_events[req_id_bid].wait(timeout=3.0)
-                    if self.req_data.get(req_id_bid):
-                        price = self.req_data[req_id_bid]
-                    else:
-                        # BID 不可用时降级到 TRADES（低流动性标的正如 INDA）
-                        req_id_trades = self._get_next_req_id()
-                        self.req_events[req_id_trades] = threading.Event()
-                        self.reqHistoricalData(req_id_trades, c_snap, "", "1800 S", "1 min", "TRADES", 0, 1, False, [])
-                        self.req_events[req_id_trades].wait(timeout=3.0)
-                        if self.req_data.get(req_id_trades):
-                            price = self.req_data[req_id_trades]
-                    if price:
-                        if sym not in self.prices or not isinstance(self.prices[sym], dict):
-                            self.prices[sym] = {'bid': 0.0, 'ask': 0.0, 'last': 0.0, 'bid_size': 0, 'ask_size': 0}
-                        # BID 来源写入 bid/ask，TRADES 来源写入 last
-                        self.prices[sym]['bid'] = price
-                        self.prices[sym]['ask'] = price
-                        self.prices[sym]['last'] = price
-                        self.sources[sym] = "安全快照"
-                        self.last_update_time = datetime.now()
-                        # 重置 last_tick_time 以符合 60 秒常规检测，但下次兜底仍受 300 秒限制保护
-                        self.last_tick_time[sym] = current_timestamp
-            
-            if self.prices:
-                pass
-                # 屏蔽高频盘口刷屏，保持后台清爽
-                # print(f"[IBReader] [INFO] 已更新: {log_msg}")
-            
-            # 长连接模式下，循环短暂停留即可，底层的 tickPrice 会毫秒级疯狂更新字典。只有走到兜底才需要长休眠防封禁。
-            time.sleep(30 if fallback_needed else 5)
+            # [AI-2026-08-03] 已彻底移除"历史 BID/TRADES 快照兜底"：东哥红线——任何时候都不写
+            # 历史快照冒充实时盘口（bid=ask=last 单一值）。没有真实盘口时前端显示"等待数据"，
+            # 由 stale 看门狗负责长连接零 tick 自愈重连。底层的 tickPrice/tickSize 会毫秒级更新字典，
+            # 此处仅做短暂停留。
+            time.sleep(5)
 
     def _try_connect_silent(self):
         """静默尝试连接 IB，最多 max_retries 次"""
@@ -472,7 +434,7 @@ class IBReader(EWrapper, EClient):
             
         # 智能诊断：拦截典型的“无行情订阅权限”错误码
         if errorCode in [354, 10090, 10167, 10168]:
-            print(f"[IBReader] [INFO] 提示 (代码 {errorCode}): 您的账号无美股实时行情订阅权限，系统已自动转入【安全快照】兜底模式，不影响套利运行。")
+            print(f"[IBReader] [INFO] 提示 (代码 {errorCode}): 您的账号无美股实时行情订阅权限，将无法显示实时盘口（前端显示等待数据），需检查 IB 行情订阅。")
             return
             
         print(f"[IBReader] [WARNING] Error {errorCode} (ReqId: {reqId}): {errorString}")
@@ -515,11 +477,9 @@ class IBReader(EWrapper, EClient):
                     self.sources[sym] = "长连接"
                 elif tickType in [2, 67]: # Ask
                     self.prices[sym]['ask'] = price
-                elif tickType in [4, 68]: # [AI-2026-07-07] 总是保存最近成交价，用于低流动性时替代bid/ask
+                elif tickType in [4, 68]: # [AI-2026-08-03] Last 仅写入 last，绝不回填 bid/ask。
+                    # 长连接未推盘口(bid==0)时只保留 last，不把成交价伪装成买一卖一（违反 014 红线11）
                     self.prices[sym]['last'] = price
-                    if self.prices[sym]['bid'] == 0.0:
-                        self.prices[sym]['bid'] = price
-                        self.prices[sym]['ask'] = price
                 
                 self.last_update_time = datetime.now()
                 

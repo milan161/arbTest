@@ -152,31 +152,27 @@ class MarketDataService:
                     bid = price_data.get('bid', 0) if isinstance(price_data, dict) else 0
                     ask = price_data.get('ask', 0) if isinstance(price_data, dict) else 0
                     last = price_data.get('last', 0) if isinstance(price_data, dict) else 0
-                    # [AI-2026-07-07] 无买一卖一但有最近成交价时使用成交价（INDA夜盘低流动性）
-                    if last > 0 and bid <= 0:
+                    # [AI-2026-08-03] 仅当长连接推送了真实盘口（买一价≠卖一价）才返回 IB 实时盘口。
+                    # bid==ask 说明长连接未推送真实盘口（仅历史成交价快照或无数据），严禁把成交价
+                    # 伪装成买一卖一返回（违反 014 文档红线11：禁止只保留 tickType=4 丢弃 1/2）。
+                    # 无真实盘口时不返回 IB，让前端走其他数据源或显示"等待数据"，避免误导。
+                    if bid > 0 and bid != ask:
                         self._circuit_record_success('IB')
+                        # [AI-2026-08-03] 补齐买一/卖一盘口数量：bid_size(买一量)/ask_size(卖一量)
+                        # 均来自 IB tickSize 回调写入 prices[sym]。amount 保持兼容(=买一量)。
+                        bid_size = price_data.get('bid_size', 0) if isinstance(price_data, dict) else 0
+                        ask_size = price_data.get('ask_size', 0) if isinstance(price_data, dict) else 0
                         return {
                             'symbol': symbol,
-                            'price': last,
-                            'bid': last,
-                            'ask': last,
-                            'amount': 0,
-                            'source': 'IB(最近成交价)'
-                        }
-                    if bid > 0:
-                        # bid==ask 说明没有有效价差，返回 None 让前端显示"—"而非错误价格
-                        if bid == ask:
-                            logger.debug(f"[MDS] {symbol} bid=ask={bid}，无有效价差，跳过")
-                            return None
-                        self._circuit_record_success('IB')
-                        return {
-                            'symbol': symbol,
-                            'price': price_data.get('last', bid) if price_data.get('last', 0) > 0 else bid,
+                            'price': last if last > 0 else bid,
                             'bid': bid,
-                            'ask': ask if ask > 0 else bid,
-                            'amount': price_data.get('bid_size', 0) if isinstance(price_data, dict) else 0,
+                            'ask': ask,
+                            'bid_size': bid_size,
+                            'ask_size': ask_size,
+                            'amount': bid_size,
                             'source': 'IB'
                         }
+                    # bid==ask 或 bid<=0：无真实盘口，不返回 IB（不伪装成交价）
                 # IB已连接但prices中没有该symbol，启动轮询线程
                 if not getattr(self.ib_reader, 'running', False):
                     self.ib_reader.start_polling()
@@ -204,19 +200,25 @@ class MarketDataService:
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
                     if success and symbol in prices:
-                        self._circuit_record_success('富途')
                         quote = prices[symbol]
                         bid = quote.get('bid', 0)
                         ask = quote.get('ask', 0)
                         last = quote.get('last', 0)
-                        return {
-                            'symbol': symbol,
-                            'price': last if last > 0 else bid,
-                            'bid': bid,
-                            'ask': ask if ask > 0 else bid,
-                            'amount': 0,
-                            'source': '富途'
-                        }
+                        # [AI-2026-08-03] 富途刚连上、订阅尚未推送真实盘口时，get_prices 会返回
+                        # success=True 但 bid/ask/last 全为 0。若照常返回，前端会显示“富途”来源
+                        # + 0 价格/数量，误导用户（典型现象：点“富途连接”后沙盘美股盘口全 0，
+                        # 几秒后 IB 接管才正常）。全 0 视为无数据，落到下方“都拿不到”分支，
+                        # 与“源头不产生错价”原则一致；且不计失败，避免热身期误触发熔断。
+                        if bid > 0 or ask > 0 or last > 0:
+                            self._circuit_record_success('富途')
+                            return {
+                                'symbol': symbol,
+                                'price': last if last > 0 else bid,
+                                'bid': bid,
+                                'ask': ask if ask > 0 else bid,
+                                'amount': 0,
+                                'source': '富途'
+                            }
                     else:
                         # [AI-2026-07-15] 禁用状态不计数（用户未手动连接）
                         if not getattr(self.futu_reader, 'disabled', False):
@@ -256,19 +258,21 @@ class MarketDataService:
                 try:
                     success, msg, prices = self.futu_reader.get_prices([symbol])
                     if success and symbol in prices:
-                        self._circuit_record_success('富途')
                         quote = prices[symbol]
                         bid = quote.get('bid', 0)
                         ask = quote.get('ask', 0)
                         last = quote.get('last', 0)
-                        return {
-                            'symbol': symbol,
-                            'price': last if last > 0 else bid,
-                            'bid': bid,
-                            'ask': ask if ask > 0 else bid,
-                            'amount': 0,
-                            'source': '富途'
-                        }
+                        # [AI-2026-08-03] 同 IB 分支兜底：富途全 0 视为无数据，不返回错误 0 价。
+                        if bid > 0 or ask > 0 or last > 0:
+                            self._circuit_record_success('富途')
+                            return {
+                                'symbol': symbol,
+                                'price': last if last > 0 else bid,
+                                'bid': bid,
+                                'ask': ask if ask > 0 else bid,
+                                'amount': 0,
+                                'source': '富途'
+                            }
                     else:
                         # [AI-2026-07-15] 禁用状态不计数（用户未手动连接）
                         if not getattr(self.futu_reader, 'disabled', False):
@@ -304,6 +308,62 @@ class MarketDataService:
         if symbol not in self.realtime_manager.symbols:
             self.realtime_manager.subscribe([symbol])
         return self.realtime_manager.get_quote(symbol)
+
+    # [AI-2026-08-03] 双源盘口对比（仅展示用，不改任何计算路径）。
+    # 实时估值计算仍只用 IB（见 get_realtime_quote 的 IB 优先逻辑），本方法把 IB 与富途
+    # 两支行情源的原始盘口都返回，供用户对比时效/准确性。富途此处不做「全0当无数据」门禁
+    # （门禁只用于估值路径），以便用户看到「富途刚连上仍在热身、暂时为0」这类对比信息。
+    def get_dual_quote(self, symbol: str) -> Dict[str, Any]:
+        """同时返回 IB 与富途两支行情源的原始盘中盘口，供前端对比展示。
+
+        返回: {'symbol': str, 'ib': dict|None, 'futu': dict|None}
+        每张盘口: {'price','bid','ask','bid_size','ask_size'}（均无门禁，原始值）
+        """
+        symbol = (symbol or '').strip().upper().lstrip('^')
+        for suffix in ['-EU', '-JP', '-HK']:
+            if symbol.endswith(suffix):
+                symbol = symbol[:-len(suffix)]
+                break
+
+        # IB 原始盘口（仅夜盘有免费实时；其余时段 prices 可能为空/滞后，原样返回供对比）
+        ib_q = None
+        if self.ib_reader and getattr(self.ib_reader, 'connected', False):
+            prices = getattr(self.ib_reader, 'prices', {}) or {}
+            d = prices.get(symbol)
+            if isinstance(d, dict):
+                bid = d.get('bid', 0) or 0
+                ask = d.get('ask', 0) or 0
+                last = d.get('last', 0) or 0
+                if bid > 0 or ask > 0 or last > 0:
+                    ib_q = {
+                        'price': last if last > 0 else bid,
+                        'bid': bid,
+                        'ask': ask,
+                        'bid_size': d.get('bid_size', 0) or 0,
+                        'ask_size': d.get('ask_size', 0) or 0,
+                    }
+
+        # 富途原始盘口（全时段，展示对比不做门禁）
+        futu_q = None
+        if self.futu_reader and not getattr(self.futu_reader, 'disabled', False):
+            try:
+                success, _msg, prices = self.futu_reader.get_prices([symbol])
+                if success and symbol in prices:
+                    d = prices[symbol] or {}
+                    bid = d.get('bid', 0) or 0
+                    ask = d.get('ask', 0) or 0
+                    last = d.get('last', 0) or 0
+                    futu_q = {
+                        'price': last if last > 0 else bid,
+                        'bid': bid,
+                        'ask': ask,
+                        'bid_size': d.get('bid_size', 0) or 0,
+                        'ask_size': d.get('ask_size', 0) or 0,
+                    }
+            except Exception as e:
+                logger.debug(f"[dual] 富途获取{symbol}异常: {e}")
+
+        return {'symbol': symbol, 'ib': ib_q, 'futu': futu_q}
 
     # [AI-2026-07-13] 新浪 hf_ 期货盘口直取（含微合约兜底）
     # 微合约新浪不提供直接数据，从母合约取同价（报价单位相同）

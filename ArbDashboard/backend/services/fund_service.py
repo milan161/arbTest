@@ -212,6 +212,8 @@ def _ensure_daily_snapshot(conn):
         _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
         if _daily_snapshot['usd_cny_spot'] <= 0:
             logger.warning("[SNAPSHOT] 在岸价获取失败，将用中间价兜底（周末/非交易时段可能如此）")
+        # [AI-2026-08-02] 日元在岸价落库已移至 daily_updater step3（9:20 清晨刷新，确定时点）。
+        #   _ensure_daily_snapshot 只负责加载（读），不负责写库（避免 web 进程首次加载时间不固定）。
         _daily_snapshot['loaded'] = True
         logger.info(f"[SNAPSHOT] usd_cny_mid={_daily_snapshot['usd_cny_mid']}, usd_cny_spot={_daily_snapshot['usd_cny_spot']}, jpy_cny_mid={_daily_snapshot['jpy_cny_mid']}")
     except Exception as e:
@@ -1326,10 +1328,10 @@ class FundService:
                         if nk_current > 0:
                             # 获取 T-1 基准日数据（与 NAV 同一天）
                             t1_row = conn.execute("""
-                                SELECT h.date, h.nav, r.jpy_cny_mid
+                                SELECT h.date, h.nav, COALESCE(r.jpy_cny_spot, r.jpy_cny_mid) AS fx_base
                                 FROM unified_fund_history h
                                 LEFT JOIN exchange_rate r ON h.date = r.date
-                                WHERE h.fund_code = ? AND h.nav > 0 AND r.jpy_cny_mid > 0
+                                WHERE h.fund_code = ? AND h.nav > 0 AND (r.jpy_cny_spot > 0 OR r.jpy_cny_mid > 0)
                                 ORDER BY h.date DESC LIMIT 1
                             """, (code,)).fetchone()
                             if t1_row:
@@ -1404,7 +1406,22 @@ class FundService:
                                         vwap = float(parts[9]) if len(parts) > 9 else 0.0
                             except:
                                 pass
-                                
+
+                        # [AI-2026-08-03] 盘中实时结算价可能为 0（今日结算未产生 / 刚启动流未就绪）→ 回退 futures_daily
+                        # 最近一条非零 AG0 结算价（即上一交易日官方结算价，盘中稳定不变，是"昨结算价"的正确基准；
+                        # 实时流的今日结算价盘中恒为 0，不能当昨结算用）。仅在 SHFE 开盘时段有意义——非开盘时下面守卫会清零。
+                        if settlement_price <= 0:
+                            try:
+                                _conn = self.db._get_conn()
+                                _row = _conn.execute(
+                                    "SELECT settle_price FROM futures_daily WHERE symbol='AG0' AND settle_price>0 ORDER BY date DESC LIMIT 1"
+                                ).fetchone()
+                                if _row and _row[0] and float(_row[0]) > 0:
+                                    settlement_price = float(_row[0])
+                                    logger.debug(f"[{code}] AG0 实时结算价为0，回退数据库昨结算={settlement_price}")
+                            except Exception as _e:
+                                logger.debug(f"[{code}] AG0 昨结算DB回退失败: {_e}")
+
                         # [2026-07-30 FIX] 非交易时段丢弃已取到的价格，避免陈旧收盘价当"实时"
                         if not _ag_session_open:
                             logger.debug(f"[{code}] SHFE 当前休市，丢弃 AG0 价(最新价={ag_future_price}/昨结算={settlement_price})，rt_val/si_val 置 None")
@@ -1434,8 +1451,9 @@ class FundService:
                                 metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
                         
                         # [SI 实时估值] 基于 COMEX 白银期货的实时估值（和 Woody GetRealtimeNetValue 一致）
-                        # [AI-2026-07-03] 传入 settlement_price(AG0昨结算) 给公式做比值基准
-                        if self.market_data_service:
+                        # [AI-2026-08-03] 仅在 SHFE 交易时段内计算：午休/休市已丢弃 AG0 价（见上守卫），此时不计算 SI 估值，
+                        #              避免对"昨结算价为0"的误报警（非 Bug，是设计上非交易时段不出 AG0 衍生估值，与 rt_val 列一致）
+                        if _ag_session_open and self.market_data_service:
                             try:
                                 si_result = self.market_data_service.get_si_based_valuation(
                                     nav_t1=nav_home,
@@ -1597,10 +1615,10 @@ class FundService:
                                     jpy_spot = _daily_snapshot.get('jpy_cny_spot') or 0
                                     # [AI-2026-07-27] 复用统一估值核心：取 T-1 基准(NAV+日元中间价)与 NK 结算价(基准)，NK期货价作单组件
                                     t1_row = conn.execute("""
-                                        SELECT h.date, h.nav, r.jpy_cny_mid
+                                        SELECT h.date, h.nav, COALESCE(r.jpy_cny_spot, r.jpy_cny_mid) AS fx_base
                                         FROM unified_fund_history h
                                         LEFT JOIN exchange_rate r ON h.date = r.date
-                                        WHERE h.fund_code = ? AND h.nav > 0 AND r.jpy_cny_mid > 0
+                                        WHERE h.fund_code = ? AND h.nav > 0 AND (r.jpy_cny_spot > 0 OR r.jpy_cny_mid > 0)
                                         ORDER BY h.date DESC LIMIT 1
                                     """, (code,)).fetchone()
                                     nk_base_row = conn.execute(

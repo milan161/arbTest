@@ -205,14 +205,28 @@
                      <span>📊 {{ item.symbol }} 实时盘口</span>
                      <span style="font-size: 10px; color: #64748b; font-weight: normal;">({{ item.currency }})</span>
                   </div>
-                  <div style="display: flex; justify-content: space-between; font-size: 12px;">
-                     <span style="color:#2e7d32; font-weight:bold; cursor:pointer;" @click="hedgePrice = (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid ?? hedgePrice" title="点击填入买一价">
-                        买一: <span style="font-family: monospace;">{{ (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid?.toFixed(2) || '等待数据' }}</span>
+                  <!-- IB 主源（用于实时估值计算，点击可填入） -->
+                  <div style="display: flex; justify-content: space-between; align-items:center; font-size: 12px;">
+                     <span style="color:#0369a1; font-weight:bold; font-size:11px;">IB(主)</span>
+                     <span style="color:#2e7d32; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) ?? hedgePrice" title="点击填入买一价(IB)">
+                        买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) }}</span>
+                        <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.bid_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid_size) }}</span>
                      </span>
-                     <span style="color:#d32f2f; font-weight:bold; cursor:pointer;" @click="hedgePrice = (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask ?? hedgePrice" title="点击填入卖一价">
-                        卖一: <span style="font-family: monospace;">{{ (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask?.toFixed(2) || '等待数据' }}</span>
+                     <span style="color:#d32f2f; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) ?? hedgePrice" title="点击填入卖一价(IB)">
+                        卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) }}</span>
+                        <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.ask_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask_size) }}</span>
                      </span>
-                   </div>
+                  </div>
+                  <!-- 富途对比（只读，不参与计算） -->
+                  <div style="display: flex; justify-content: space-between; align-items:center; font-size: 11px; color:#64748b;">
+                     <span style="color:#0891b2; font-weight:bold;">富途(对比)</span>
+                     <span>买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.bid) }}</span>
+                        <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.bid_size) }}</span>
+                     </span>
+                     <span>卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.ask) }}</span>
+                        <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.ask_size) }}</span>
+                     </span>
+                  </div>
                </div>
                </template>
 
@@ -442,6 +456,23 @@ const autoLog = ref(true)
 const hedgeVol = ref(10)
 const hedgePrice = ref(0)
 
+// [AI-2026-08-03] 双源盘口对比（IB vs 富途）：只读展示，不参与估值计算。
+// 实时估值始终以 IB 为准；此处仅把两源的原始 bid/ask/量并排显示，供对比时效/准确性。
+const dualMap = ref<Record<string, any>>({})
+let dualTimer: any = null
+const fetchDual = async () => {
+  const syms = (vcRef?.value?.uniqueValuationSymbols ?? []).map((s: any) => s.symbol).filter(Boolean)
+  if (syms.length === 0) return
+  try {
+    const r = await fetch(`/api/market/realtime_dual?codes=${encodeURIComponent(syms.join(','))}`)
+    const j = await r.json()
+    if (j?.status === 'ok' && j.data) dualMap.value = j.data
+  } catch (e) { /* 对比信息非关键，静默 */ }
+}
+// 盘口数值格式化：0/空显示「等待数据」，否则两位小数
+const fmtQ = (v: any) => (v !== null && v !== undefined && v > 0) ? Number(v).toFixed(2) : '等待数据'
+const fmtSz = (v: any) => (v !== null && v !== undefined && v > 0) ? v : '-'
+
 // 轮询计数
 let realtimeTimer: any = null
 let pollCount = 0
@@ -649,8 +680,14 @@ onMounted(() => {
     if (fundCode.value) fetchAll()
     else fetchDashboard()
     realtimeTimer = setInterval(pollRealtime, 3000)
+    // [AI-2026-08-03] 双源盘口对比轮询（与实时沙盘同频）
+    fetchDual()
+    dualTimer = setInterval(fetchDual, 3000)
 })
-onUnmounted(() => { if (realtimeTimer) clearInterval(realtimeTimer) })
+onUnmounted(() => {
+    if (realtimeTimer) clearInterval(realtimeTimer)
+    if (dualTimer) clearInterval(dualTimer)
+})
 </script>
 
 <style scoped>

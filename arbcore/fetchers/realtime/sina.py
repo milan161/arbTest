@@ -109,6 +109,9 @@ class SinaRealtimeFetcher(BaseRealtimeFetcher):
                         "time": f"{parts[30]} {parts[31]}",
                         "source": self.name
                     }
+                    # [AI-2026-08-03] 暴露统一字段 bid_size/ask_size(买一量/卖一量)，与新浪/腾讯盘口面板一致
+                    quote["bid_size"] = quote["bid_vol"][0]
+                    quote["ask_size"] = quote["ask_vol"][0]
                     self.quotes[code] = quote
                     self._notify_update(code, quote)
             elif match_hk:

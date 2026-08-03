@@ -16,13 +16,16 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') 
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 timeout /t 2 /nobreak > nul
 
-:: Start Backend (use project venv)
+:: Start Backend (STRICTLY project venv — 禁止回退到系统/WorkBuddy python，否则 IB/富途/冻结调度器缺失依赖静默失效)
 echo [1/2] Starting Backend (port 8000)...
 if exist "%PY%" (
   start "ArbNext Backend" cmd /k "cd /d %BACKEND% && %PY% main.py"
 ) else (
-  echo [WARN] venv python not found at %PY%, falling back to system python
-  start "ArbNext Backend" cmd /k "cd /d %BACKEND% && python main.py"
+  echo [FATAL] 找不到项目虚拟环境解释器: %PY%
+  echo [FATAL] 请勿回退到系统 python（缺 ibapi/apscheduler 会导致 IB 行情与冻结调度器失效）
+  echo [FATAL] 请确认 ArbDashboard/.venv 存在；或用 .venv\Scripts\python.exe 直接启动 main.py
+  pause
+  exit /b 1
 )
 
 :: Wait for backend to start (fixed wait; this program does NOT do health-check)

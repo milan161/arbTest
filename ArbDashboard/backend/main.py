@@ -1,8 +1,31 @@
 import os
 import sys
+import importlib.util
+
+# [AI-2026-08-03] 强制唯一启动解释器：后端必须用项目虚拟环境 ArbDashboard/.venv 启动。
+# 机器上存在多个 Python（系统 Python311 / WorkBuddy 内置 3.13），其中只有 .venv 同时装有
+# ibapi + apscheduler + xtquant + akshare 等全部依赖。用错解释器会导致 IB 行情 / 冻结调度器
+# 静默失效（典型症状：No module named 'apscheduler'、IB 盘口全空）。用关键包是否可导入来判定，
+# 任何非 .venv 解释器都会在此处明确拒绝，从源头杜绝“用错 python”这类反复出现的问题。
+def _require_project_venv():
+    missing = [pkg for pkg in ("ibapi", "apscheduler")
+               if importlib.util.find_spec(pkg) is None]
+    if missing:
+        sys.stderr.write(
+            "\n\033[1;91m[致命] 后端必须用项目虚拟环境启动：ArbDashboard/.venv/Scripts/python.exe\033[0m\n"
+            f"[致命] 当前解释器缺少关键依赖：{', '.join(missing)}（系统/WorkBuddy 的 python 没装 IB/调度依赖）\n"
+            "[致命] 请勿直接 `python main.py`。请改用：\n"
+            "[致命]   ① 双击 ArbDashboard/start_dashboard.bat（已锁定 .venv），或\n"
+            "[致命]   ② ArbDashboard/.venv/Scripts/python.exe main.py\n\n"
+        )
+        sys.exit(2)
+
+_require_project_venv()
+
 import json
 import subprocess
 import threading
+import time
 import pandas as pd
 import logging
 from logging.handlers import RotatingFileHandler
@@ -18,6 +41,8 @@ from datetime import datetime
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 workspace_root = os.path.abspath(os.path.join(backend_dir, ".."))
 logs_dir = os.path.join(workspace_root, "logs")  # [AI-2026-07-02] 日志集中到 ArbDashboard/logs/
+
+START_TIME = time.time()  # 进程启动时刻，供 /api/status 计算运行时长
 
 if not os.path.exists(logs_dir):
     os.makedirs(logs_dir, exist_ok=True)
@@ -480,6 +505,16 @@ async def lifespan(app: FastAPI):
             return False
 
         # 6. [V9.0] 9:20 清晨自动刷新 Woody/汇率/VPS
+        # [AI-2026-08-02] 触发时刻可配：ARB_MORNING_REFRESH_AT="HH:MM"，默认 09:20。
+        # 场景：ARM 展示副本只从东京 VPS 读现成产物，必须等东京自己的采集任务（约 08:30/09:20）
+        #      全部落盘之后再去拉，否则会拉到半成品。故 ARM 上设 09:35。
+        _mr_at = os.environ.get('ARB_MORNING_REFRESH_AT', '09:20')
+        try:
+            _MR_H, _MR_M = (int(x) for x in _mr_at.split(':'))
+        except Exception:
+            logger.warning(f"⚠️ [清晨刷新] ARB_MORNING_REFRESH_AT='{_mr_at}' 格式错误，回退 09:20")
+            _MR_H, _MR_M = 9, 20
+
         global _morning_refreshed_today, _morning_refresh_time
         async def morning_refresh_scheduler():
             global _morning_refreshed_today, _morning_refresh_time
@@ -492,18 +527,25 @@ async def lifespan(app: FastAPI):
                 today = now.strftime("%Y-%m-%d")
                 if _morning_refreshed_today and today != _morning_refresh_time:
                     _morning_refreshed_today = False  # 新的一天
-                if not _morning_refreshed_today and now.hour >= 9 and (now.hour > 9 or now.minute >= 20):
+                if not _morning_refreshed_today and now.hour >= _MR_H and (now.hour > _MR_H or now.minute >= _MR_M):
                     _morning_refreshed_today = True
                     _morning_refresh_time = today
-                    logger.info("⏰ [清晨刷新] 自动触发 --refresh-morning (Woody/汇率/VPS)")
-                    system_status.add_milestone("INFO", "⏰ 9:20 自动清晨数据刷新")
+                    logger.info(f"⏰ [清晨刷新] 自动触发 --refresh-morning (Woody/汇率/VPS) @ {_MR_H:02d}:{_MR_M:02d}")
+                    system_status.add_milestone("INFO", f"⏰ {_MR_H:02d}:{_MR_M:02d} 自动清晨数据刷新")
                     if _run_daily_updater(["--refresh-morning"]):
                         logger.info("✅ [清晨刷新] 已启动 --refresh-morning")
                     else:
                         logger.warning("⚠️ [清晨刷新] 启动失败")
 
-        asyncio.create_task(morning_refresh_scheduler())
-        logger.info("⏰ [清晨刷新] 定时器已注册 (9:20 自动刷新 Woody/汇率/VPS)")
+        # [AI-2026-08-02] 总开关：设 ARB_NO_DAILY_UPDATER=1 可完全不注册清晨刷新定时器。
+        # 用途：某个部署副本不需要自己触发 daily_updater（例如纯展示副本、或由外部 cron 统一调度）。
+        # 注意：ARM 已配通东京 VPS 后，9:20 清晨刷新是其静态因子的唯一自动更新入口，
+        #      在 ARM 上开启此开关会让静态数据重新变死，请谨慎。
+        if os.environ.get('ARB_NO_DAILY_UPDATER', '0') == '1':
+            logger.info("⏸️ [清晨刷新] 已被 ARB_NO_DAILY_UPDATER=1 禁用，定时器未注册")
+        else:
+            asyncio.create_task(morning_refresh_scheduler())
+            logger.info(f"⏰ [清晨刷新] 定时器已注册 ({_MR_H:02d}:{_MR_M:02d} 自动刷新 Woody/汇率/VPS)")
 
         # 7. [V9.0] 净值定时更新：下午 18:00 / 19:30 / 21:00 自动补跑 step4
         global _nav_last_updated, _nav_scheduled_today_date
@@ -574,29 +616,39 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Failed during backend startup: {e}")
         system_status.add_milestone("ERROR", f"系统启动自检异常: {e}")
 
-    # 4.6 [2026-07-31] 实时估值冻结调度器：每日 15:00:05 把当时 rt_val/rt_premium 快照到 database/rt_freeze.json
+    # 4.6 [2026-07-31] 实时估值冻结调度器：每日收盘后把当时 rt_val/rt_premium 快照到 database/rt_freeze.json
     # 主看板收盘后直接显示冻结值 + 「15:00冻结」标签。依赖后端常驻，无需人工。
-    freeze_scheduler = None
+    # [AI-2026-08-03] 弃用 apscheduler（后端启动解释器环境不一致时常缺失 → 冻结功能失效），
+    # 改用与「收盘后流水线」同构的 asyncio 循环，零外部依赖、任何 Python 均可运行。
     try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.triggers.cron import CronTrigger
         from services.realtime_freeze import snapshot_realtime_freeze, load_realtime_freeze
         from datetime import datetime as _dt
 
-        freeze_scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
-        freeze_scheduler.add_job(
-            lambda: snapshot_realtime_freeze(fund_service),
-            CronTrigger(day_of_week='mon-fri', hour=15, minute=0, second=5, timezone='Asia/Shanghai'),
-            id='realtime_freeze_daily',
-            replace_existing=True,
-        )
-        freeze_scheduler.start()
-        logger.info("[FREEZE] 实时估值冻结调度器已启动（每日 15:00:05）")
+        async def _realtime_freeze_loop():
+            _fz_done = set()
+            while True:
+                await asyncio.sleep(60)
+                _n = _dt.now()
+                if _n.weekday() in (5, 6):
+                    _fz_done.clear()
+                    continue
+                _today = _n.strftime('%Y-%m-%d')
+                # 触发窗口：15:00 之后（含盘中才启动的补跑），每日仅一次
+                if _today not in _fz_done and (_n.hour > 15 or (_n.hour == 15 and _n.minute >= 1)):
+                    _fz_done.add(_today)
+                    try:
+                        snapshot_realtime_freeze(fund_service)
+                        logger.info("[FREEZE] 实时估值已冻结快照 (15:00)")
+                    except Exception as _e:
+                        logger.error(f"[FREEZE] 快照失败: {_e}")
+
+        asyncio.create_task(_realtime_freeze_loop())
+        logger.info("[FREEZE] 实时估值冻结调度器已启动（每日 15:00 后快照，asyncio 零依赖）")
         system_status.add_milestone("SUCCESS", "实时估值冻结调度器已启动")
 
         # 启动兜底：若此刻已过 15:00 且今日尚未冻结（如后端盘中才启动），立即补快照一次
         _now = _dt.now()
-        if _now.hour >= 15:
+        if _now.weekday() not in (5, 6) and _now.hour >= 15:
             _fz = load_realtime_freeze()
             if not _fz or _fz.get('date') != _now.strftime('%Y-%m-%d'):
                 snapshot_realtime_freeze(fund_service)
@@ -604,18 +656,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[FREEZE] 调度器启动失败（冻结功能停用，其余正常）: {e}")
         system_status.add_milestone("ERROR", f"冻结调度器启动失败: {e}")
-        freeze_scheduler = None
 
     yield
 
-    # [2026-07-31] 关闭冻结调度器，避免后台线程泄漏
-    if freeze_scheduler is not None:
-        try:
-            freeze_scheduler.shutdown(wait=False)
-            logger.info("[FREEZE] 冻结调度器已关闭")
-        except Exception:
-            pass
-
+    # [AI-2026-08-03] 冻结调度器已改为 asyncio 任务（随进程退出自动回收），无需显式 shutdown
     logger.info("🛠️ Shutting down ArbNext Backend...")
     await dashboard_snapshot_service.stop()
     await sampler_service.stop()
@@ -767,6 +811,40 @@ async def get_dashboard(watchlist: str = None, category: str = None):
         logger.error(traceback.format_exc())  # 添加详细堆栈跟踪
         system_status.add_milestone("ERROR", msg)
         return JSONResponse(status_code=500, content={"status": "error", "message": msg})
+
+@app.get("/api/status")
+async def get_status():
+    """运维状态接口（东哥专用，不改东京程序）。
+    返回：运行模式、估值快照时间、各行情源健康、上次推送东京时间、运行时长。
+    用途：直接 curl <本机或ARM>:8000/api/status 即可知行情从哪来、新不新、对不对。
+    """
+    try:
+        snapshot = dashboard_snapshot_service.get_snapshot()
+        sources = snapshot.get("source_status", {}) or {}
+        # 方案甲：ARM 部署目录的 .last_push 记录上次推送东京时间（本地主程序无此文件则为 None）
+        last_push = None
+        for cand in [
+            os.path.expanduser("~/arbtest/deploy/.last_push"),
+            os.path.join(backend_dir, "..", "deploy", ".last_push"),
+        ]:
+            try:
+                if os.path.exists(cand):
+                    with open(cand) as fh:
+                        last_push = fh.read().strip()
+                    break
+            except Exception:
+                pass
+        return {
+            "status": "ok",
+            "mode": "DASHBOARD_MODE" if DASHBOARD_MODE else "full",
+            "dashboard_updated_at": snapshot.get("updated_at"),
+            "stale": snapshot.get("stale", False),
+            "sources": sources,
+            "last_push_to_tokyo": last_push,
+            "uptime_seconds": int(time.time() - START_TIME),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 @app.get("/api/market/overview")
 async def get_market():
@@ -2683,6 +2761,19 @@ async def get_realtime_quote(code: str):
     return JSONResponse(status_code=404, content={"status": "error", "message": "Quote not found"})
 
 
+# [AI-2026-08-03] 双源盘口对比（只读，供实时沙盘对比 IB 与富途的时效/准确性）。
+# 估值计算仍只用 IB，本接口仅展示两源的 bid/ask/量，不做任何计算/门禁。
+@app.get("/api/market/realtime_dual")
+async def get_realtime_dual(code: str = None, codes: str = None):
+    syms = []
+    if codes:
+        syms = [s.strip() for s in codes.split(',') if s.strip()]
+    elif code:
+        syms = [code.strip()]
+    result = {s: market_data_service.get_dual_quote(s) for s in syms}
+    return {"status": "ok", "data": result}
+
+
 @app.get("/api/funds/realtime_est")
 async def get_funds_realtime_est():
     """批量实时估值快照 —— 与主页主面板同源(fund_service.get_unified_dashboard_data)。
@@ -2702,6 +2793,9 @@ async def get_funds_realtime_est():
             continue
         out[code] = {
             "price": r.get("price"),
+            # [AI-2026-08-03] realtime_price 是盘中 LOF 实时价（腾讯/新浪），与 DB 收盘价(price) 不同。
+            # H5 "现价"字段应优先用 realtime_price（src=realtime 时），否则显示昨收价误导用户。
+            "realtime_price": r.get("realtime_price"),
             "rt_val": r.get("rt_val"),
             "rt_premium": r.get("rt_premium"),
             "category": r.get("category"),
@@ -2858,6 +2952,216 @@ async def get_silver_ratio():
         return {"status": "error", "message": str(e)}
     finally:
         conn.close()
+
+
+# ==============================================================
+# [AI-2026-08-02] 东京 H5 后台维护面板（本机主程序内置，东哥专用）
+# --------------------------------------------------------------
+# 背景：hehuan.qzz.io 由东京 VPS 用 Nginx 静态托管，我们不掌握它的"后台"。
+#      但本机主程序手握三样东西：
+#        ① 本机 ground-truth 估值（arbcore 现算，可作比对基准）
+#        ② 东京 SFTP 凭据（account_private.py 的 VPS_*，路线1 推送脚本已在用）
+#        ③ 本机 /api/status（本机实例健康）
+#      所以"看东京对不对、不对一键重推"放在本机主程序是最自然的落点。
+# 原则：只读公网 JSON + 与本机估值逐只比对 + 手动重推；东京程序零改动。
+#      电脑关机时由 ARM 的 systemd timer 自动顶上，两者互补。
+# ==============================================================
+# 取数逻辑抽在 arbcore/utils/tokyo_client.py（处理了 IPv6 黑洞 + CF 403 两个坑），
+# 与命令行诊断脚本 arbcore/scripts/check_tokyo_reachable.py 共用同一份实现。
+from arbcore.utils.tokyo_client import (
+    TOKYO_BASE,
+    fetch_tokyo_json as _tokyo_fetch,
+    age_minutes as _age_min,
+)
+
+H5WEB_DIR = os.path.join(arbcore_parent, "deploy", "H5web")
+
+
+@app.get("/api/tokyo/status")
+async def tokyo_status():
+    """东京 H5 当前对外提供的数据是什么、什么时候生成的、新不新鲜。"""
+    out = {
+        "status": "ok",
+        "tokyo_base": TOKYO_BASE,
+        "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        d = _tokyo_fetch("fund_data.json")
+        tabs = d.get("tabs") or {}
+        out["fund_data"] = {
+            "ok": True,
+            "generated_at": d.get("generated_at"),
+            "age_minutes": _age_min(d.get("generated_at")),
+            "source": (d.get("meta") or {}).get("source"),
+            "tabs": {k: len(v or []) for k, v in tabs.items()},
+            "total": sum(len(v or []) for v in tabs.values()),
+        }
+    except Exception as e:
+        out["fund_data"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    try:
+        d = _tokyo_fetch("fund_rt.json")
+        out["fund_rt"] = {
+            "ok": True,
+            "generated_at": d.get("generated_at"),
+            "age_minutes": _age_min(d.get("generated_at")),
+            "count": len(d.get("funds") or []),
+            "note": (d.get("meta") or {}).get("note"),
+        }
+    except Exception as e:
+        out["fund_rt"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    try:
+        snap = dashboard_snapshot_service.get_snapshot()
+        out["local"] = {
+            "updated_at": snap.get("updated_at"),
+            "stale": snap.get("stale", False),
+            "count": len(snap.get("data") or []),
+        }
+    except Exception as e:
+        out["local"] = {"error": f"{type(e).__name__}: {e}"}
+    return out
+
+
+@app.get("/api/tokyo/diff")
+async def tokyo_diff(tol: float = 0.5):
+    """东京当前数据 vs 本机现算估值，逐只比对。
+
+    tol: 静态估值相对偏差阈值(%)，超过则标记 deviate。
+    """
+    try:
+        d = _tokyo_fetch("fund_data.json")
+    except Exception as e:
+        return JSONResponse(status_code=502, content={
+            "status": "error", "message": f"读取东京 fund_data.json 失败: {e}"})
+
+    tokyo = {}
+    for cat, items in (d.get("tabs") or {}).items():
+        for it in (items or []):
+            tokyo[str(it.get("code"))] = dict(it, cat=cat)
+
+    try:
+        snap = dashboard_snapshot_service.get_snapshot()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "status": "error", "message": f"读取本机快照失败: {e}"})
+    local = {str(f.get("fund_code")): f for f in (snap.get("data") or [])}
+
+    # [AI-2026-08-02] 本机快照还没算出来时直接说清楚，不要把 30 只全标成 extra_tokyo 误导人
+    if not local:
+        return {
+            "status": "local_not_ready",
+            "message": "本机估值快照尚未生成（主程序刚启动或未到刷新点），暂无法比对。等本机算出一轮再点「重新比对」。",
+            "tokyo_generated_at": d.get("generated_at"),
+            "tokyo_source": (d.get("meta") or {}).get("source"),
+            "tokyo_total": len(tokyo),
+            "local_updated_at": snap.get("updated_at"),
+            "total": 0,
+            "problem": 0,
+            "rows": [],
+        }
+
+    rows, n_bad = [], 0
+    for code in sorted(set(tokyo) | set(local)):
+        t = tokyo.get(code)
+        l = local.get(code)
+        tsv = (t or {}).get("static_val")
+        lsv = (l or {}).get("static_val")
+        dev = round((tsv / lsv - 1) * 100, 3) if (tsv and lsv) else None
+        if t is None:
+            flag = "missing_tokyo"      # 本机有、东京没有（东京数据缺只）
+        elif l is None:
+            flag = "extra_tokyo"        # 东京有、本机没有（可能是已下架/分类变更）
+        elif tsv is None or lsv is None:
+            flag = "no_static_val"
+        elif abs(dev) > tol:
+            flag = "deviate"            # 估值对不上，重点看
+        else:
+            flag = "ok"
+        if flag != "ok":
+            n_bad += 1
+        rows.append({
+            "code": code,
+            "name": (t or {}).get("name") or (l or {}).get("fund_name"),
+            "cat": (t or {}).get("cat") or (l or {}).get("category"),
+            "tokyo_static_val": tsv,
+            "local_static_val": round(lsv, 4) if lsv is not None else None,
+            "dev_pct": dev,
+            "tokyo_price": (t or {}).get("price"),
+            "local_price": (l or {}).get("price"),
+            "tokyo_static_val_date": (t or {}).get("static_val_date"),
+            "tokyo_nav_date": (t or {}).get("nav_date"),
+            "flag": flag,
+        })
+    return {
+        "status": "ok",
+        "tol_pct": tol,
+        "tokyo_generated_at": d.get("generated_at"),
+        "tokyo_source": (d.get("meta") or {}).get("source"),
+        "local_updated_at": snap.get("updated_at"),
+        "total": len(rows),
+        "problem": n_bad,
+        "rows": rows,
+    }
+
+
+@app.post("/api/tokyo/repush")
+async def tokyo_repush(request: Request):
+    """用【本机】数据重推东京（export -> upload[-> push_rt]）。
+
+    需要 body {"confirm": true}，避免误触。
+    注意：这会把东京上 ARM 推的数据覆盖成本机数据；下次 ARM timer 到点(每10分钟)
+    又会推回 ARM 版本。所以这是"人工干预/救火"手段，不是常态。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not body.get("confirm"):
+        return JSONResponse(status_code=400, content={
+            "status": "error", "message": "需要 confirm=true 才执行重推"})
+
+    steps = [
+        ("export 本机估值", os.path.join(H5WEB_DIR, "export_fund_data_json.py")),
+        ("upload 东京", os.path.join(H5WEB_DIR, "upload_fund_data.py")),
+    ]
+    if body.get("include_rt"):
+        steps.append(("push_rt 实时快照", os.path.join(H5WEB_DIR, "push_rt.py")))
+
+    results = []
+    for name, script in steps:
+        if not os.path.exists(script):
+            results.append({"step": name, "ok": False, "output": f"脚本不存在: {script}"})
+            break
+        try:
+            p = subprocess.run(
+                [sys.executable, script],
+                cwd=arbcore_parent, capture_output=True, text=True,
+                timeout=180, encoding="utf-8", errors="replace",
+            )
+            ok = (p.returncode == 0)
+            results.append({
+                "step": name, "ok": ok, "returncode": p.returncode,
+                "output": ((p.stdout or "") + (p.stderr or ""))[-3000:],
+            })
+            if not ok:
+                break
+        except Exception as e:
+            results.append({"step": name, "ok": False, "output": f"{type(e).__name__}: {e}"})
+            break
+
+    all_ok = bool(results) and all(r["ok"] for r in results)
+    logger.info(f"[东京维护] 手动重推结果 all_ok={all_ok} steps={[r['step'] for r in results]}")
+    return {"status": "ok" if all_ok else "error", "results": results}
+
+
+@app.get("/api/tokyo/admin")
+async def tokyo_admin_page():
+    """东京 H5 后台维护面板（自包含单页，无需前端构建）。"""
+    from fastapi.responses import HTMLResponse
+    page_path = os.path.join(H5WEB_DIR, "tokyo_admin.html")
+    if os.path.exists(page_path):
+        with open(page_path, "r", encoding="utf-8") as fh:
+            return HTMLResponse(fh.read())
+    return HTMLResponse("<h3>缺少 deploy/H5web/tokyo_admin.html</h3>", status_code=404)
 
 
 # ==============================================================

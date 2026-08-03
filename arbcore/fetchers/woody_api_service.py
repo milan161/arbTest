@@ -188,8 +188,9 @@ class WoodyAPIService:
             
             pos = f_data.get('position')
             pos = float(pos)/100.0 if pos and float(pos) > 2 else (float(pos) if pos else 1.0)
-            cal = float(f_data['calibration']) if 'calibration' in f_data else None
-            hed = float(f_data['hedge']) if 'hedge' in f_data else None
+            # 兼容「键存在但值为 None」的网页降级数据（API 路径恒为数值，不受影响）
+            cal = float(f_data['calibration']) if f_data.get('calibration') is not None else None
+            hed = float(f_data['hedge']) if f_data.get('hedge') is not None else None
             nav_val = float(f_data['netvalue']) if f_data.get('netvalue') else None
             
             db.upsert_fund_factor(date=b_date, fund_code=fund_code, calibration=cal, hedge=hed, position=pos, nav=nav_val)

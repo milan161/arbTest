@@ -292,6 +292,7 @@ class DatabaseManager:
     def upsert_fund_factor(self, *args, **kwargs): return self.funds.upsert_fund_factor(*args, **kwargs)
     def update_fund_pos_ratio(self, *args, **kwargs): return self.funds.update_fund_pos_ratio(*args, **kwargs)
     def upsert_fund_basket_weight(self, *args, **kwargs): return self.funds.upsert_fund_basket_weight(*args, **kwargs)
+    def prune_fund_basket_weights(self, *args, **kwargs): return self.funds.prune_fund_basket_weights(*args, **kwargs)
     def get_latest_fund_factor(self, *args, **kwargs): return self.funds.get_latest_fund_factor(*args, **kwargs)
     def get_fund_basket(self, *args, **kwargs): return self.funds.get_fund_basket(*args, **kwargs)
     # [AI-2026-07-25] 已删除 get_latest_fund_price / batch_save_fund_prices / sync_jsl_fund_list / get_jsl_fund_list 委托（表废弃死代码）

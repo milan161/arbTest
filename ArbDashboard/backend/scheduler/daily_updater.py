@@ -25,6 +25,32 @@ try:
 except ImportError:
     VPS_HOST, VPS_PORT, VPS_USER, VPS_PASSWORD, VPS_DATA_DIR, VPS_KEY_PATH, VPS_KEY_PASSWORD = None, 22, None, None, None, None, None
 
+# [AI-2026-08-02] 展示副本模式（ARM）：只自采「A股行情 + 富途美股夜盘」，
+# 其余静态数据一律从东京 VPS 只读，不在展示副本上重复造一套爬虫。
+DASHBOARD_MODE = os.environ.get('ARB_DASHBOARD_MODE', '0') == '1'
+
+# [AI-2026-08-03] 无日K线基金跳过名单：腾讯/新浪均无法提供日K线的基金（如债券/封闭LOF），
+# 首次探测到即写入 arbcore/config/no_kline_funds.json，后续启动直接跳过，不再刷 WARNING。
+NO_KLINE_DENYLIST_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'config', 'no_kline_funds.json'))
+
+def _load_no_kline_denylist():
+    try:
+        if os.path.exists(NO_KLINE_DENYLIST_PATH):
+            with open(NO_KLINE_DENYLIST_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_no_kline_denylist(d):
+    try:
+        os.makedirs(os.path.dirname(NO_KLINE_DENYLIST_PATH), exist_ok=True)
+        with open(NO_KLINE_DENYLIST_PATH, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 class DailyUpdater(BaseApp):
     def __init__(self):
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +88,9 @@ class DailyUpdater(BaseApp):
         """
         [架构升级] 从云端增量同步所有缺失的历史数据 (支持断网补全)
         """
-        if not all([VPS_HOST, VPS_USER, VPS_PASSWORD]):
+        # [AI-2026-08-02] 降权：允许「仅密钥」认证（展示副本 arbsync + 密钥），
+        # 不再强制要求 VPS_PASSWORD。需满足 主机+用户+至少一种凭据。
+        if not VPS_HOST or not VPS_USER or (not VPS_PASSWORD and not VPS_KEY_PATH):
             return []
         
         # 数据目录迁移到 ArbDashboard/data/（与脚本目录解耦）
@@ -260,6 +288,17 @@ class DailyUpdater(BaseApp):
             self.logger.info(f"✅ [VPS] 今日数据已通过云端同步完成，已标记 {sync_key} 成功。")
             return True
 
+        # [AI-2026-08-02] 展示副本（ARM）：woody 因子只读东京 VPS，不走 API 直采 / 网页爬虫，
+        # 也不触发"拿不到今日数据即熔断"。理由：ARM 是暴露在公网的纯展示副本，
+        # 东京主程序才是 woody 的唯一真源；东京当日产物尚未落盘时（东京固定 09:20 落盘），
+        # 展示副本沿用 T-1 因子是可接受的，熔断只会让整条流水线白停。
+        if DASHBOARD_MODE:
+            if vps_history_data:
+                self.logger.info(f"🖥️ [DASHBOARD_MODE] woody 因子已从东京同步 {len(vps_history_data)} 天，跳过 API/爬虫兜底与熔断")
+            else:
+                self.logger.warning("🖥️ [DASHBOARD_MODE] 东京暂无新增 woody 因子（可能当日尚未落盘），沿用库内既有因子，不熔断")
+            return True
+
         # Level 1: 实时 API (确保拿回最新的，或者作为 VPS 失败后的兜底)
         try:
             self.logger.info("🛡️ [Level 1] 尝试通过实时 API 刷新今日因子...")
@@ -270,27 +309,59 @@ class DailyUpdater(BaseApp):
         except Exception as e:
             self.logger.warning(f"⚠️ [Level 1] API 尝试失败: {e}")
 
-        # Level 2: Web Crawler (API 故障时的强力补位)
+        # Level 2: Web Crawler（无 woody API key 的降级通道，群友免 key 爬网页拿因子）
+        # 东哥拍板保留：群里多数人无付费 API key，这是他们的命根子。
+        # 2026-08-02 实测：B/C 页【免登录】即可拿 仓位/校准/价格/权重；仅 step6 区域价历史需登录。
         try:
-            self.logger.info("🛡️ [Level 2] 触发网页爬虫补位机制 (模拟人工提取因子)...")
-            # 爬取核心因子：校准值、仓位、权重等
-            # 注意：WoodyWebCrawler 需要根据不同基金类型调用不同方法
-            # 这是一个示例化的补位流程
-            crawler_success = False
-            
-            # 尝试获取校准值
-            calibration_data = self.woody_crawler.get_lof_calibration_values(self.config)
-            if calibration_data and len(calibration_data) > 0:
-                self.logger.info(f"✅ [Level 2] 爬虫成功提取校准值因子 ({len(calibration_data)} 条)")
-                # 将爬到的数据转换并入库 (此处逻辑应与 WoodyAPIService.process 保持对齐)
-                # 为了保持代码简洁，这里假定入库逻辑已在 crawler 或 service 中封装
-                crawler_success = True
-            
-            if crawler_success:
-                self.logger.info("✅ [Level 2] 网页爬虫补位成功，因子已更新。")
+            self.logger.info("🛡️ [Level 2] 触发网页爬虫补位（无 woody API key 降级通道）...")
+            self._login_woody_if_needed()  # 网站账号登录：B/C 免登录无害；仅 step6/A页需登录时才有用
+
+            backup = self.woody_crawler.get_woody_backup_data(self.config)
+            if not backup:
+                self.logger.error("❌ [Level 2] 爬虫未从 C 页返回任何基金因子数据")
+            else:
+                merged = {}
+                for fund_key, fd in backup.items():
+                    bare_code = fund_key[2:] if fund_key[:2].upper() in ('SZ', 'SH') else fund_key
+                    # (b) 合并 B 页权重：C 页无权重列，权重只在 holdingscn（旧比例%）
+                    weights = self.woody_crawler.get_woody_holdings_data(bare_code) or []
+                    wmap = {}
+                    for w in weights:
+                        s = str(w['symbol'])
+                        # B 页区域变种不带 ^ 前缀（如 GLD-EU），与 C 页 ^GLD-EU 对齐
+                        if ('-JP' in s or '-EU' in s or '-HK' in s) and not s.startswith('^'):
+                            s = '^' + s
+                        try:
+                            wmap[s] = float(w['weight'])
+                        except (ValueError, TypeError):
+                            pass
+                    sh = fd.get('symbol_hedge', {}) or {}
+                    # 填权重
+                    for etf, info in sh.items():
+                        try:
+                            info['ratio'] = float(wmap.get(etf, info.get('ratio', 0) or 0))
+                        except (ValueError, TypeError):
+                            info['ratio'] = 0.0
+                    # 若 B 页有权重但 C 页没价格（罕见），以 B 页建壳，确保权重入库
+                    for etf, w in wmap.items():
+                        if etf not in sh:
+                            try:
+                                sh[etf] = {'price': 0.0, 'ratio': float(w)}
+                            except (ValueError, TypeError):
+                                pass
+                    fd['symbol_hedge'] = sh
+                    merged[fund_key] = fd
+
+                # 复用 process() 一次写 6 张表（与 API 路径完全对齐）
+                WoodyAPIService.process(self.db, merged, 'woody_lof')
+                # 落原始数据湖 + 防刷标，避免次日重复爬
+                raw_json = json.dumps(merged, ensure_ascii=False, indent=2)
+                self.db.save_raw_api_data(date=today_str, source='woody_lof', raw_content=raw_json)
+                self.db.mark_access_synced(today_str, sync_key)
+                self.logger.info(f"✅ [Level 2] 网页爬虫补位成功，已写入 {len(merged)} 只基金的因子（仓位/校准/价格/权重）")
                 return True
         except Exception as e:
-            self.logger.error(f"❌ [Level 2] 网页爬虫补位也失败: {e}")
+            self.logger.error(f"❌ [Level 2] 网页爬虫补位失败: {e}", exc_info=True)
 
         # 🛑 安全熔断：拒绝使用 T-1 历史数据
         error_msg = "🚨 [致命错误] 无法获取今日最新的 Woody 因子数据！为防止估值失真导致误判，系统已启动安全熔断，停止后续流水线。"
@@ -437,6 +508,14 @@ class DailyUpdater(BaseApp):
                 except Exception as e:
                     self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 汇率时出错: {e}")
 
+        # [AI-2026-08-02] 展示副本（ARM）汇率只读东京 VPS：Level 0 之后直接收工，
+        # 不跑下面 Level 1 的任何本地直连抓取（中间价/在岸价/离岸价/日元）。
+        # 理由：ARM 是暴露在公网的纯展示副本，静态数据统一以东京为唯一真源，
+        #       在此再爬一遍既是重复造轮子，也会造成东京/ARM 两套数值不一致。
+        if DASHBOARD_MODE:
+            self.logger.info("🖥️ [DASHBOARD_MODE] 汇率只读东京 VPS，跳过全部本地直连抓取（Level 1 整段）")
+            return
+
         # 检查今天是否已经同步到最新的汇率
         if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
             self.logger.info("✅ 今日已同步过人民币中间价，跳过实时抓取。")
@@ -484,6 +563,24 @@ class DailyUpdater(BaseApp):
                         self.logger.info(f"✅ [Level 1] 在岸价 USDCNY 入库: {spot_date} -> {spot_rate}")
         except Exception as e:
             self.logger.error(f"❌ [Level 1] 在岸价直连兜底失败: {e}")
+        # [AI-2026-08-02] JPY/CNY 在岸价——ETF 实时估值 fx_base 用（与 USD 在岸价同管道、同时点 9:20 清晨刷新）
+        # 铁律：ETF 实时估值两端都在岸价；LOF 两端都中间价；静态估值一律中间价。QDII日本 4 只都是 ETF。
+        try:
+            conn_jpy_spot = self.db._get_conn()
+            has_jpy_spot = conn_jpy_spot.execute(
+                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND jpy_cny_spot IS NOT NULL", (today_str,)
+            ).fetchone()[0] > 0
+            conn_jpy_spot.close()
+            if not has_jpy_spot:
+                jpy_spot_data = data_fetcher.fetch_jpy_cny_spot_rate()
+                if jpy_spot_data:
+                    jpy_spot_date = pd.to_datetime(str(jpy_spot_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                    jpy_spot_rate = jpy_spot_data.get('jpy_cny_spot')
+                    if jpy_spot_rate is not None:
+                        self.db.upsert_exchange_rate(jpy_spot_date, jpy_cny_spot=jpy_spot_rate)
+                        self.logger.info(f"✅ [Level 1] JPY/CNY 在岸价入库: {jpy_spot_date} -> {jpy_spot_rate}")
+        except Exception as e:
+            self.logger.error(f"❌ [Level 1] JPY/CNY 在岸价直连失败: {e}")
         # 离岸价 CNH
         try:
             conn_cnh = self.db._get_conn()
@@ -647,6 +744,15 @@ class DailyUpdater(BaseApp):
         conn_ufl.close()
         self.logger.info(f"📋 共 {len(all_codes)} 只基金，开始从腾讯日K线获取官方收盘价...")
 
+        # [AI-2026-08-03] 无日K线基金跳过名单（持久化）：腾讯/新浪均无日K线的基金（债券/封闭LOF）
+        # 首次探测到即写入 arbcore/config/no_kline_funds.json，后续启动直接跳过，不再刷 WARNING。
+        no_kline = _load_no_kline_denylist()
+        def _prev_trading_day(d):
+            t = d - timedelta(days=1)
+            while t.weekday() >= 5:
+                t -= timedelta(days=1)
+            return t
+
         import requests
 
         for code in all_codes:
@@ -656,6 +762,27 @@ class DailyUpdater(BaseApp):
             # 直接 continue 跳过，当天收盘价永远延迟到次日才入库。改为每次都尝试
             # upsert（幂等无害），今日价是否写入由下方 k_date==today 的时间判断控制。
             tx_code = f"sz{code}" if code.startswith(('0', '1', '3')) else f"sh{code}"
+
+            # [AI-2026-08-03] 跳过已知无日K线基金（债券/封闭LOF 等腾讯新浪均无数据）
+            if code in no_kline:
+                self.logger.debug(f"⏭️ [{code}] 已知无日K线，跳过收盘价采集")
+                continue
+
+            # [AI-2026-08-03] 早跳过：收盘前(15:10 前)且近期收盘价已齐全则跳过重爬，
+            # 避免每次后端启动都重爬全部 ~200 只（幂等但浪费+刷屏）。收盘后(>=15:10)仍爬当日收盘。
+            _chk = datetime.now()
+            if _chk.hour < 15 or (_chk.hour == 15 and _chk.minute < 10):
+                conn_s = self.db._get_conn()
+                latest = conn_s.execute(
+                    "SELECT MAX(date) FROM unified_fund_history WHERE fund_code=? AND price IS NOT NULL", (code,)
+                ).fetchone()
+                conn_s.close()
+                if latest and latest[0]:
+                    latest_d = datetime.strptime(latest[0], '%Y-%m-%d').date()
+                    if latest_d >= _prev_trading_day(_chk.date()):
+                        self.logger.debug(f"⏭️ [{code}] 近期收盘价已齐全，跳过重爬")
+                        continue
+
             try:
                 # 腾讯日K线：返回 [date, open, close, high, low, volume, ...]
                 url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={tx_code},day,,,5,qfq&r=0.{__import__('time').time()}"
@@ -668,7 +795,13 @@ class DailyUpdater(BaseApp):
                 node = data["data"].get(tx_code, {})
                 kline = node.get("day") or node.get("qfqday")
                 if not kline:
-                    self.logger.warning(f"⚠️ [{code}] 腾讯K线无数据")
+                    # [AI-2026-08-03] 首次探测到无K线：写入跳过名单，避免后续每次启动刷 WARNING
+                    if code not in no_kline:
+                        no_kline[code] = "腾讯/新浪均无日K线(债券/封闭LOF)"
+                        _save_no_kline_denylist(no_kline)
+                        self.logger.warning(f"⚠️ [{code}] 腾讯K线无数据（已加入跳过名单，后续不再报错）")
+                    else:
+                        self.logger.debug(f"⏭️ [{code}] 腾讯K线无数据（已在跳过名单）")
                     continue
                 items = list(kline.values()) if isinstance(kline, dict) else kline
 
@@ -883,17 +1016,30 @@ class DailyUpdater(BaseApp):
                 trade_date = content.get('trade_date', file_date)
 
                 if symbol and close_price is not None:
-                    # [AI-2026-07-25] 检查 trade_date 是否与文件名日期一致
-                    # 不一致说明 Yahoo 返回了滞后数据（如日本假期休市导致返回上一交易日）
-                    if trade_date != file_date:
-                        self.logger.warning(f"   ⚠️ [VPS-INDEX] {symbol} {file_date} 的 trade_date={trade_date}（滞后{ (datetime.strptime(file_date, '%Y-%m-%d') - datetime.strptime(trade_date, '%Y-%m-%d')).days }天），跳过写入避免污染 index_history")
-                    else:
-                        self.db.upsert_index_history(
-                            symbol=symbol,
-                            date=trade_date,
-                            close=close_price
-                        )
-                        self.logger.info(f"   ✅ [VPS-INDEX] {symbol} {trade_date} -> close={close_price}")
+                    # [AI-2026-08-02] trade_date 以 VPS 东京脚本返回的「Yahoo 柱真实交易日」为准，
+                    # 不再强求 == file_date。东京采集已挪到收盘后，且周末/日本假期时
+                    # trade_date 自然滞后于 file_date（Yahoo 无该日 bar），属正确表现，应照常入库。
+                    # 仅做轻量断言：不晚于今天(+1天容差)、不过期(>10天) 才写入，避免脏数据。
+                    try:
+                        td = datetime.strptime(trade_date, '%Y-%m-%d').date()
+                        today = datetime.now().date()
+                    except Exception:
+                        self.logger.warning(f"   ⚠️ [VPS-INDEX] {symbol} 日期解析失败 trade_date={trade_date} file_date={file_date}")
+                        continue
+                    if td > today + timedelta(days=1):
+                        self.logger.warning(f"   ⚠️ [VPS-INDEX] {symbol} trade_date={trade_date} 晚于今天，跳过写入")
+                        continue
+                    if (today - td).days > 10:
+                        self.logger.warning(f"   ⚠️ [VPS-INDEX] {symbol} trade_date={trade_date} 距今天{(today - td).days}天，疑似过期，跳过写入")
+                        continue
+                    if td != datetime.strptime(file_date, '%Y-%m-%d').date():
+                        self.logger.info(f"   ℹ️ [VPS-INDEX] {symbol} trade_date={trade_date} ≠ 文件名日期={file_date}（周末/假期正常），照常入库")
+                    self.db.upsert_index_history(
+                        symbol=symbol,
+                        date=trade_date,
+                        close=close_price
+                    )
+                    self.logger.info(f"   ✅ [VPS-INDEX] {symbol} {trade_date} -> close={close_price}")
                 else:
                     self.logger.warning(f"   ⚠️ [VPS-INDEX] {file_date} 数据不完整: {content}")
 

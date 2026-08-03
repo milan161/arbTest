@@ -99,10 +99,26 @@ class TencentRealtimeFetcher(BaseRealtimeFetcher):
                         "time": fields[30],
                         "source": self.name
                     }
-                    # 尝试添加盘口
+                    # [AI-2026-08-03] 5档盘口价格 + 数量。腾讯接口本就含买1量-买5量/卖1量-卖5量
+                    # (fields[10,12,14,16,18]/[20,22,24,26,28])，此前只解析了价格、漏解析量，
+                    # 导致腾讯源盘口买卖数量恒为空。现补齐，并暴露统一字段 bid_size/ask_size(买一量/卖一量)。
+                    def _s_f(v, d=0.0):
+                        try: return float(v)
+                        except: return d
+                    def _s_i(v, d=0):
+                        try: return int(float(v))
+                        except: return d
                     try:
-                        quote["ask"] = [float(fields[19]), float(fields[21]), float(fields[23]), float(fields[25]), float(fields[27])]
-                        quote["bid"] = [float(fields[9]), float(fields[11]), float(fields[13]), float(fields[15]), float(fields[17])]
+                        bid_prices = [_s_f(fields[9]), _s_f(fields[11]), _s_f(fields[13]), _s_f(fields[15]), _s_f(fields[17])]
+                        ask_prices = [_s_f(fields[19]), _s_f(fields[21]), _s_f(fields[23]), _s_f(fields[25]), _s_f(fields[27])]
+                        bid_vol = [_s_i(fields[10]), _s_i(fields[12]), _s_i(fields[14]), _s_i(fields[16]), _s_i(fields[18])]
+                        ask_vol = [_s_i(fields[20]), _s_i(fields[22]), _s_i(fields[24]), _s_i(fields[26]), _s_i(fields[28])]
+                        quote["bid"] = bid_prices
+                        quote["ask"] = ask_prices
+                        quote["bid_vol"] = bid_vol
+                        quote["ask_vol"] = ask_vol
+                        quote["bid_size"] = bid_vol[0]
+                        quote["ask_size"] = ask_vol[0]
                     except: pass
 
                     clean_code = code[2:] if len(code) > 2 and code[2:].isdigit() else code
