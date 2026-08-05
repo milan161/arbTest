@@ -2883,6 +2883,79 @@ async def get_fund_realtime_detail(code: str = Query(..., description="基金代
         return JSONResponse(status_code=404, content={"status": "error", "message": f"未找到 {code} 的实时估值明细"})
     return {"status": "ok", "data": detail}
 
+
+# [AI-2026-08-05] 生产封装入口：单只实时估值（rt_val + premium + 对冲数量），包 analyze_realtime。
+# 供前端 LazyMode / 沙盘估值计算器 替代各自前端的手算估值公式，前后端统一走 canonical 引擎，消除分叉/近似 bug。
+@app.get("/api/funds/realtime_calc")
+async def calc_realtime_valuation(
+    code: str = Query(..., description="基金代码"),
+    lof_price: float = Query(0.0, description="LOF 实时价（默认0→用基准收盘）"),
+    fx: float = Query(0.0, description="当前汇率（默认0→用基准汇率）"),
+    etfs: str = Query("", description="各成分实时价 JSON，如 {\"GLD\":381.4,\"^GLD-EU\":381.0}"),
+    lof_qty: float = Query(0.0, description="LOF 股数（>0 才返回对冲数量）"),
+):
+    """单只实时估值（生产封装 analyze_realtime）—— 前端实时估值统一入口。"""
+    try:
+        import json
+        etf_map = json.loads(etfs) if etfs else {}
+        from arbcore.analysis import analyze_realtime as _ar
+        r = _ar(
+            code,
+            current_price=lof_price if lof_price > 0 else None,
+            current_fx=fx if fx > 0 else None,
+            current_etfs=etf_map,
+            lof_qty=lof_qty if lof_qty > 0 else None,
+        )
+        if not r:
+            return JSONResponse(status_code=422, content={"status": "error", "message": f"{code} 实时估值计算失败（数据缺失）"})
+        return {
+            "status": "ok",
+            "code": code,
+            "rt_val": r.get("rt_val"),
+            "premium": r.get("premium"),
+            "quantity": r.get("quantity"),
+        }
+    except Exception as e:
+        logger.error(f"[{code}] /api/funds/realtime_calc 异常: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+# [AI-2026-08-05] 生产封装入口：期货估值（期货校准 / 纯期货）。包 analyze_realtime_futures /
+# analyze_realtime_pure_futures，消除前端沙盘手算分叉。基准价缺失返回 422（不兜底）。
+@app.get("/api/funds/realtime_futures_calc")
+async def calc_realtime_futures_valuation(
+    code: str = Query(..., description="基金代码"),
+    mode: str = Query("calib", description="calib=期货校准 / pure=纯期货"),
+    futures_price: float = Query(..., description="期货合约实时价"),
+    calibration: float = Query(1.0, description="期现校准系数（calib 模式用）"),
+    lof_price: float = Query(0.0, description="LOF 实时价（默认0→用基准收盘）"),
+    fx: float = Query(0.0, description="当前汇率（默认0→用基准汇率）"),
+    lof_qty: float = Query(0.0, description="LOF 股数（>0 才返回对冲手数）"),
+):
+    """期货实时估值（生产封装）—— 前端沙盘期货校准/纯期货统一入口。"""
+    try:
+        from arbcore.analysis import analyze_realtime_futures, analyze_realtime_pure_futures
+        if mode == "pure":
+            r = analyze_realtime_pure_futures(
+                code, futures_price,
+                current_price=lof_price if lof_price > 0 else None,
+                current_fx=fx if fx > 0 else None,
+                lof_qty=lof_qty if lof_qty > 0 else None)
+        else:
+            r = analyze_realtime_futures(
+                code, futures_price, calibration=calibration,
+                current_price=lof_price if lof_price > 0 else None,
+                current_fx=fx if fx > 0 else None,
+                lof_qty=lof_qty if lof_qty > 0 else None)
+        if not r:
+            return JSONResponse(status_code=422,
+                                content={"status": "error", "message": f"{code} 期货估值计算失败（数据缺失：期货基准价/净值/汇率/position）"})
+        return {"status": "ok", "code": code, "mode": r.get("mode"),
+                "rt_val": r.get("rt_val"), "premium": r.get("premium"),
+                "base_future": r.get("base_future"), "quantity": r.get("quantity")}
+    except Exception as e:
+        logger.error(f"[{code}] /api/funds/realtime_futures_calc 异常: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
 @app.get("/api/market/historical/nav/{code}")
 async def get_hist_nav(code: str, start_date: str = None):
     data = market_data_service.get_historical_nav(code, start_date=start_date)

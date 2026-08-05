@@ -13,7 +13,7 @@
  * - ETF价 → quoteObj.bid（买一价）
  */
 import { ref, computed, reactive, watch, onMounted } from 'vue'
-import { getFundValuationMeta, getRealtimeQuote } from '../api'
+import { getFundValuationMeta, getRealtimeQuote, getRealtimeCalc, getRealtimeFuturesCalc } from '../api'
 
 export function useValuationCalculator() {
   // ============================================================
@@ -221,197 +221,74 @@ export function useValuationCalculator() {
   // 4. ETF 实时估值计算
   // ============================================================
 
-  /** ETF 实时估值 */
-  const etfVal = computed(() => {
-    if (!meta.value || !meta.value.base_data) return 0
-    const bd = meta.value.base_data
-    const cfg = meta.value.fund_config
+  // [AI-2026-08-05] etfVal 改为后端封装驱动（recalcBackend 填充），删除前端手算公式。
+  const etfVal = ref(0)
 
-    const baseNav = parseFloat(bd.nav) || 0
-    const pos = positionRatio.value
-    const currentFx = parseFloat(latestExchangeRateInput.value as any) || 0
-    const baseFx = parseFloat(bd.exchange_rate) || 0
+  // [AI-2026-08-05] futCalibVal 改为后端封装驱动（recalcBackend 填充），删除前端手算公式。
+  const futCalibVal = ref(0)
 
-    if (baseNav <= 0 || currentFx <= 0) return 0
+  // [AI-2026-08-05] pureFutVal 改为后端封装驱动（recalcBackend 填充），删除前端手算公式。
+  const pureFutVal = ref(0)
 
-    const bHedge = parseFloat(bd.hedge) || 0
-    const portfolio = cfg.valuation_portfolio || cfg.hedging_portfolio || []
+  // [AI-2026-08-05] 后端封装估值重算：把当前手填 what-if 输入发往 canonical 引擎，回填三个估值 ref。
+  // 失败策略：后端 422/缺数据 → 置 0（模板显示 '-'）；网络异常 → 保留上次好值（绝不兜底假数）。
+  let recalcTimer: any = null
+  const scheduleRecalc = () => {
+    if (recalcTimer) clearTimeout(recalcTimer)
+    recalcTimer = setTimeout(() => {
+      void recalcBackend()
+    }, 250)
+  }
 
-    // 单个标的：直接公式
-    if (bHedge > 0 && portfolio.length === 1) {
-      const p = portfolio[0]
-      const sym = p.symbol || ''
-      const cleanSym = sym.replace(/^\^/, '').split('-')[0].toUpperCase()
-      const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
-      if (cPrice > 0) {
-        return baseNav * (1.0 - pos) + (cPrice * currentFx) / bHedge
+  const recalcBackend = async () => {
+    if (!meta.value || !fundCode.value) return
+    const code = fundCode.value
+    const fx = parseFloat(latestExchangeRateInput.value as any) || 0
+    const lof = parseFloat(simLofPrice.value as any) || 0
+    try {
+      // ETF 模式（主估值面板常显，只要有篮子成分价就重算）
+      if (Object.keys(testEtfPrices).length > 0) {
+        const r = await getRealtimeCalc({ code, lof_price: lof, fx, etfs: JSON.stringify(testEtfPrices) })
+        if (r.data.status === 'ok' && r.data.rt_val && r.data.rt_val > 0) etfVal.value = r.data.rt_val
+        else etfVal.value = 0
       }
+      // 期货校准模式
+      if (showFutCalib.value && isComplexCategory.value) {
+        const fp = parseFloat(testFutPrice.value as any)
+        const cb = parseFloat(testFutCalib.value as any)
+        if (fp > 0 && cb > 0) {
+          const r = await getRealtimeFuturesCalc({
+            code, mode: 'calib', futures_price: fp, calibration: cb, lof_price: lof, fx,
+          })
+          if (r.data.status === 'ok' && r.data.rt_val && r.data.rt_val > 0) futCalibVal.value = r.data.rt_val
+          else futCalibVal.value = 0
+        } else futCalibVal.value = 0
+      }
+      // 纯期货模式
+      if (showPureFut.value && isComplexCategory.value) {
+        const fp = parseFloat(testFutPrice.value as any)
+        if (fp > 0) {
+          const r = await getRealtimeFuturesCalc({
+            code, mode: 'pure', futures_price: fp, lof_price: lof, fx,
+          })
+          if (r.data.status === 'ok' && r.data.rt_val && r.data.rt_val > 0) pureFutVal.value = r.data.rt_val
+          else pureFutVal.value = 0
+        } else pureFutVal.value = 0
+      }
+    } catch (e) {
+      // 网络异常：保留上次好值，不兜底
+      console.warn('[recalcBackend] 后端估值请求失败，保留上次结果', e)
     }
+  }
 
-    // basket 为空时，用 trade_etf 兜底
-    if (bHedge > 0 && portfolio.length === 0 && cfg.trade_etf) {
-      const cleanSym = cfg.trade_etf.replace(/^\^/, '').toUpperCase()
-      const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
-      if (cPrice > 0) {
-        return baseNav * (1.0 - pos) + (cPrice * currentFx) / bHedge
-      }
-    }
-
-    // 多标的：加权变化率
-    if (portfolio.length > 0) {
-      const fxChange = currentFx / (baseFx || 1.0)
-      let wChange = 0.0
-
-      for (const p of portfolio) {
-        const fullSym = p.symbol || ''
-        const cleanSymKey = fullSym.replace(/^\^/, '')
-        const caretSymKey = '^' + cleanSymKey
-        const bPrice =
-          parseFloat(
-            bd[caretSymKey] !== undefined
-              ? bd[caretSymKey]
-              : bd[cleanSymKey] !== undefined
-                ? bd[cleanSymKey]
-                : bd[fullSym] || 0,
-          ) || 0
-        const cleanSym = fullSym.replace(/^\^/, '').split('-')[0].toUpperCase()
-        const cPrice = parseFloat(testEtfPrices[cleanSym] as any) || 0
-        const weight = (parseFloat(p.weight) || 0) / 100.0
-
-        if (cPrice > 0 && bPrice > 0 && weight != 0) {
-          wChange += (cPrice / bPrice) * weight
-        }
-      }
-
-      if (wChange !== 0) {
-        const netRatio = pos * (wChange * fxChange - 1.0)
-        return baseNav * (1.0 + netRatio)
-      }
-    }
-
-    return 0
-  })
-
-  /** 期货校准实时估值 */
-  const futCalibVal = computed(() => {
-    if (!meta.value || !meta.value.base_data) return 0
-    const bd = meta.value.base_data
-    const cfg = meta.value.fund_config
-
-    const baseNav = parseFloat(bd.nav) || 0
-    const pos = positionRatio.value
-    const todayExchangeRate = parseFloat(latestExchangeRateInput.value as any) || 0
-    const baseExchangeRate = parseFloat(bd.exchange_rate) || 0
-
-    const futPrice = parseFloat(testFutPrice.value as any) || 0
-    const calib = parseFloat(testFutCalib.value as any) || 0
-
-    if (baseNav <= 0 || todayExchangeRate <= 0 || futPrice <= 0 || calib <= 0) return 0
-
-    const equivSpot = futPrice / calib
-    const category = cfg.category || ''
-    const portfolio = cfg.valuation_portfolio || cfg.hedging_portfolio || []
-
-    if (category === '指数') {
-      let equivEtf = 0
-      const mainAnchorSymbol = portfolio[0]?.symbol || ''
-      const cleanMainSym = mainAnchorSymbol.replace(/^\^/, '')
-      const caretMainSym = '^' + cleanMainSym
-      const baseEtfPrice =
-        parseFloat(
-          bd[caretMainSym] !== undefined
-            ? bd[caretMainSym]
-            : bd[cleanMainSym] !== undefined
-              ? bd[cleanMainSym]
-              : bd[mainAnchorSymbol] || 0,
-        ) || 0
-      const baseIndexPrice = parseFloat(bd.index_close) || 0
-
-      if (baseIndexPrice > 0 && baseEtfPrice > 0) {
-        equivEtf = equivSpot * (baseEtfPrice / baseIndexPrice)
-      } else if (parseFloat(bd.calibration) > 0 && baseEtfPrice > 0) {
-        const derivedBaseIndexPrice = parseFloat(bd.calibration) / calib
-        equivEtf = equivSpot * (baseEtfPrice / derivedBaseIndexPrice)
-      }
-
-      const hedgeValue = parseFloat(bd.hedge) || 0
-      const etfCalibration = hedgeValue > 0 && pos > 0 ? hedgeValue * pos : 0
-
-      if (etfCalibration > 0 && equivEtf > 0) {
-        return baseNav * (1.0 - pos) + (pos / etfCalibration) * (equivEtf * todayExchangeRate)
-      } else {
-        if (baseIndexPrice > 0) {
-          const spotChangeRate = equivSpot / baseIndexPrice
-          const exchangeRateChange = todayExchangeRate / baseExchangeRate
-          return baseNav * (1 + pos * (spotChangeRate * exchangeRateChange - 1))
-        }
-      }
-    } else {
-      let weightedFuturesChangeRate = 0.0
-      let totalValidWeight = 0.0
-      const validEtfs: any[] = []
-
-      for (const item of portfolio) {
-        if (item.weight <= 0 || item.weight < 0.02 || item.symbol.includes('SLV')) {
-          continue
-        }
-        validEtfs.push(item)
-        totalValidWeight += item.weight
-      }
-
-      if (totalValidWeight > 0) {
-        for (const vItem of validEtfs) {
-          const cleanVSym = vItem.symbol.replace(/^\^/, '')
-          const caretVSym = '^' + cleanVSym
-          const baseEtfPrice =
-            parseFloat(
-              bd[caretVSym] !== undefined
-                ? bd[caretVSym]
-                : bd[cleanVSym] !== undefined
-                  ? bd[cleanVSym]
-                  : bd[vItem.symbol] || 0,
-            ) || 0
-          if (baseEtfPrice > 0) {
-            const etfChangeRate = equivSpot / baseEtfPrice
-            const normalizedWeight = vItem.weight / totalValidWeight
-            weightedFuturesChangeRate += etfChangeRate * normalizedWeight
-          }
-        }
-        const exchangeRateChange = todayExchangeRate / baseExchangeRate
-        return baseNav * (1 + pos * (weightedFuturesChangeRate * exchangeRateChange - 1))
-      }
-    }
-
-    return 0
-  })
-
-  /** 纯期货实时估值 */
-  const pureFutVal = computed(() => {
-    if (!meta.value || !meta.value.base_data) return 0
-    const bd = meta.value.base_data
-
-    const baseNav = parseFloat(bd.nav) || 0
-    const pos = positionRatio.value
-    const todayExchangeRate = parseFloat(latestExchangeRateInput.value as any) || 0
-    const baseExchangeRate = parseFloat(bd.exchange_rate) || 0
-
-    const futPrice = parseFloat(testFutPrice.value as any) || 0
-    // [AI-2026-07-23] NK 结算价：bd.calibration 是对冲值(~137081)，不是 NK 结算价！
-    const baseFuturePrice = parseFloat(bd.nk_settle_price) || parseFloat(bd.calibration) || 0
-
-    if (
-      baseNav <= 0 ||
-      todayExchangeRate <= 0 ||
-      futPrice <= 0 ||
-      baseFuturePrice <= 0 ||
-      baseExchangeRate <= 0
-    )
-      return 0
-
-    const futureChangeRate = futPrice / baseFuturePrice
-    const exchangeRateChange = todayExchangeRate / baseExchangeRate
-    return baseNav * (1 + pos * (futureChangeRate * exchangeRateChange - 1))
-  })
+  // 手动输入 → 防抖重算（轮询由 pollRealtime 直接调 recalcBackend 实时刷新）
+  watch(
+    [() => testFutPrice.value, () => testFutCalib.value, () => simLofPrice.value, () => latestExchangeRateInput.value],
+    () => scheduleRecalc(),
+  )
+  watch(testEtfPrices, () => scheduleRecalc(), { deep: true })
+  // 面板切换（期货校准/纯期货显隐、复杂分类）立即重算
+  watch([showFutCalib, showPureFut, isComplexCategory], () => scheduleRecalc())
 
   /** ETF 实时溢价率 */
   const derivedEtfPremium = computed(() => {
@@ -701,6 +578,8 @@ export function useValuationCalculator() {
         if (res.data.latest_nav_date !== undefined) {
           meta.value.latest_nav_date = res.data.latest_nav_date
         }
+        // [AI-2026-08-05] 元数据就绪后触发后端封装估值重算（首发）
+        scheduleRecalc()
       }
     } catch (e) {
       console.error('Failed to fetch valuation meta:', e)
@@ -714,6 +593,8 @@ export function useValuationCalculator() {
     await fetchRealtimeDepth()
     await fetchValuationMeta()
     pollCount++
+    // [AI-2026-08-05] 每次轮询后用最新实时价刷新后端封装估值
+    await recalcBackend()
   }
 
   // ============================================================
@@ -800,6 +681,7 @@ export function useValuationCalculator() {
     fetchRealtimeDepth,
     fetchValuationMeta,
     pollRealtime,
+    recalcBackend,
     resetInitialized,
 
     // Polling

@@ -111,3 +111,33 @@ export function clearBpOverride(code: string) {
 export function getSilverRatio() {
   return client.get('/api/silver/ratio')
 }
+
+/**
+ * [AI-2026-08-05] 单基金实时估值封装入口（ETF/篮子），包后端 analyze_realtime。
+ * 供沙盘估值计算器 / LazyMode 统一走 canonical 引擎。
+ */
+export function getRealtimeCalc(params: {
+  code: string
+  lof_price?: number
+  fx?: number
+  etfs?: string
+  lof_qty?: number
+}) {
+  return client.get('/api/funds/realtime_calc', { params })
+}
+
+/**
+ * [AI-2026-08-05] 单基金期货估值封装入口（期货校准 calib / 纯期货 pure），包后端
+ * analyze_realtime_futures / analyze_realtime_pure_futures。
+ */
+export function getRealtimeFuturesCalc(params: {
+  code: string
+  mode?: string
+  futures_price: number
+  calibration?: number
+  lof_price?: number
+  fx?: number
+  lof_qty?: number
+}) {
+  return client.get('/api/funds/realtime_futures_calc', { params })
+}
