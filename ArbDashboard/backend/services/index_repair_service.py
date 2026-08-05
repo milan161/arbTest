@@ -137,12 +137,12 @@ def _get_all_related_indices() -> List[tuple]:
             result.append((code, 'skip'))
             continue
             
-        # 6位纯数字CSI指数 (如 930917.CSI, 000922.CSI)
+        # 6位纯数字指数
         if len(clean) == 6 and clean.isdigit():
-            if clean.startswith('9'):
-                result.append((code, 'a_share_sz'))  # 深圳
-            else:  # 以0开头
-                result.append((code, 'a_share_sh'))  # 上海
+            if clean[0] in ('3', '9'):  # 399xxx(深) 或 930xxx(中证, 新浪有) 走 SZ
+                result.append((code, 'a_share_sz'))
+            else:  # 0/1开头 - 沪市
+                result.append((code, 'a_share_sh'))
             continue
         # A股深圳指数
         if clean in A_SHARE_SZ_PREFIX or (clean.startswith('399') and len(clean) == 6):
@@ -470,3 +470,70 @@ def repair_with_sina(days_back: int = 30) -> dict:
         "details": details,
         "recalc": recalc_result
     }
+
+
+def repair_fund_index_history(fund_code: str, days_back: int = 30) -> dict:
+    """
+    [AI-2026-08-05] 单基金指数历史补采（对应前端「核对静态估值」按钮）。
+
+    只补该基金 related_index 的指数数据写入 index_history，不触及其他基金；
+    需用时按需触发，不进每日流水线（每日自动补采已被东哥否决，见 AGENTS.md TOP 2 相关）。
+    与 repair_with_sina(全量) 互补：按钮走这条，做到"单基金、按需"。
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT related_index FROM unified_fund_list WHERE fund_code=?", (fund_code,))
+    row = c.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return {"status": "skip", "fund_code": fund_code, "message": "无 related_index，跳过指数补采"}
+    raw = str(row[0]).strip()
+    clean = raw.upper()
+    if clean.endswith('.CSI'):
+        clean = clean[:-4]
+    if clean.endswith('.HI'):
+        clean = clean[:-3]
+
+    # 分类（与 _get_all_related_indices 同逻辑）
+    cat = None
+    if clean in ('GLD', 'USO', 'XOP', 'QQQ', 'XLY', 'XBI', 'INDA', 'SOXX',
+                 'AGG', 'VNQ', 'RSPH', 'SPY', 'KWEB', 'XLE'):
+        cat = 'skip'
+    elif len(clean) == 6 and clean.isdigit():
+        cat = 'a_share_sz' if clean[0] in ('3', '9') else 'a_share_sh'
+    elif clean in A_SHARE_SZ_PREFIX or (clean.startswith('399') and len(clean) == 6):
+        cat = 'a_share_sz'
+    elif clean in A_SHARE_SH_PREFIX or clean.startswith('000') or clean.startswith('001'):
+        cat = 'a_share_sh'
+    elif clean in HK_INDICES:
+        cat = 'hk'
+    elif clean.startswith('N225') or 'NK' in clean:
+        cat = 'jp_index'
+
+    if cat is None or cat == 'skip':
+        return {"status": "skip", "fund_code": fund_code, "symbol": raw,
+                "message": f"指数 {raw} 无需/无法经 sina/qq 补采 (cat={cat})"}
+
+    existing = _get_existing_dates(clean)
+    if cat == 'a_share_sz':
+        rows = _fetch_sina_a_share(clean, 'sz', days_back) or _fetch_qq_a_share(clean, 'sz', days_back)
+    elif cat == 'a_share_sh':
+        rows = _fetch_sina_a_share(clean, 'sh', days_back) or _fetch_qq_a_share(clean, 'sh', days_back)
+    elif cat == 'hk':
+        rows = _fetch_qq_hk_index(clean, days_back)
+    elif cat == 'jp_index':
+        rows = _fetch_sina_global_index(clean, days_back)
+    else:
+        rows = []
+
+    if not rows:
+        return {"status": "fail", "fund_code": fund_code, "symbol": clean,
+                "message": f"指数 {clean} 无数据（sina/qq 均未返回）"}
+
+    inserted = 0
+    for date_str, close in rows:
+        if date_str in existing:
+            continue
+        _upsert_index_history(clean, date_str, close, 'sina')
+        inserted += 1
+    return {"status": "ok", "fund_code": fund_code, "symbol": clean, "new_records": inserted}

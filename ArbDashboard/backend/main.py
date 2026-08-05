@@ -2,35 +2,48 @@ import os
 import sys
 import importlib.util
 
-# [AI-2026-08-03] 强制唯一启动解释器：后端必须用项目虚拟环境 ArbDashboard/.venv 启动。
+# [AI-2026-08-03 / 2026-08-05] 强制唯一启动解释器：后端必须用项目虚拟环境 ArbDashboard/.venv 启动。
 # 机器上存在多个 Python（系统 Python311 / WorkBuddy 内置 3.13），其中只有 .venv 同时装有
 # ibapi + apscheduler + xtquant + akshare 等全部依赖。用错解释器会导致 IB 行情 / 冻结调度器
-# 静默失效（典型症状：No module named 'apscheduler'、IB 盘口全空）。用关键包是否可导入来判定，
-# 任何非 .venv 解释器都会在此处明确拒绝，从源头杜绝“用错 python”这类反复出现的问题。
-# [AI-2026-08-03] 守卫只针对 Windows 本机开发环境：那里存在多个 python 容易点错。
-# 云端 Linux 看板（ARM，ARB_DASHBOARD_MODE=1）用精简依赖 requirements-arm.txt，本就不装
-# ibapi/apscheduler（看板模式不连 IB、不跑本地调度），解释器由 systemd 固定，无需护栏。
-# 早前漏判平台导致 ARM 服务开机自杀重启 31 次，此处必须先判平台再判依赖。
+# 静默失效（典型症状：No module named 'apscheduler'、IB 盘口全空）。
+# 早前做法是“缺依赖就 fatal 退出”，但误双击 main.py 仍可能用系统 Python 起第二个后端、或闪退。
+# 改为“非 .venv 解释器（系统 Python / WorkBuddy python / 误双击）在此无缝 re-exec 到 .venv”——
+# 第一性原理：用户怎么启动都只该有一个 .venv 后端，从源头杜绝用错 python / 双实例抢 IB ClientId。
+# 守卫只针对 Windows 本机开发环境（多 python 容易点错）；云端 Linux 看板用 systemd 固定解释器且
+# ARB_DASHBOARD_MODE=1 跳过本守卫（看板不连 IB、不跑本地调度，依赖也不同）。
 def _require_project_venv():
     if sys.platform != 'win32' or os.environ.get('ARB_DASHBOARD_MODE', '0') == '1':
         return
-    missing = [pkg for pkg in ("ibapi", "apscheduler")
-               if importlib.util.find_spec(pkg) is None]
-    if missing:
-        sys.stderr.write(
-            "\n\033[1;91m[致命] 后端必须用项目虚拟环境启动：ArbDashboard/.venv/Scripts/python.exe\033[0m\n"
-            f"[致命] 当前解释器缺少关键依赖：{', '.join(missing)}（系统/WorkBuddy 的 python 没装 IB/调度依赖）\n"
-            "[致命] 请勿直接 `python main.py`。请改用：\n"
-            "[致命]   ① 双击 ArbDashboard/start_dashboard.bat（已锁定 .venv），或\n"
-            "[致命]   ② ArbDashboard/.venv/Scripts/python.exe main.py\n\n"
-        )
-        sys.exit(2)
+    if '.venv' in sys.executable.lower():
+        return  # 已经在正确的项目解释器
+    # 非 .venv 解释器 → 自动重定向到 .venv（不再 fatal 退出，避免闪退/双后端）
+    venv_py = os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '.venv', 'Scripts', 'python.exe'))
+    if os.path.exists(venv_py):
+        sys.stderr.write("[venv] 检测到非项目 .venv 解释器，自动重定向到 .venv 启动...\n")
+        try:
+            os.execv(venv_py, [venv_py, os.path.abspath(__file__)] + sys.argv[1:])
+        except Exception as e:
+            sys.stderr.write(f"[venv] 重定向失败: {e}\n")
+    sys.stderr.write(
+        "\n\033[1;91m[致命] 后端必须用项目虚拟环境启动，但未找到 ArbDashboard/.venv/Scripts/python.exe\033[0m\n"
+        "[致命] 请先创建虚拟环境，或改用 ArbDashboard/backend/runback.bat 启动\n\n")
+    sys.exit(2)
 
 _require_project_venv()
 
 import json
 import subprocess
 import threading
+
+# [AI-2026-08-05] 单实例守卫已禁用：用户要求“不搞 kill”，且进程扫描可能误判导致后端起不来。
+# 双实例防护改由 runback.bat 的 8000 端口检查 + _require_project_venv 的 re-exec 共同保证。
+def _enforce_single_instance():
+    return
+
+_enforce_single_instance()
+
+
 import time
 import pandas as pd
 import logging
@@ -878,6 +891,19 @@ async def get_fund_history(code: str):
     data = fund_service.get_fund_history(code)
     return {"status": "ok", "data": data}
 
+# [AI-2026-08-04] 单基金「核对静态估值」：替代已移除的全局重算。补采该基金近 days 个交易日
+# 价格+净值（级联底层ETF日价），再重算 static_val。对应前端历史弹窗「核对静态估值」按钮。
+@app.post("/api/fund/{code}/reconcile_static_val")
+async def reconcile_static_val(code: str, days: int = 10):
+    try:
+        from services.fund_reconcile import reconcile_fund_static_val
+        result = reconcile_fund_static_val(code, days)
+        return {"status": "ok" if result.get("ok") else "error", "data": result}
+    except Exception as e:
+        import traceback
+        logger.error(f"reconcile_static_val {code} failed: {e}\n{traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/fund/{code}/intraday")
 async def get_fund_intraday(code: str, date: str = None):
     """获取基金的分时数据（曲线图用）"""
@@ -1034,7 +1060,7 @@ async def get_ib_core_symbols():
 
 @app.post("/api/config/ib_core_symbols")
 async def update_ib_core_symbols(request: Request):
-    """更新 IB 核心套利标的白名单（运行时生效，不持久化到文件）"""
+    """更新 IB 核心套利标的白名单（写回 lof_config.yaml 持久化，重启不丢）"""
     from arbcore.config.source_routing import IB_CORE_ARBITRAGE_SYMBOLS, SOURCE_SYMBOL_MAP, US_ETF_MAP
     try:
         data = await request.json()
@@ -1065,8 +1091,41 @@ async def update_ib_core_symbols(request: Request):
         # 去重排序
         for source in SOURCE_SYMBOL_MAP:
             SOURCE_SYMBOL_MAP[source] = sorted(set(SOURCE_SYMBOL_MAP[source]))
-        
-        return {"status": "ok", "message": f"IB 核心标的已更新为 {len(symbols)} 只", "data": symbols}
+
+        # [AI-2026-08-05] 持久化写回 lof_config.yaml 的 ib_core_symbols，避免重启丢失
+        # 仅替换 ib_core_symbols 块内的列表项，保留文件其余部分与注释
+        try:
+            import os as _os
+            _yaml_path = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..', '..', 'arbcore', 'config', 'lof_config.yaml'))
+            with open(_yaml_path, encoding='utf-8') as _f:
+                _lines = _f.readlines()
+            _out, _i, _in_block = [], 0, False
+            while _i < len(_lines):
+                _line = _lines[_i]
+                if _line.strip() == 'ib_core_symbols:' or _line.startswith('ib_core_symbols:'):
+                    _out.append(_line)
+                    _in_block = True
+                    _i += 1
+                    continue
+                if _in_block:
+                    if _line.strip().startswith('- '):
+                        _i += 1
+                        continue  # 跳过旧列表项
+                    for _s in symbols:
+                        _out.append(f'- {_s}\n')
+                    _in_block = False
+                _out.append(_line)
+                _i += 1
+            if _in_block:
+                for _s in symbols:
+                    _out.append(f'- {_s}\n')
+            with open(_yaml_path, 'w', encoding='utf-8') as _f:
+                _f.writelines(_out)
+            logger.info(f"[AI-2026-08-05] IB核心标的已写回YAML: {symbols}")
+        except Exception as _e:
+            logger.warning(f"IB核心标的写回YAML失败(仅内存生效): {_e}")
+
+        return {"status": "ok", "message": f"IB 核心标的已更新为 {len(symbols)} 只（已持久化）", "data": symbols}
     except Exception as e:
         logger.error(f"更新 IB 核心标的失败: {e}")
         return {"status": "error", "message": str(e)}
@@ -2806,6 +2865,10 @@ async def get_funds_realtime_est():
             "rt_premium": r.get("rt_premium"),
             "category": r.get("category"),
             "name": r.get("fund_name"),
+            # [AI-2026-08-04] 透传收盘冻结标记：get_unified_dashboard_data() 末尾 apply_freeze_to_dashboard()
+            # 已标 rt_frozen / rt_frozen_note；H5 卡片据此画「冻」徽章（与本机前端 Dashboard.vue 同源，逻辑只此一处）。
+            "rt_frozen": r.get("rt_frozen"),
+            "rt_frozen_note": r.get("rt_frozen_note"),
         }
     return {"status": "ok", "funds": out}
 

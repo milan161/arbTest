@@ -6,10 +6,13 @@ futu_reader.py - 富途行情读取器模块
 功能：通过富途 OpenD 获取美股/港股实时行情
 """
 
+import os
 import time
 import threading
 import pandas as pd
 import logging
+
+from arbcore.utils.market_calendar import is_a_share_session, is_quote_window
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,7 @@ class FutuReader:
         self.last_log_time = 0
         self.connected = False  # [AI-2026-07-15] 实时连接标志（与 IB 一致），reconnect 成功=True，断开=False
         self.disabled = True  # [V10.0] 启动时不自动连接，用户点击页面"富途"按钮才重连
+        self.session_closed = False  # [AI-2026-08-04] A股非交易时段门禁标志，上游据此跳过熔断计数
         self._lock = threading.Lock()  # [V10.13] 多线程并发保护
         
         # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
@@ -118,8 +122,8 @@ class FutuReader:
                     logger.debug(f"[富途] 连接尝试 {attempt}/{self.max_retries} 失败: {e}")
                     time.sleep(1)
                 else:
-                    logger.warning(f"[富途] 连接失败（已尝试 {self.max_retries} 次），已禁用富途读取器。如需启用，请点击页面顶部的'富途'标签重试。")
-                    self.disabled = True
+                    logger.warning(f"[富途] 连接失败（已尝试 {self.max_retries} 次），OpenD 可能未起/重启中，将自动重试。")
+                    self.disabled = False  # [AI-2026-08-04] 不自永禁，改由懒重连(30s节流)自动恢复
                     self.ctx = None
                     self.connected = False  # [AI-2026-07-15] 与 IB 一致
                     self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格，避免前端误判为"Ready"
@@ -163,10 +167,10 @@ class FutuReader:
                 if attempt < self.max_retries:
                     time.sleep(1)
         
-        self.disabled = True
+        self.disabled = False  # [AI-2026-08-04] 不自永禁，OpenD 恢复后懒重连自动恢复
         self.connected = False  # [AI-2026-07-15] 与 IB 一致
         self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
-        logger.warning("[富途] 手动重连失败（已尝试 {} 次），请检查富途 OpenD 是否运行".format(self.max_retries))
+        logger.warning("[富途] 手动重连失败（已尝试 {} 次），将自动重试，请确认富途 OpenD 已启动".format(self.max_retries))
         return False, f"富途重连失败（已尝试 {self.max_retries} 次），请确认富途 OpenD 已启动"
     
     def close(self):
@@ -183,10 +187,20 @@ class FutuReader:
     def get_prices(self, symbols):
         if not FUTU_AVAILABLE:
             return False, "未安装 futu-api 库", self.prices
-            
+
         if self.disabled:
             return False, "富途API已被禁用（启动时连接失败，请点击页面'富途'标签重试）", self.prices
-            
+
+        # [AI-2026-08-04] 美股/港股盘口展示窗口门禁（东哥拍板）：套利 9:30-15:00，但港股 16:00 收盘、
+        # IB/Futu 夜盘也 16:00 结束，故盘口展示放宽到 16:00；16:00 后一律不显示（连冻结值不留）。
+        # 窗口外：不建连、不订阅、不请求 OpenD，返回空盘口（前端显示"—"），从源头不产生错价/冻结值。
+        # 注意：本门禁只管富途（美股/港股估值源）。IB 夜盘链路走 ib_reader，在 market_data_service
+        # 的 IB 分支另有 is_quote_window 门禁，互不影响。需要盘后调试时用 ARB_FUTU_ALL_DAY=1 临时放行。
+        self.session_closed = False
+        if not is_quote_window() and os.environ.get('ARB_FUTU_ALL_DAY', '0') != '1':
+            self.session_closed = True
+            return False, "非行情展示时段(16:00后)，富途盘口不显示", {}
+
         with self._lock:  # [V10.13] 多线程并发保护
             return self._get_prices_impl(symbols)
     
@@ -218,10 +232,12 @@ class FutuReader:
                             time.sleep(1)
                 
                 if not connected:
-                    self.disabled = True
+                    # [AI-2026-08-04] 连接多次失败（OpenD 未起/重启中）：标记断开而非永久禁用，
+                    # 下次 get_prices 经 30s 节流懒重连自动恢复，免去 H5 手动点"富途"按钮。
+                    self.disabled = False
                     self.connected = False  # [AI-2026-07-15] 与 IB 一致
                     self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
-                    return False, f"富途OpenD连接失败（已尝试 {self.max_retries} 次）", self.prices
+                    return False, f"富途OpenD连接失败（已尝试 {self.max_retries} 次），自动重试中", self.prices
             
             # 区分美股和港股，并正确添加前缀
             import re
@@ -299,7 +315,10 @@ class FutuReader:
                     ask_size = ob_ask_sz if ob_ask_sz and ob_ask_sz > 0 else 0.0
                     last = last_0
 
-                    logger.info(f"【富途盘口】 {code}: bid={bid}(×{bid_size}) ask={ask}(×{ask_size}) last={last}")
+                    # [AI-2026-08-04] INFO→DEBUG：此行每标的每轮各打一次，盘中每秒数十行，
+                    # 是 ARM syslog 膨胀主因（单机 314M / 磁盘 +5pp 每天）。逐笔盘口属排障细节，
+                    # 非运行必需；需要时用 LOG_LEVEL=DEBUG 打开。30 秒一次的价格心跳仍保留 INFO。
+                    logger.debug(f"【富途盘口】 {code}: bid={bid}(×{bid_size}) ask={ask}(×{ask_size}) last={last}")
 
                     # 只要有真实盘口或 last 就存，上游决定显示/估值（全 0 视为无数据由门禁处理）
                     if last > 0 or bid > 0 or ask > 0:
@@ -334,11 +353,13 @@ class FutuReader:
             logger.warning(f"[富途] get_prices 异常: {e}")
             err_msg = str(e)
             if "refused" in err_msg.lower() or "10061" in err_msg:
-                logger.warning("[富途] 无法连接到OpenD，已永久禁用后续自动重试。如需使用请重启系统。")
-                self.disabled = True
+                # [AI-2026-08-04] OpenD 暂不可达（如重启中）：不自永禁，标记断开后由懒重连(30s节流)自动恢复，
+                # 免去 H5 手动点"富途"按钮。严守：不抛异常、不影响其他源估值。
+                logger.warning("[富途] OpenD 暂不可达(refused)，将自动重试（每30s），无需手动重连")
+                self.disabled = False
                 self.connected = False  # [AI-2026-07-15] 与 IB 一致
                 self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
-                return False, "富途API未运行 (连接被拒绝)", self.prices
+                return False, "富途OpenD暂不可达，自动重试中", self.prices
             # [AI-2026-07-15] 非"refused"异常（如连接断开）→ 标记断开，让 reconnect 可以重试
             logger.error(f"[富途] 异常: {err_msg} → 标记为断开，下次点击可重连")
             self.connected = False

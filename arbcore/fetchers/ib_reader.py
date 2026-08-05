@@ -48,12 +48,44 @@ except ImportError:
     class Order: pass
     print("Warning: ibapi not installed. IBReader will not function.")
 
+# [AI-2026-08-04] 协议层容错钩子：IB Gateway 重启瞬间可能发来含非 UTF-8 字节(如中文账户名/路径)的脏包，
+# ibapi 内部 EReader 线程(_readerthread) 用 utf-8 解码失败抛 UnicodeDecodeError，该异常未捕获会导致
+# 后端进程崩溃(后台 task 判定 failed)。此处注册全局线程异常钩子，仅拦截该已知协议杂音，触发 IBReader
+# 自愈重连(断开并置 connected=False，由 _polling_loop 重连)，且不向 stderr 抛 traceback，避免进程被判失败。
+# 严守 AGENTS.md TOP1 红线：绝不动 exchange="OVERNIGHT"、绝不加快史快照兜底。
+_IB_READER_INSTANCE = None
+_ORIG_THREAD_EXCEPTHOOK = None
+
+def _ib_thread_excepthook(args):
+    exc_type, exc_value, exc_tb, thread = (
+        args.exc_type, args.exc_value, args.exc_traceback, args.thread
+    )
+    # 仅捕获 ibapi EReader 线程的协议层解码异常（已知的 Gateway 重启杂音）
+    if exc_type is UnicodeDecodeError and thread is not None and '_readerthread' in thread.name:
+        logger.warning(
+            f"[IB] EReader线程解码异常(协议层杂音,非致命),触发自愈重连: {exc_value}"
+        )
+        inst = globals().get('_IB_READER_INSTANCE')
+        if inst is not None:
+            try:
+                inst.disconnect_from_ib()
+            except Exception:
+                pass
+            inst.connected = False  # 让 _polling_loop 的未连接分支发起重连
+        return
+    # 其他线程异常按原样上报，不掩盖未知问题
+    if _ORIG_THREAD_EXCEPTHOOK:
+        _ORIG_THREAD_EXCEPTHOOK(args)
+
 class IBReader(EWrapper, EClient):
     def __init__(self, client_id=None, on_price_update=None, db_manager=None):
         EClient.__init__(self, self)
         self.client_id = client_id if client_id is not None else random.randint(1000, 9999)
         self.on_price_update = on_price_update  # 注入回调函数解耦 SocketIO
         self.db_manager = db_manager # 注入数据库管理器
+        # [端口优先级] 东哥只用 IB Gateway 实盘：4001=IB Gateway 实盘(唯一使用) > 4002=IB Gateway 模拟
+        #   > 7496=TWS 实盘 > 7497=TWS 模拟。⚠️ 7497 是 TWS 模拟端口、非 IB Gateway 实盘；
+        #   IB Gateway 实盘标准端口即 4001（历史日志亦证实 4001 连上实盘并订阅 12 只标的）。
         self.target_ports = [4001, 4002, 7496, 7497] 
         self.current_port_index = 0
         self.connected = False
@@ -90,8 +122,19 @@ class IBReader(EWrapper, EClient):
         self.stale_reconnect_threshold = 600   # [AI-2026-08-03] 已连接但长连接零 tick 超过此秒数(夜盘)则强制重连自愈；无兜底机制，纯靠长连接真实 tick 时间判定
         self.stale_reconnect_cooldown = 600    # 两次强制重连最小间隔(秒)，防抖动
         self._last_forced_reconnect = 0
+        # [AI-2026-08-05] 断连自动重连（自愈断连）：连接彻底断了(非"连着无tick")时，夜盘时段自动重连，
+        # 避免每天隔夜数据农场掉线后需手动点IB按钮。auto_reconnect_cooldown 控制重试节奏(避免日志刷屏)。
+        self.auto_reconnect_cooldown = 300     # 断连后自动重连最小间隔(秒)，默认5分钟试一次
+        self._last_auto_reconnect = 0
         self._stale_watchdog_running = False
         self._stale_watchdog_thread = None
+
+        # [AI-2026-08-04] 注册协议层容错钩子（进程内只注册一次）
+        global _IB_READER_INSTANCE, _ORIG_THREAD_EXCEPTHOOK
+        _IB_READER_INSTANCE = self
+        if threading.excepthook is not _ib_thread_excepthook:
+            _ORIG_THREAD_EXCEPTHOOK = threading.excepthook
+            threading.excepthook = _ib_thread_excepthook
 
     def is_us_night_session(self):
         """判断当前是否为IBKR美股夜盘交易时段 (北京时间)"""
@@ -147,16 +190,26 @@ class IBReader(EWrapper, EClient):
             return False
 
     def disconnect_from_ib(self):
-        # [AI-2026-07-13] 增加 time.sleep(1) 确保 TCP FIN 包发出后再退出；改用 logger
-        if self.isConnected():
+        # [AI-2026-08-05] 修复僵尸socket：无条件调用 disconnect()，不再依赖 isConnected() 判断。
+        # isConnected()可能返回False但TCP socket仍alive（EReader线程崩溃后的僵尸状态），
+        # 此时不断开旧socket则reconnect()时IB Gateway因重复ClientId拒绝新连接(Error 326)，
+        # 导致3次重连全部失败。ibapi disconnect()内部检查socket非None才关闭，安全调用。
+        try:
             self.disconnect()
             self.connected = False
             self.prices = {}  # [AI-2026-07-15] 断连时清除缓存价格，避免前端误判为 Ready
             self.last_update_time = None
             time.sleep(1)  # 给 TCP FIN 包传播到 TWS/Gateway 的时间，防止进程立即退出导致连接残留
             logger.info("[IB] 已断开与 Gateway 的连接")
-        # [AI-2026-08-03] 断连清空心跳时间戳，重连后看门狗从零计时，避免误判"已连接无数据"
-        self.last_tick_time = {}
+        except Exception as e:
+            logger.warning(f"[IB] 断开连接异常(自愈不影响重连): {e}")
+        finally:
+            # [AI-2026-08-03] 断连清空心跳时间戳，重连后看门狗从零计时，避免误判"已连接无数据"
+            self.last_tick_time = {}
+            # [AI-2026-08-04] 断连清空订阅池(mkt/symbol req_ids)，放 finally 确保 self.disconnect() 抛异常(EReader崩溃后常见)时也清空，
+            # 任何重连路径(含 excepthook 自愈)都会重新 reqMktData，避免旧 ReqId 残留导致重连后不重新订阅、收不到 tick。
+            self.mkt_req_ids.clear()
+            self.symbol_req_ids.clear()
 
     def fetch_prev_closes_once(self):
         """如果昨收数据为空，则尝试获取一次。"""
@@ -259,6 +312,27 @@ class IBReader(EWrapper, EClient):
         while self._stale_watchdog_running:
             time.sleep(30)
             try:
+                # [AI-2026-08-05] 情况B：连接彻底断了(非"连着无tick")。隔夜数据农场掉线后，
+                # self.connected 变 False，原逻辑直接 continue 跳过 → 需手动点IB按钮。
+                # 改为：夜盘时段 + 未连接 + 冷却已过 → 自动重连，实现"隔夜断连早上自愈"。
+                if (not self.connected or not self.isConnected()) and self.is_us_night_session():
+                    now_ts = time.time()
+                    if now_ts - self._last_auto_reconnect < self.auto_reconnect_cooldown:
+                        continue
+                    self._last_auto_reconnect = now_ts
+                    logger.info("[IB] 看门狗：检测到未连接且处于夜盘时段，尝试自动重连(自愈断连)")
+                    try:
+                        # reconnect() 内含 disconnect_from_ib()(已修僵尸socket) + 重订阅；
+                        # 若 IB Gateway 已恢复则成功，否则失败(下个冷却周期再试)。
+                        ok, msg = self.reconnect()
+                        if ok:
+                            logger.info(f"[IB] 看门狗自动重连成功: {msg}")
+                        else:
+                            logger.warning(f"[IB] 看门狗自动重连暂未成功(IB Gateway可能未启动): {msg}")
+                    except Exception as e:
+                        logger.warning(f"[IB] 看门狗自动重连异常: {e}")
+                    continue
+                # 以下为情况A：已连接但行情停滞 → 强制重连(原逻辑)
                 if not self.connected or not self.isConnected():
                     continue
                 if not self.is_us_night_session():
@@ -389,6 +463,11 @@ class IBReader(EWrapper, EClient):
         if self.isConnected():
             logger.info("[IB] 已经连接，跳过重复重连")
             return True, "IB 已经连接"
+        # [AI-2026-08-05] 修复：重连前先彻底断开旧连接（含僵尸TCP socket）。
+        # isConnected()返回False时旧socket可能仍alive，不先断开则IB Gateway因重复
+        # ClientId拒绝新连接(Error 326)，3次重连全失败。disconnect_from_ib()已改为
+        # 无条件disconnect()，能关闭僵尸socket。
+        self.disconnect_from_ib()
         logger.info("[IB] 用户手动触发重连...")
         self.disabled = False
         self.connected = False
@@ -400,6 +479,10 @@ class IBReader(EWrapper, EClient):
                 if self.connect_to_ib():
                     logger.info(f"[IB] 手动重连成功 (第 {attempt} 次)")
                     self.disabled = False
+                    # [AI-2026-08-04] 重连成功后清空订阅池，确保 polling_loop 重新 reqMktData 收到 tick；
+                    # 否则旧 ReqId 残留会导致重连后跳过订阅、主看板实时估值仍空白（自愈重连假连接）。
+                    self.mkt_req_ids.clear()
+                    self.symbol_req_ids.clear()
                     # [AI-2026-07-02] 连接成功后立即启动轮询线程，不等前端请求懒加载
                     self.start_polling()
                     return True, f"IB 连接成功 (第 {attempt} 次尝试)"

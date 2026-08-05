@@ -44,6 +44,8 @@ def basket_valuation(
     """
     if not base_nav or base_nav <= 0:
         return None
+    if position is None:
+        return None  # [AI-2026-08-04 SUPREME] position 缺失不兜底，返回 None 让上游显"--"
     if components is None or len(components) == 0:
         return None
 

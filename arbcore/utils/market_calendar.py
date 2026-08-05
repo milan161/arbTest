@@ -15,7 +15,7 @@
     symbol_to_exchange('^GLD-EU')  # 'XSWX'
 """
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
@@ -203,6 +203,42 @@ def is_us_trading_day(d: date = None) -> bool:
 def is_hk_trading_day(d: date = None) -> bool:
     """港股是否交易日"""
     return is_trading_day('XHKG', d)
+
+
+# [AI-2026-08-04] A股可交易时段判断（东哥拍板：套利只在 A 股盘中进行）
+def is_a_share_session(now_dt: datetime = None) -> bool:
+    """判断当前是否处于 A 股可交易时段（北京时间 周一~周五 9:30-15:00，含午休）。
+
+    口径来源（东哥 2026-08-04 拍板）：套利的前提是能实时买卖 LOF，因此系统只关心
+    北京时间 9:30-15:00。此窗口之外一律视为"估值冻结"，不需要任何实时外部行情。
+
+    实现要点：
+    1. **强制 UTC+8**，与运行机器时区无关。东京 VPS / Oracle ARM 若时区配错，
+       用 datetime.now() 会把 JST 13:07（=CST 12:07）误判成非交易时段。
+    2. 交易日走 is_trading_day('A_SHARE')，能识别国庆/春节等节假日（内部已含降级）。
+    3. 含午休 11:30-13:00 —— 午休期间 LOF 虽不能成交，但估值仍在滚动、开盘前需预热
+       连接，切断反而会导致 13:00 复盘瞬间无数据。
+    """
+    if now_dt is None:
+        now_dt = datetime.now(timezone(timedelta(hours=8)))  # UTC+8 全年不变（中国无夏令时）
+    if not is_trading_day('A_SHARE', now_dt.date()):
+        return False
+    t = now_dt.hour * 60 + now_dt.minute
+    return 570 <= t <= 900  # 9:30=570, 15:00=900
+
+
+# [AI-2026-08-04] 美股/港股盘口展示窗口（东哥拍板）：9:30-16:00 北京时间，周一~周五。
+# 套利交易只在 A 股盘 9:30-15:00；但港股 16:00 收盘、IB/Futu 夜盘(OVERNIGHT)也 16:00 结束，
+# 故美股/港股盘口展示放宽到 16:00；16:00 之后一律不显示（连冻结值都不留）。
+# 仅用于美股/港股实时盘口的"是否展示"判定；A 股仍走 is_a_share_session（15:00 冻结），两者互不干扰。
+def is_quote_window(now_dt: datetime = None) -> bool:
+    """判断当前是否处于美股/港股盘口展示时段（北京时间 9:30-16:00，含午休，周一~周五）。"""
+    if now_dt is None:
+        now_dt = datetime.now(timezone(timedelta(hours=8)))  # UTC+8 全年不变（中国无夏令时）
+    if not is_trading_day('A_SHARE', now_dt.date()):
+        return False
+    t = now_dt.hour * 60 + now_dt.minute
+    return 570 <= t <= 960  # 9:30=570, 16:00=960
 
 
 def is_shfe_open(now_dt: datetime = None) -> bool:

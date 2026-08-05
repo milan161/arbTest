@@ -78,9 +78,12 @@ class DashboardSnapshotService:
         self._paused_categories = self._load_paused()
         logger.info(f"[SNAPSHOT] 暂停分类: {sorted(self._paused_categories)}")
 
-        # 只对「未暂停」的分类启动独立快照循环（3s 刷新）
-        active_categories = [c for c in ALL_CATEGORIES if c not in self._paused_categories]
-        logger.info(f"[SNAPSHOT] 活跃分类: {active_categories}")
+        # [AI-2026-08-05] 所有分类都启动快照循环：暂停分类里的豁免基金(paused_exempt=1)也需要快照。
+        # get_unified_dashboard_data 内部会按 paused_exempt 过滤，非豁免基金不会出现在快照中。
+        active_categories = ALL_CATEGORIES
+        exempt_cats = [c for c in self._paused_categories if c in ALL_CATEGORIES]
+        logger.info(f"[SNAPSHOT] 暂停分类(含豁免基金): {sorted(self._paused_categories)}")
+        logger.info(f"[SNAPSHOT] 全部分类启动快照循环: {active_categories}")
 
         # 启动时先刷新一次所有活跃分类
         for cat in active_categories:
@@ -111,10 +114,9 @@ class DashboardSnapshotService:
 
     async def _loop(self, key: str, interval: float, use_db_watchlist: bool, category: Optional[str]):
         while self._running:
-            # [AI-2026-07-20] 运行时检查：如果分类被暂停，跳过本轮
-            if self._is_paused(category):
-                await asyncio.sleep(5.0)
-                continue
+            # [AI-2026-08-05] 不再跳过暂停分类：豁免基金(paused_exempt=1)需要快照循环正常运行。
+            # get_unified_dashboard_data 内部会按 paused_exempt 过滤，非豁免基金不会出现在快照中。
+            # 无豁免基金的暂停分类（如现金管理）会返回空列表，有缓存兜底开销可忽略。
             started = time.monotonic()
             try:
                 await self.refresh_once(key, None, category, use_db_watchlist=use_db_watchlist)

@@ -146,9 +146,10 @@ class StaticValuationCalculator:
         b_fx = base_row['exchange_rate']
         c_fx = row['exchange_rate']
         position = base_row['position']
+        # [AI-2026-08-04 SUPREME 铁律] 禁止用 equity_ratio 兜底 position。
+        # 此变量实际未参与估值（估值走 assembled['position']），但按铁律仍不兜底。
         if pd.isna(position):
-            # 降级从配置读取
-            position = fund_config.get('holdings', {}).get('equity_ratio', 100.0) / 100.0
+            position = None
         
         # [AI-2026-07-27] 统一估值核心：数据引擎装配 + 单一篮子公式
         # 静态估值可消费 hedge（如 162411 的 XOP 魔法公式），其余走矩阵/指数路径。
@@ -187,5 +188,118 @@ class StaticValuationCalculator:
                             valuation_error = excluded.valuation_error
                     """, (row['date'], fund_code, row['static_val'], row['val_error'], row.get('calibration')))
             conn.commit()
+        finally:
+            conn.close()
+
+    # [AI-2026-08-05] 新增只读方法：供聚合层(arbcore/analysis/static_analysis.py) Debug 调用。
+    # 与 process_fund 共用同一套数据装配(assemble_static_components)+估值核心(basket_valuation)，
+    # 但只读、不写库，返回单日静态估值 + 溢价（溢价按 AGENTS.md TOP2 铁律分类分支）。
+    def analyze_latest(self, fund_config: Dict[str, Any], date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """只读计算单日静态估值 + 溢价，不写库。
+
+        Args:
+            fund_config: 基金配置 dict（来自 lof_config.yaml）
+            date:       指定估值日 'YYYY-MM-DD'；缺省取最新一日（有净值）
+
+        Returns:
+            {'code','name','category','date','nav','close','static_val',
+             'premium'(小数,按分类分支)} 或 None（数据缺失/无法估值）
+        """
+        code = str(fund_config.get('code', ''))
+        if not code:
+            return None
+
+        conn = self.db._get_conn()
+        try:
+            query = """
+                SELECT
+                    a.date, a.price as close, a.nav, a.static_val,
+                    c.usd_cny_mid as exchange_rate,
+                    b.position, b.hedge, b.calibration
+                FROM unified_fund_history a
+                LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
+                LEFT JOIN exchange_rate c ON a.date = c.date
+                WHERE a.fund_code = ?
+                ORDER BY a.date DESC LIMIT 40
+            """
+            df = pd.read_sql(query, conn, params=(code,))
+            if df.empty:
+                logger.warning(f"  ⚠️ [{code}] 无行情数据，无法静态估值")
+                return None
+
+            portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
+            primary_sym = self._identify_primary_symbol(fund_config)
+
+            # 批量关联持仓 ETF 价格（与 process_fund 同逻辑）
+            for item in portfolio:
+                sym = item.get('symbol', '').replace('^', '')
+                if any(suffix in sym for suffix in ['-JP', '-EU', '-HK']):
+                    sym = f"^{sym}"
+                etf_df = pd.read_sql(
+                    f'SELECT date, COALESCE(NULLIF(netvalue, 0), price) as "{sym}" '
+                    f'FROM usa_etf_daily_prices WHERE symbol = ?',
+                    conn, params=(sym,))
+                df = pd.merge(df, etf_df, on='date', how='left')
+
+            df = df.sort_values('date', ascending=False).reset_index(drop=True)
+
+            # 定位估值日行
+            target_idx = None
+            if date:
+                for i in range(len(df)):
+                    if str(df.iloc[i]['date']) == str(date):
+                        target_idx = i
+                        break
+                if target_idx is None:
+                    logger.warning(f"  ⚠️ [{code}] 指定日 {date} 无数据")
+                    return None
+            else:
+                for i in range(len(df)):
+                    if pd.notna(df.iloc[i]['nav']) and df.iloc[i]['nav'] > 0:
+                        target_idx = i
+                        break
+                if target_idx is None:
+                    return None
+
+            row = df.iloc[target_idx]
+            if pd.isna(row['nav']) or row['nav'] <= 0:
+                return None
+
+            # 找 T-1 基准日（最多回溯 15 行跨周末/假期）
+            base_row = None
+            for j in range(target_idx + 1, min(target_idx + 15, len(df))):
+                cand = df.iloc[j]
+                if pd.notna(cand['nav']) and cand['nav'] > 0 and pd.notna(cand['exchange_rate']):
+                    base_row = cand
+                    break
+            if base_row is None:
+                logger.warning(f"  ⚠️ [{code}] {row['date']} 无有效 T-1 基准日，跳过")
+                return None
+
+            val = self._deduce_valuation(row, base_row, portfolio, primary_sym, fund_config)
+            if val is None:
+                return None
+
+            # 溢价按分类分支（AGENTS.md TOP2 铁律）
+            cat = fund_config.get('category', '')
+            if cat in ('QDII欧美', '黄金原油'):
+                prem_nav = base_row['nav']      # T-1 净值
+            else:
+                prem_nav = row['nav']           # 同日 T 净值
+            premium = (row['close'] / prem_nav - 1) if (pd.notna(row['close']) and prem_nav and prem_nav > 0) else None
+
+            return {
+                'code': code,
+                'name': fund_config.get('name', ''),
+                'category': cat,
+                'date': row['date'],
+                'nav': round(float(row['nav']), 4),
+                'close': round(float(row['close']), 4) if pd.notna(row['close']) else None,
+                'static_val': round(float(val), 4),
+                'premium': round(float(premium), 4) if premium is not None else None,
+            }
+        except Exception as e:
+            logger.error(f"  ❌ [{code}] analyze_latest 异常: {e}")
+            return None
         finally:
             conn.close()

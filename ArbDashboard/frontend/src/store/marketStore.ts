@@ -70,6 +70,8 @@ export const useMarketStore = defineStore('market', () => {
       }
     } catch (err) {
       console.error('获取市场概览失败', err)
+      // [AI-2026-08-05] 修复 bug：后端断连时清空 active_sources，避免按钮继续显示绿色
+      overview.value = { ...overview.value, active_sources: [] }
     }
   }
 

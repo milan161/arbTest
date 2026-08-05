@@ -137,10 +137,11 @@ def assemble_dynamic_components(
       { 'components': [...], 'fx_base': float, 'fx_now': float, 'hedge': float|None, 'ok': bool }
     """
     portfolio = fund_cfg.get('valuation_portfolio', []) or fund_cfg.get('hedging_portfolio', [])
-    position = _clean_float(
-        base_data.get('position'),
-        fund_cfg.get('holdings', {}).get('equity_ratio', 100.0) / 100.0,
-    )
+    # [AI-2026-08-04 SUPREME 铁律] 禁止用 equity_ratio 兜底 position。
+    # position 缺失时为 None，由 basket_valuation 自然返回 None（H5 显示"--"）。
+    # 根因：get_base_data 的 LEFT JOIN 在 factors 滞后时取不到当日 position → 被兜底成 1.0 → H 失真。
+    # 修复在 get_base_data 侧（回溯最近 factors 行），此处仅删除兜底。
+    position = _clean_float(base_data.get('position'))
     fx_base = _clean_float(base_data.get('exchange_rate'))
     fx_now = None  # 由调用方在 calculate 时单独传入
 
@@ -160,7 +161,10 @@ def assemble_dynamic_components(
         b_price = base_data.get(full_sym) or base_data.get(base_sym) or 0
         c_price = current_prices.get(base_sym) or 0
         if not c_price or c_price <= 0:
-            c_price = b_price  # 实时缺失则退化用基准价（与旧逻辑一致）
+            # [AI-2026-08-04] 实时缺失退化时取市场价(price)，不用 b_price（可能取了 netvalue）。
+            # b_price 按 basket_count 分流（矩阵用 price、魔法展示用 netvalue）是计算层设计，
+            # 但 current_price 是"当前市场价"语义，退化时应统一取 price 列，不能因 basket_count 不同而异。
+            c_price = base_data.get(full_sym + '_mkt') or base_data.get(base_sym + '_mkt') or b_price
         if c_price and c_price > 0:
             components.append({
                 'symbol': full_sym,
@@ -211,7 +215,8 @@ def assemble_static_components(
     nav_base = _clean_float(base_row.get('nav'))
     fx_base = _clean_float(base_row.get('exchange_rate'))
     fx_now = _clean_float(row.get('exchange_rate'))
-    position = _clean_float(base_row.get('position'), 0.95)
+    # [AI-2026-08-04 SUPREME 铁律] 禁止用 0.95 兜底 position。缺失则为 None。
+    position = _clean_float(base_row.get('position'))
 
     components = []
     # 1) 优先用 portfolio 组件（多篮子 / 单 ETF）

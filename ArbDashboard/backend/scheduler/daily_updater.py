@@ -805,6 +805,17 @@ class DailyUpdater(BaseApp):
                     continue
                 items = list(kline.values()) if isinstance(kline, dict) else kline
 
+                # [AI-2026-08-04] 修复：腾讯 K 线 qfqday 的 close 对部分基金(如160644)只给 2 位小数，
+                # 而同响应 qt 行情数组的 [3] 项才是最新收盘(3 位精度，与雪球/新浪一致)。当最新日 K 线
+                # close 精度低于 qt 收盘且两者接近时，改用 qt 收盘，避免 DB 收盘价被截成 1.61(实为1.613)。
+                qt_node = node.get("qt", {}).get(tx_code)
+                qt_close = None
+                if isinstance(qt_node, list) and len(qt_node) > 3 and qt_node[3]:
+                    try:
+                        qt_close = float(qt_node[3])
+                    except (ValueError, TypeError):
+                        qt_close = None
+
                 written = 0
                 for it in items:
                     # 腾讯day格式: [date, open, close, high, low, volume(手), amount?]
@@ -825,8 +836,15 @@ class DailyUpdater(BaseApp):
                         _now = datetime.now()
                         if _now.hour < 15 or (_now.hour == 15 and _now.minute < 10):
                             continue
+                    # [AI-2026-08-04] 最新日优先用 qt 收盘(更高精度)覆盖 K 线被截断的 close
+                    close_to_write = k_close
+                    if k_date == today_str and qt_close and qt_close > 0 and abs(qt_close - k_close) < 0.05:
+                        k_dec = len(str(k_close).split('.')[-1]) if '.' in str(k_close) else 0
+                        q_dec = len(str(qt_close).split('.')[-1]) if '.' in str(qt_close) else 0
+                        if q_dec > k_dec:
+                            close_to_write = qt_close
                     # 收盘后 / 历史日期：正常写入官方收盘价
-                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=k_close, trade_volume=k_volume)
+                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=close_to_write, trade_volume=k_volume)
                     written += 1
 
                 if written > 0:
@@ -906,13 +924,35 @@ class DailyUpdater(BaseApp):
         # [AI-2026-06-28] 假期修复移至 _run_pipeline，nav-only 不修价格
 
     def step4_5_sync_fund_purchase_status(self):
-        """步骤4.5：从 AKShare 同步基金申赎状态"""
-        self.logger.info("=== 步骤4.5：同步基金申购赎回状态 (AKShare) ===")
+        """步骤4.5：[AI-2026-08-04] 从东京VPS拉取申赎状态JSON并入库(不再本地爬akshare)
+
+        数据链路: 东京VPS每日06:30爬东财→/root/ArbSiphon/data/purchase_status.json
+        → 本步用 account_private.VPS_* 密钥 paramiko 拉回→导入本地 fund_purchase_status。
+        失败仅告警(非致命), 次日重试; 与"本地黄金源→推ARM"架构一致(本地不再自爬)。
+        """
+        self.logger.info("=== 步骤4.5：从东京VPS拉取基金申购赎回状态 ===")
         try:
-            from arbcore.fetchers.data_fetcher import data_fetcher
-            data_fetcher.sync_akshare_fund_status(self.db)
+            import subprocess, sys, os
+            from arbcore.config import account_private as ap
+            root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            tool = os.path.join(root, "deploy", "core", "import_purchase_status.py")
+            if not os.path.exists(tool):
+                self.logger.warning(f"⚠️ 未找到导入工具 {tool}，跳过申赎状态同步")
+                return
+            tmp = os.path.join(root, "database", "_ps_tmp.json")
+            cmd = [sys.executable, tool, "pull",
+                   "--host", ap.VPS_HOST, "--port", str(ap.VPS_PORT),
+                   "--user", ap.VPS_USER, "--key", ap.VPS_KEY_PATH,
+                   "--keypass", ap.VPS_KEY_PASSWORD or "",
+                   "--remote", "/root/ArbSiphon/data/purchase_status.json",
+                   "--tmp", tmp]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            for line in (r.stdout + r.stderr).splitlines():
+                self.logger.info("[申赎] " + line.strip())
+            if r.returncode != 0:
+                self.logger.error("❌ 申赎状态拉取失败(非致命, 次日重试)")
         except Exception as e:
-            self.logger.error(f"❌ 申赎状态同步失败: {e}")
+            self.logger.error(f"❌ 申赎状态同步异常: {e}")
 
     def step5_fetch_usa_market_data(self, weekend_mode=False):
         """步骤五：抓取美股市场交易数据"""
@@ -1585,7 +1625,10 @@ class DailyUpdater(BaseApp):
                     # 静态估值
                     static_val = float(prev_nav) * (1 + pos_ratio * (idx_ratio * fx_ratio - 1))
 
-                    # [AI-2026-07-13] 溢价率：QDII欧美用 T-1 净值（prev_nav），其余用同日净值
+                    # [AI-2026-07-13] 溢价率口径（东哥铁律；[AI-2026-08-05] 还原此前误改）：
+                    #   QDII欧美(usd，跟美股有时差) → T价 / T-1净值(prev_nav)
+                    #   QDII亚洲(hkd)/QDII日本(jpy)/国内LOF(none，无时差) → T价 / T净值(nav 同日)
+                    # ⚠️ 严禁统一成 T-1：曾误改导致 QDII亚洲/日本/国内LOF 溢价口径错（严重错误，见 AGENTS.md TOP 2）
                     premium = None
                     if price and float(price) > 0:
                         if fx_type == 'usd' and prev_nav and float(prev_nav) > 0:

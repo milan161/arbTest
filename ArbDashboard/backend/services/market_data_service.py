@@ -9,6 +9,7 @@ from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.ib_reader import IBReader
 from arbcore.fetchers.futu_reader import FutuReader
 from arbcore.fetchers.data_fetcher import DataFetcher
+from arbcore.utils.market_calendar import is_quote_window  # [AI-2026-08-04] 美股/港股盘口展示窗口 9:30-16:00
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,10 @@ class MarketDataService:
         
         # [FIX] 根据 source 决定是否走美股通道
         if source == 'IB':
+            # [AI-2026-08-04] 美股/港股盘口展示窗口（东哥拍板）：9:30-16:00 显示，16:00 后一律不显示。
+            # 与富途门禁(is_quote_window)一致；不影响 Lazy_trader 夜盘下单（其直连 ib_reader，不经此路径）。
+            if not is_quote_window():
+                return None
             # 判断当前是否为 IB 夜盘时段（IB 仅在夜盘有免费实时数据）
             is_ib_night = False
             if self.ib_reader and hasattr(self.ib_reader, 'is_us_night_session'):
@@ -274,13 +279,16 @@ class MarketDataService:
                             }
                     else:
                         # [AI-2026-07-15] 禁用状态不计数（用户未手动连接）
-                        if not getattr(self.futu_reader, 'disabled', False):
+                        # [AI-2026-08-04] A股非交易时段(session_closed)是预期行为不是故障，
+                        # 计入熔断会导致熔断状态延续到次日开盘、开盘瞬间拿不到富途数据。
+                        if not getattr(self.futu_reader, 'disabled', False) \
+                                and not getattr(self.futu_reader, 'session_closed', False):
                             self._circuit_record_failure('富途')
-                        now = time.time()
-                        last_warn = self._futu_warn_cooldown.get(symbol, 0)
-                        if now - last_warn > 300:
-                            logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
-                            self._futu_warn_cooldown[symbol] = now
+                            now = time.time()
+                            last_warn = self._futu_warn_cooldown.get(symbol, 0)
+                            if now - last_warn > 300:
+                                logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
+                                self._futu_warn_cooldown[symbol] = now
                 except Exception as e:
                     if not getattr(self.futu_reader, 'disabled', False):
                         self._circuit_record_failure('富途')
@@ -328,14 +336,16 @@ class MarketDataService:
                             }
                     else:
                         # [AI-2026-07-15] 禁用状态不计数（用户未手动连接）
-                        if not getattr(self.futu_reader, 'disabled', False):
+                        # [AI-2026-08-04] A股非交易时段(session_closed)是预期行为，不计熔断、不刷 WARNING
+                        if not getattr(self.futu_reader, 'disabled', False) \
+                                and not getattr(self.futu_reader, 'session_closed', False):
                             self._circuit_record_failure('富途')
-                        # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
-                        now = time.time()
-                        last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
-                        if now - last_warn > 300:
-                            logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
-                            self._futu_warn_cooldown[f'futu_{symbol}'] = now
+                            # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
+                            now = time.time()
+                            last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
+                            if now - last_warn > 300:
+                                logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
+                                self._futu_warn_cooldown[f'futu_{symbol}'] = now
                 except Exception as e:
                     if not getattr(self.futu_reader, 'disabled', False):
                         self._circuit_record_failure('富途')
@@ -377,6 +387,10 @@ class MarketDataService:
             if symbol.endswith(suffix):
                 symbol = symbol[:-len(suffix)]
                 break
+
+        # [AI-2026-08-04] 美股/港股盘口展示窗口（东哥拍板）：16:00 后一律不显示，连冻结值都不留。
+        if not is_quote_window():
+            return {'symbol': symbol, 'ib': None, 'futu': None}
 
         # IB 原始盘口（仅夜盘有免费实时；其余时段 prices 可能为空/滞后，原样返回供对比）
         ib_q = None

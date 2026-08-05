@@ -73,7 +73,8 @@ class RealtimeMarketManager:
             full_config = self.db_manager.get_data_source_config("realtime_market")
 
         if not full_config:
-            priority_names = self.priority_list or _load_realtime_priority() or ["tdx", "guojin", "galaxy", "tencent", "sina"]
+            # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。新浪优先、腾讯降级兜底。
+            priority_names = self.priority_list or _load_realtime_priority() or ["tdx", "guojin", "galaxy", "sina", "tencent"]
             full_config = [{"source_name": name, "config_json": "{}"} for name in priority_names]
             self.priority_list = priority_names
         else:
@@ -192,7 +193,8 @@ class RealtimeMarketManager:
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """按照优先级从活跃源中获取行情，异常熔断保护"""
-        for source_name in (self.priority_list or ["tdx", "guojin", "galaxy", "tencent", "sina"]):
+        # [AI-2026-08-04] 东哥拍板：新浪优先、腾讯降级兜底（与 start() 默认一致）。
+        for source_name in (self.priority_list or ["tdx", "guojin", "galaxy", "sina", "tencent"]):
             if source_name in self.active_fetchers:
                 try:
                     quote = self.active_fetchers[source_name].get_quote(symbol)

@@ -123,7 +123,8 @@ class DynamicValuationCalculator:
             # 改为：hedge 缺失时不再用陈旧值兜底——calculate() 会直接落到
             # 矩阵(篮子)标准公式，仅依赖 usa_etf_daily_prices.netvalue(Yahoo) +
             # exchange_rate(官方中间价) + yaml 权重/仓位，全链路可脱离 Woody 独立计算。
-            # （单ETF基金的 position 缺失时由 calculate() 用 yaml holdings.equity_ratio 兜底）
+            # [AI-2026-08-04 SUPREME 铁律] position 缺失时由 get_base_data 回溯最近 factors 行，
+            # 不再用 yaml holdings.equity_ratio 兜底（兜底成 1.0 会导致篮子 H 失真 4%~25%）。
 
             # [AI-2026-07-21] 补充底层 ETF 基准价格：查询 fund_basket_weights 判断基金会是否为多篮子
             # 有 basket 条目的基金（如161116→GLD+^GLD-EU）必须取 price（市场价格），矩阵公式需要真实价格变化率
@@ -133,20 +134,52 @@ class DynamicValuationCalculator:
                 (fund_code,)
             ).fetchone()[0]
             _price_col = 'price' if basket_count > 0 else 'netvalue'
+            # [AI-2026-08-04] 同时查 price 和 netvalue：
+            # base_price 按 _price_col 分流（矩阵用 price，魔法展示用 netvalue）；
+            # 但 current_price 退化时应统一取市场价(price)，故额外存 _mkt 后缀供退化使用。
             etf_df = pd.read_sql(
-                f"SELECT symbol, {_price_col} as price, date "
-                "FROM usa_etf_daily_prices WHERE date = ?", 
+                f"SELECT symbol, {_price_col} as price, price as mkt_price, netvalue as mkt_nav, date "
+                "FROM usa_etf_daily_prices WHERE date = ?",
                 conn, params=(base_date,)
             )
             if not etf_df.empty:
                 for _, r in etf_df.iterrows():
                     sym = r['symbol']
                     base_row[sym] = r['price']
+                    # 市场价（price 优先，缺失则 netvalue），供 current_price 退化时统一取用
+                    mkt = r['mkt_price'] if pd.notna(r['mkt_price']) and r['mkt_price'] > 0 else r['mkt_nav']
+                    base_row[sym + '_mkt'] = mkt
                     if sym.startswith('^'):
                         base_row[sym[1:]] = r['price']
+                        base_row[sym[1:] + '_mkt'] = mkt
                     else:
                         base_row['^' + sym] = r['price']
+                        base_row['^' + sym + '_mkt'] = mkt
             # [AI-2026-07-21 用户要求] 不兜底静默填充，数据缺失就让其缺失，真实暴露
+
+            # [AI-2026-08-04 SUPREME 铁律] position 缺失时回溯最近有 factors 的日期，
+            # 禁止用 equity_ratio 兜底（兜底成 1.0 会导致篮子 H 失真 4%~25%）。
+            # 根因：unified_fund_history 更新到 08-03 但 fund_daily_factors 滞后 07-31，
+            # LEFT JOIN 同日期取不到 position → None → assemble_dynamic_components 兜底成 1.0。
+            # 修复：从 fund_daily_factors 取该基金最近有非空 position 的行，补回 position/hedge/calibration。
+            # 这不是兜底（不编造数据），而是回溯到最近的真实数据点（与上方 ETF 数据回溯同理）。
+            if base_row.get('position') is None or pd.isna(base_row.get('position')):
+                factor_df = pd.read_sql(
+                    """SELECT position, hedge, calibration FROM fund_daily_factors
+                       WHERE fund_code = ? AND position IS NOT NULL AND position > 0
+                       ORDER BY date DESC LIMIT 1""",
+                    conn, params=(fund_code,)
+                )
+                if not factor_df.empty:
+                    fr = factor_df.iloc[0]
+                    base_row['position'] = fr['position']
+                    if base_row.get('hedge') is None or pd.isna(base_row.get('hedge')):
+                        base_row['hedge'] = fr['hedge']
+                    if base_row.get('calibration') is None or pd.isna(base_row.get('calibration')):
+                        base_row['calibration'] = fr['calibration']
+                    logger.info(f"  ✅ [{fund_code}] position 回溯至最近 factors 行: pos={base_row['position']}")
+                else:
+                    logger.warning(f"  ⚠️ [{fund_code}] fund_daily_factors 无任何有效 position 行，position 将为 None")
 
             self._base_data_cache[fund_code] = base_row
             self._cache_timestamp[fund_code] = time.time()
@@ -265,7 +298,7 @@ class DynamicValuationCalculator:
             'premium': round((fund_config.get('current_price', 0) / rt_val - 1) * 100, 3)
             if fund_config.get('current_price', 0) > 0 else None,
             'base_nav': round(assembled['base_nav'], 4),
-            'position': round(assembled['position'], 6),
+            'position': round(assembled['position'], 6) if assembled['position'] is not None else None,
             'fx_base': round(assembled['fx_base'], 6) if assembled['fx_base'] else None,
             'fx_current': round(current_fx, 6) if current_fx else None,
             'hedge': round(assembled['hedge'], 6) if assembled['hedge'] else None,

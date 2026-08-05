@@ -89,6 +89,10 @@
           <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
           <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
         </div>
+        <div class="history-actions" style="margin: 6px 0 10px 0; display: flex; align-items: center; gap: 10px;">
+          <n-button size="small" type="primary" :loading="reconciling" @click="reconcileStaticValHandler">核对静态估值（补采近10日+重算）</n-button>
+          <span style="font-size: 12px; color: #64748b;">补采该基金历史价格/净值，并级联补底层ETF日价后重算静态估值</span>
+        </div>
         <div class="history-table-wrapper">
           <n-data-table
             :columns="historyColumns"
@@ -126,7 +130,7 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   NGrid, NGi, NCard, NIcon, NText, NInput,
-  NButton, NDataTable, NTag, NTabs, NTabPane, NModal, NPagination
+  NButton, NDataTable, NTag, NTabs, NTabPane, NModal, NPagination, useMessage
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { Zap, Star, StarOff, History } from 'lucide-vue-next'
@@ -136,7 +140,7 @@ import { useFundStore, useMarketStore, useAppStore } from '../store'
 import { formatPrice, formatValuation, formatPercent, formatPremium,
          formatVolume, formatShares, formatSharesChange, formatTurnoverRate,
          formatIndexPrice, priceColor, shortDate, cleanFundName } from '../utils'
-import { getFundHistory } from '../api'
+import { getFundHistory, reconcileStaticVal } from '../api'
 import SilverRatio from './SilverRatio.vue'
 
 const router = useRouter()
@@ -145,6 +149,7 @@ const router = useRouter()
 const fundStore = useFundStore()
 const marketStore = useMarketStore()
 const appStore = useAppStore()
+const message = useMessage()
 
 // [AI-2026-08-03] 主看板「现价」应显示盘中 LOF 实时价(realtime_price)，而非数据库收盘价(price)。
 // 非交易时段 realtime_price 为空/0 时回退到收盘价，避免显示 0 或误导。
@@ -187,6 +192,30 @@ const openHistory = async (fund: any) => {
   selectedFund.value = fund
   showHistoryModal.value = true
   await fundStore.fetchFundHistory(fund.fund_code)
+}
+
+// [AI-2026-08-04] 单基金「核对静态估值」：替代已移除的全局重算。补采该基金近10日历史价格/净值
+// （级联底层ETF如VGT日价）并重算静态估值，仅影响当前基金。
+const reconciling = ref(false)
+const reconcileStaticValHandler = async () => {
+  if (!selectedFund.value?.fund_code) return
+  const code = selectedFund.value.fund_code
+  reconciling.value = true
+  try {
+    const res = await reconcileStaticVal(code, 10)
+    if (res.data?.status === 'ok') {
+      const s = res.data.data?.stats || {}
+      message.success(`「${code}」核对完成：价格${s.lof_price || 0}天 / 净值${s.lof_nav || 0}天 / 底层ETF${Object.keys(s.etf || {}).join(',') || '无'}已补采，静态估值已重算`)
+      await fundStore.fetchFundHistory(code)
+      historyPage.value = 1
+    } else {
+      message.error(`核对失败: ${res.data?.message || '未知错误'}`)
+    }
+  } catch (e: any) {
+    message.error(`核对失败: ${e?.message || e}`)
+  } finally {
+    reconciling.value = false
+  }
 }
 
 /**
@@ -895,21 +924,8 @@ const tableScrollX = computed(() => {
 .date-cell, .index-cell { font-size: 11px; color: #64748b; }
 .clickable-cell { cursor: pointer; text-decoration: underline; color: #2563eb !important; }
 .clickable-cell:hover { color: #1d4ed8 !important; }
-/* [2026-07-31] 收盘冻结估值标签 */
-.frozen-cell { display: inline-flex; align-items: center; gap: 2px; }
-.freeze-badge {
-  display: inline-block;
-  margin-left: 2px;
-  padding: 0;
-  font-size: 8px;
-  line-height: 1;
-  font-weight: 900;
-  color: #334155;
-  background: transparent;
-  border-radius: 0;
-  vertical-align: middle;
-}
-.freeze-badge.sm { font-size: 7px; }
+/* [2026-07-31] 收盘冻结估值标签 — [AI-2026-08-04] 东哥硬刷看不到效果，进一步加大对比
+   ⚠️ 必须放在 <style scoped> 外（见底部非 scoped 块），因 n-data-table slot 不继承父 data-v */
 .col-title-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px 0; width: 100%; }
 .bg-blue-light { background-color: #dbeafe; }
 .bg-orange-light { background-color: #ffedd5; }
@@ -1110,4 +1126,25 @@ const tableScrollX = computed(() => {
 .rate-change { font-size: 12px; font-weight: 700; }
 .rate-change.up { color: #ef4444; }
 .rate-change.down { color: #22c55e; }
+</style>
+
+<!-- [AI-2026-08-04] freeze-badge / frozen-cell 必须在 <style scoped> 外
+     原因：n-data-table (Naive UI) 渲染 slot 时，slot vnode 不继承父组件的 data-v-xxx 属性，
+     所以 .freeze-badge[data-v-xxx] 选择器无法匹配 cell 内的 span。改为全局（不 scoped）即可生效。-->
+<style>
+.frozen-cell { display: inline-flex; align-items: center; gap: 8px; }
+.freeze-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.3;
+  font-weight: 700;
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.freeze-badge.sm { font-size: 9px; padding: 0 4px; }
 </style>

@@ -16,6 +16,11 @@ export function getFundHistory(code: string) {
   return client.get(`/api/fund/${code}/history`)
 }
 
+/** [AI-2026-08-04] 单基金「核对静态估值」：补采近 days 个交易日价格/净值（级联底层ETF日价）并重算静态估值 */
+export function reconcileStaticVal(code: string, days: number = 10) {
+  return client.post(`/api/fund/${code}/reconcile_static_val?days=${days}`)
+}
+
 /** 动态基金分类（主看板 TAB 用） */
 export function getCategories() {
   return client.get('/api/config/categories')

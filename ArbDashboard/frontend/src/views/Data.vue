@@ -53,21 +53,7 @@
             </n-button>
           </div>
 
-          <!-- [AI-2026-07-10] 静态估值手动触发 -->
-          <n-divider title-placement="left">静态估值</n-divider>
-          <div class="nav-action-card">
-            <div class="nav-action-info">
-              <div class="nav-title">重算静态估值</div>
-              <div class="nav-desc">
-                基于最新因子/指数数据，重新计算所有基金的静态估值（含 QDII日本新基金）。
-                <span v-if="staticValLastTime">上次计算: {{ staticValLastTime }}</span>
-              </div>
-            </div>
-            <n-button type="primary" @click="triggerStaticValuation" :loading="staticValRunning">
-              <template #icon><n-icon><RefreshCw /></n-icon></template>
-              立即计算
-            </n-button>
-          </div>
+          <!-- [AI-2026-08-04] 全局「重算静态估值」已移除：改为各基金历史弹窗内的「核对静态估值」单基金按钮（见 Dashboard.vue），按基金粒度补采+重算，不全量打补丁 -->
         </n-card>
       </n-gi>
       <n-gi :span="10">
@@ -195,8 +181,14 @@
                    ]" />
                 </n-form-item>
              </n-gi>
-            <n-gi>
-               <n-form-item label="仓位(%)">
+             <n-gi>
+                <n-form-item label="数据源">
+                   <!-- [AI-2026-08-05] 决定每日是否去对应 API 采集因子：woody=去 woody 拉估值因子；localindex/hkindex/other 走各自源 -->
+                   <n-select v-model:value="fundForm.data_source" :options="dataSourceOptions" placeholder="请选择数据源" />
+                </n-form-item>
+             </n-gi>
+             <n-gi>
+                <n-form-item label="仓位(%)">
                   <n-input-number v-model:value="fundForm.holdings.equity_ratio" :step="0.1" style="width:100%" />
                </n-form-item>
             </n-gi>
@@ -418,9 +410,12 @@ const navRunning = ref(false)
 const fundConfigs = ref<any[]>([])
 const showFundModal = ref(false)
 const editMode = ref(false)
+// [AI-2026-08-05] 新增 data_source 字段（默认 woody），使页面新增基金自动带入数据源，
+// 解决"页面新增基金 → 写入 YAML 但缺 data_source → daily_updater 采集过滤跳过"的断层。
 const fundForm = reactive<any>({
   code: '', name: '', category: '',
   trade_etf: '', trade_future: '',
+  data_source: 'woody',
   holdings: { equity_ratio: 95.0 },
   valuation_portfolio: [],
   redemption_fee_rate: 0.5,
@@ -432,6 +427,17 @@ const anchorOptions = [
   { label: '欧洲时刻 (EU)', value: 'EU' },
   { label: '日本时刻 (JP)', value: 'JP' },
   { label: '香港时刻 (HK)', value: 'HK' }
+]
+
+// [AI-2026-08-05] 数据源下拉选项：直接映射 lof_config.yaml 中 data_source 的真实取值。
+// 默认 woody（QDII/跨境），新增基金自动带数据源 → daily_updater 按 data_source=='woody' 采集因子，根治"页面新增但每日采集跳过"的断层。
+const dataSourceOptions = [
+  { label: 'Woody (QDII/跨境)', value: 'woody' },
+  { label: '本地指数 (国内LOF)', value: 'localindex' },
+  { label: '港股指数', value: 'hkindex' },
+  { label: '现金管理 (货币/短融/政金债)', value: 'cash_mngt' },
+  { label: '白银期货 (161226核心)', value: 'silver' },
+  { label: '其他', value: 'other' }
 ]
 
 const getCategoryBadgeStyle = (cat: string) => {
@@ -505,25 +511,7 @@ const triggerNavUpdate = async () => {
   }
 }
 
-// [AI-2026-07-10] 静态估值手动触发
-const staticValLastTime = ref('')
-const staticValRunning = ref(false)
-
-const triggerStaticValuation = async () => {
-  staticValRunning.value = true
-  try {
-    const res = await triggerSystemTask('012')
-    if (res.data.status === 'ok') {
-      message.success('静态估值计算已后台运行，请稍后刷新看板查看结果')
-    } else {
-      message.error(`启动失败: ${res.data.message}`)
-    }
-  } catch (e: any) {
-    message.error(`启动失败: ${e.message}`)
-  } finally {
-    setTimeout(() => { staticValRunning.value = false }, 2000)
-  }
-}
+// [AI-2026-08-04] 已移除 triggerStaticValuation（全局重算）。单基金版见 Dashboard.vue「核对静态估值」按钮 -> POST /api/fund/{code}/reconcile_static_val
 
 const fetchFundConfigs = async () => {
   try {
@@ -557,6 +545,7 @@ const addNewFund = () => {
   Object.assign(fundForm, {
     code: '', name: '', category: selectedTab.value, trade_etf: '', trade_future: '',
     valuation_method: '',
+    data_source: 'woody',
     holdings: { equity_ratio: 95.0 },
     valuation_portfolio: [{ symbol: '', weight: 100, anchor: 'US' }]
   })
@@ -569,6 +558,8 @@ const editFund = async (fund: any) => {
   Object.assign(fundForm, baseData)
   if (!fundForm.holdings) fundForm.holdings = { equity_ratio: 95.0 }
   if (!fundForm.valuation_portfolio) fundForm.valuation_portfolio = []
+  // [AI-2026-08-05] 存量基金若缺 data_source（如 161128），显式置空让下拉框显示占位符，避免沿用上一次新增残留的 'woody'
+  if (!fundForm.data_source) fundForm.data_source = ''
   showFundModal.value = true
 }
 

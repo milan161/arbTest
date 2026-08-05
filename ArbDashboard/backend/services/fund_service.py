@@ -767,16 +767,9 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                        'ARKK', 'ARKG', 'EEM', 'VWO', 'INDA', 'EWJ', 'KWEB', 'RSPH',
                        'LQD', 'HYG', 'TLT', 'IEF', 'SHY', 'AGG', 'BND'}
 
-    # [V10.19] HK非标指数→标准指数别名映射
-    # 腾讯/新浪只支持 HSI/HSCEI/HSTECH 三个标准HK指数
-    # 其他HK指数（HSCI/HSCCI/HSSCNE/HSSI/HSMI）通过此表映射到最接近的标准指数
-    _HK_INDEX_ALIAS_MAP = {
-        'HSCI': 'HSI',       # 恒生综合指数 → 恒生指数
-        'HSCCI': 'HSI',      # 恒生中国内地100 → 恒生指数
-        'HSSCNE': 'HSCEI',   # 恒生新经济 → 国企指数
-        'HSSI': 'HSCEI',     # 恒生小型股 → 国企指数
-        'HSMI': 'HSCEI',     # 恒生中型股 → 国企指数
-    }
+    # [AI-2026-08-05] 删除 _HK_INDEX_ALIAS_MAP 别名兜底（违反"不兜底"铁律）
+    # 原逻辑把 HSMI/HSSI/HSCCI/HSCI/HSSCNE 映射到 HSCEI/HSI 取实时数据 → 指数价/涨跌幅完全错误
+    # 实测新浪 rt_hk{sym} 直接支持所有港股指数（HSMI/HSSI/HSCCI/HSCI/HSSCNE 全部返回真实数据），无需映射
 
     # [V10.19] CSI代码(930xxx/931xxx等)不应走腾讯sh/sz查询，应直接走东财
     def _is_csi_index_code(code: str) -> bool:
@@ -834,20 +827,14 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
             tc_req, sina_req, ret_code = "hkHSCEI", "rt_hkHSCEI", "HSCEI"
         elif clean_sym == 'HSI':
             tc_req, sina_req, ret_code = "hkHSI", "rt_hkHSI", "HSI"
-        elif clean_sym in _HK_INDEX_ALIAS_MAP:
-            # 非标HK指数→映射到标准指数，同时记录映射关系
-            # 例如 HSCI→HSI, HSCCI→HSI, HSSI→HSCEI 等
-            mapped = _HK_INDEX_ALIAS_MAP[clean_sym]
-            if mapped == 'HSI':
-                tc_req, sina_req, ret_code = "hkHSI", "rt_hkHSI", "HSI"
-            elif mapped == 'HSCEI':
-                tc_req, sina_req, ret_code = "hkHSCEI", "rt_hkHSCEI", "HSCEI"
-            elif mapped == 'HSTECH':
-                tc_req, sina_req, ret_code = "hkHSTECH", "rt_hkHSTECH", "HSTECH"
-            else:
-                continue
-            # 在tc_to_syms/sina_to_syms中同时注册原始sym和ret_code的映射
-            # 这样API返回ret_code时，能将数据写入res[original_sym]
+        elif clean_sym in ('HSMI', 'HSSI', 'HSCCI', 'HSCI', 'HSSCNE'):
+            # [AI-2026-08-05] 新浪 rt_hk{sym} 直接支持这些港股指数（删除原 _HK_INDEX_ALIAS_MAP 别名兜底，符合"不兜底"铁律）
+            # 实测：新浪 rt_hkHSMI/rt_hkHSSI/rt_hkHSCCI/rt_hkHSCI/rt_hkHSSCNE 全部返回真实实时数据
+            # 腾讯 qt.gtimg 仅支持 HSCCI/HSCI，不支持 HSMI/HSSI/HSSCNE（返回 v_pv_none_match）
+            if clean_sym in ('HSCCI', 'HSCI'):
+                tc_req = f"hk{clean_sym}"
+            sina_req = f"rt_hk{clean_sym}"
+            ret_code = clean_sym
         elif clean_sym.startswith('.') and len(clean_sym) <= 10:
             # [V10.13] 美股指数（.INX, .NDX, .SP500-45 等）走新浪获取
             sina_req = f"s_sh{clean_sym}"
@@ -855,7 +842,8 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         else:
             continue
             
-        tencent_requests.add(tc_req)
+        if tc_req:
+            tencent_requests.add(tc_req)
         tc_to_syms.setdefault(ret_code, []).append(sym)
         sina_to_syms.setdefault(ret_code, []).append(sym)
         # [AI-2026-07-20] 全球指数（sina_req != ret_code）额外注册 sina_req 键
@@ -866,26 +854,8 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
 
     res = {}
     
-    # 1. 优先从腾讯获取
-    if tencent_requests:
-        url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
-        try:
-            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
-            if r_tc.status_code == 200:
-                for line in r_tc.text.split(';'):
-                    if 'v_' not in line or '=' not in line: continue
-                    data_str = line.split('=')[1].strip(' "')
-                    tc_parts = data_str.split('~')
-                    if len(tc_parts) >= 33:
-                        code = tc_parts[2]
-                        if code in tc_to_syms:
-                            for original_sym in tc_to_syms[code]:
-                                res[original_sym] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
-                            logger.info(f"[INDEX-TENCENT] 获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
-        except Exception as e:
-            logger.warning(f"预取腾讯指数异常: {e}")
-
-    # 2. 对于腾讯没拿到数据的指数，用新浪接口兜底
+    # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。改为新浪优先、腾讯降级兜底。
+    # 2. 优先从新浪获取（res 为空时全量尝试）
     missing_sina_reqs = set()
     for ret_code, syms in sina_to_syms.items():
         if any(s not in res for s in syms):
@@ -896,7 +866,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                     missing_sina_reqs.add(f"s_sh{ret_code}")
             else:
                 missing_sina_reqs.add(f"rt_hk{ret_code}")
-                
+
     if missing_sina_reqs:
         url = f"http://hq.sinajs.cn/list={','.join(missing_sina_reqs)}"
         try:
@@ -930,8 +900,8 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                                     if original_sym not in res:
                                         res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
                                         logger.debug(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
-                    # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
                     elif var_name.startswith('var hq_str_int_'):
+                        # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
                         code = var_name.replace('var hq_str_', '')
                         if code in sina_to_syms:
                             for original_sym in sina_to_syms[code]:
@@ -939,6 +909,29 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                                     if len(parts) >= 4:
                                         res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
                                         logger.debug(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+        except Exception as e:
+            logger.warning(f"预取新浪指数异常: {e}")
+
+    # [AI-2026-08-04] 新浪优先后，腾讯仅兜底新浪未拿到的指数（非主力源）
+    # 1. 腾讯兜底获取
+    if tencent_requests:
+        url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
+        try:
+            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
+            if r_tc.status_code == 200:
+                for line in r_tc.text.split(';'):
+                    if 'v_' not in line or '=' not in line: continue
+                    data_str = line.split('=')[1].strip(' "')
+                    tc_parts = data_str.split('~')
+                    if len(tc_parts) >= 33:
+                        code = tc_parts[2]
+                        if code in tc_to_syms:
+                            for original_sym in tc_to_syms[code]:
+                                if original_sym not in res:
+                                    res[original_sym] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
+                            logger.info(f"[INDEX-TENCENT] 兜底获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
+        except Exception as e:
+            logger.warning(f"预取腾讯指数异常: {e}")
         except Exception as e:
             logger.warning(f"预取新浪指数兜底异常: {e}")
 
@@ -1057,6 +1050,7 @@ class FundService:
         if not code:
             return None
         conn = self.db._get_conn()
+        quantity = None  # [AI-2026-08-05] 聚合层对冲数量,默认 None;篮子分支经 analyze_realtime 赋值,供 H5 详情页
         try:
             # 1. 基金基本信息
             fund_df = pd.read_sql(
@@ -1169,13 +1163,17 @@ class FundService:
                                 logger.debug(f"[{code}] 取 {sym_base} 行情失败: {e}")
 
                     calculator = self._get_calculator()
-                    if calculator and current_fx and current_fx > 0 and current_quotes:
+                    # [AI-2026-08-04] 允许 current_quotes 为空（盘后美股无行情），
+                    # 此时仍从基准数据返回仓位/汇率基准/hedge/components 等展示字段，
+                    # 不伪造实时价；rt_val/rt_premium 仅在有实时行情时才用 detail 重算。
+                    if calculator and current_fx and current_fx > 0:
                         try:
                             fund_cfg['current_price'] = price or 0
                             detail = calculator.calculate_detail(fund_cfg, current_fx, current_quotes)
                             if detail:
-                                rt_val = detail['rt_val']
-                                rt_premium = detail.get('premium')
+                                if current_quotes:
+                                    rt_val = detail['rt_val']
+                                    rt_premium = detail.get('premium')
                                 components = detail.get('components', [])
                                 position = detail.get('position')
                                 fx_base = detail.get('fx_base')
@@ -1198,6 +1196,17 @@ class FundService:
                                         logger.debug(f"[{code}] 回填显示 hedge 失败: {_e}")
                         except Exception as e:
                             logger.warning(f"[{code}] calculate_detail 失败: {e}")
+            # [AI-2026-08-05] 生产接入：聚合层算权威对冲数量(每10万份)，替代 H5 前端手算，
+            # 保证前后端单一算法源(消除 preview.html 559-595 分叉)。仅篮子/单ETF类有值，其余 None。
+            try:
+                from arbcore.analysis import analyze_realtime as _ar_rt
+                _ar_etfs = {s: (q.get('price') or q.get('bid') or 0) for s, q in (current_quotes or {}).items()}
+                _ar_res = _ar_rt(code, lof_qty=100000, current_price=(price or 0),
+                                 current_fx=(current_fx or 0), current_etfs=_ar_etfs)
+                quantity = _ar_res.get('quantity') if _ar_res else None
+            except Exception as _qe:
+                logger.debug(f"[{code}] 聚合层对冲数量计算失败: {_qe}")
+                quantity = None
             else:
                 # 非篮子基金：复用主面板已算好的 rt_val / rt_premium
                 try:
@@ -1229,6 +1238,7 @@ class FundService:
                 'hedge': hedge,
                 'base_date': base_date,
                 'components': components,
+                'quantity': quantity,  # [AI-2026-08-05] 聚合层权威对冲数量(每10万份),H5 替代前端手算
                 'lof_quote': {
                     'bid': lof_quote.get('bid') if lof_quote else None,
                     'ask': lof_quote.get('ask') if lof_quote else None,
@@ -1271,7 +1281,8 @@ class FundService:
                 params.extend(cats)
 
             funds_df = pd.read_sql_query(
-                f"SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list {where_clause}",
+                # [AI-2026-08-05] 增加 paused_exempt 字段，用于豁免分类暂停
+                f"SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name, paused_exempt FROM unified_fund_list {where_clause}",
                 conn, params=params
             )
 
@@ -1290,9 +1301,11 @@ class FundService:
                     paused_set = set()
             if paused_set:
                 before = len(funds_df)
-                funds_df = funds_df[~funds_df['category'].isin(paused_set)]
+                # [AI-2026-08-05] 豁免基金(paused_exempt=1)不受分类暂停影响，仍展示+计算估值
+                mask_paused = funds_df['category'].isin(paused_set) & (funds_df['paused_exempt'] == 0)
+                funds_df = funds_df[~mask_paused]
                 if len(funds_df) < before:
-                    logger.debug(f"[DASHBOARD-FILTER] 过滤暂停分类，{before} -> {len(funds_df)} 只基金")
+                    logger.debug(f"[DASHBOARD-FILTER] 过滤暂停分类(保留豁免)，{before} -> {len(funds_df)} 只基金")
 
             # ── 2. 批量获取 fund_purchase_status 状态费率（AKShare 日更）──
             status_df = pd.read_sql_query(
@@ -1335,15 +1348,10 @@ class FundService:
                 paused_set = set(json.loads(raw)) if raw else set()
             except Exception:
                 paused_set = {'QDII亚洲', '国内LOF', '现金管理'}
+            # [AI-2026-08-05] funds_df 已在上方按 paused_exempt 过滤（豁免基金保留），无需重复过滤
+            indices_to_fetch = funds_df['related_index'].dropna().tolist()
             if paused_set:
-                filtered_funds = funds_df[~funds_df['category'].isin(paused_set)]
-                indices_to_fetch = filtered_funds['related_index'].dropna().tolist()
-                if indices_to_fetch:
-                    logger.debug(f"[INDEX-FILTER] 暂停分类 {sorted(paused_set)}，仅抓取 {len(indices_to_fetch)} 个指数")
-                else:
-                    indices_to_fetch = []
-            else:
-                indices_to_fetch = funds_df['related_index'].dropna().tolist()
+                logger.debug(f"[INDEX-FILTER] 暂停分类(含豁免) {sorted(paused_set)}，抓取 {len(indices_to_fetch)} 个指数")
             
             index_changes_map = prefetch_index_changes(indices_to_fetch, conn=conn)
 
@@ -1376,7 +1384,8 @@ class FundService:
                 category = fund.get('category', '')
 
                 # [AI-2026-07-20] 暂停分类 ❌ 直接跳过，不计算实时估值、不产生 WARNING 日志
-                if category in paused_set:
+                # [AI-2026-08-05] 豁免基金(paused_exempt=1)不跳过，正常计算估值
+                if category in paused_set and fund.get('paused_exempt', 0) == 0:
                     result.append({
                         'fund_code': code,
                         'fund_name': fund.get('fund_name', ''),
@@ -1854,8 +1863,14 @@ class FundService:
                                 if trade_etf and trade_etf != '-' and self.market_data_service:
                                     # [V10.9] 跳过指数类符号（HSI/HSTECH等），指数走 get_index_change_percent 路径
                                     from arbcore.config.source_routing import get_symbol_source
-                                    if get_symbol_source(trade_etf) == 'SINA':
-                                        pass  # 指数符号不加入实时行情查询
+                                    # [AI-2026-08-05] HSCHK25 等未在 symbol_sources 声明的符号会抛 KeyError
+                                    # 非兜底——确实无数据源，跳过实时ETF估值，前端显示 --
+                                    try:
+                                        _sym_src = get_symbol_source(trade_etf)
+                                    except KeyError:
+                                        _sym_src = None
+                                    if _sym_src in ('SINA', None):
+                                        pass  # 指数/无数据源符号不加入实时行情查询
                                     else:
                                         # [AI-2026-07-20] 实时估值用买一价 bid，无 bid 时降级用成交价 price
                                         try:
@@ -2646,8 +2661,13 @@ class FundService:
                 if trade_etf and trade_etf != '-':
                     # [V10.9] 跳过指数类符号（HSI/HSTECH/399300等），指数无可用的实时行情
                     from arbcore.config.source_routing import get_symbol_source
-                    if get_symbol_source(trade_etf) == 'SINA':
-                        pass  # 指数符号不加入实时行情查询
+                    # [AI-2026-08-05] HSCHK25 等未声明数据源的符号抛 KeyError → 跳过（非兜底）
+                    try:
+                        _sym_src = get_symbol_source(trade_etf)
+                    except KeyError:
+                        _sym_src = None
+                    if _sym_src in ('SINA', None):
+                        pass  # 指数/无数据源符号不加入实时行情查询
                     else:
                         etf_symbols.append(trade_etf)
             # [V10.9] 加入基金自身行情（供 Lazy 保守/内卷模式使用 lof_bid/lof_ask）

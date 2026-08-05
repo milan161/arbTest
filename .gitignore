@@ -43,13 +43,15 @@ ArbDashboard/logs/
 arbcore/scripts/
 
 # === 文档、日志与测试代码 ===
-# 仅屏蔽未完成草稿目录，正式docs目录全部放行
+# 仅屏蔽未完成草稿目录
 /docs_unfinished/
 /logs/
-# 全局屏蔽md，单独放行根目录README + docs内所有文档
+# 全局屏蔽md，单独放行根目录README（docs/ 整目录不再上传，见下方屏蔽）
 *.md
 !/README.md
-!/docs/**/*.md
+
+# === 文档目录整体屏蔽（东哥 2026-08-05 拍板：docs 不再上传 GitHub） ===
+docs/
 
 # === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
 *.xlsx
