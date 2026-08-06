@@ -631,9 +631,15 @@ class DailyUpdater(BaseApp):
         self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价/日元）采集结束。")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None, trade_volume=None):
-        """[AI-2026-06-28] premium 用 T-1 净值计算，入库即正确"""
+        """
+        [AI-2026-06-28] premium 计算按基金分类分支：
+          - QDII欧美 / 黄金原油（美股/期货有时差）→ T价 / T-1净值
+          - QDII亚洲 / QDII日本 / 国内LOF（无隔夜时差）→ T价 / T净值
+        [AI-2026-08-06] 修复此前统一用 T-1 净值的错误，对齐 AGENTS.md TOP 2 铁律。
+        """
         conn = self.db._get_conn()
         row = None
+        category = None
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT price, nav FROM unified_fund_history WHERE date=? AND fund_code=?", (date_str, fund_code))
@@ -641,19 +647,30 @@ class DailyUpdater(BaseApp):
             # [AI-2026-06-28] 查 T-1 净值用于溢价计算
             cursor.execute("SELECT nav FROM unified_fund_history WHERE fund_code=? AND date<? AND nav IS NOT NULL ORDER BY date DESC LIMIT 1", (fund_code, date_str))
             t1_row = cursor.fetchone()
+            # [AI-2026-08-06] 查基金分类以确定溢价口径
+            cursor.execute("SELECT category FROM unified_fund_list WHERE fund_code=?", (fund_code,))
+            cat_row = cursor.fetchone()
+            category = cat_row[0] if cat_row else None
         finally:
             conn.close()
-            
+
         exist_price = row[0] if row and row[0] is not None else None
         exist_nav = row[1] if row and row[1] is not None else None
         t1_nav = float(t1_row[0]) if t1_row and t1_row[0] is not None else None
-        
+
         new_price = price if price is not None else exist_price
         new_nav = nav if nav is not None else exist_nav
-        
+
+        # [AI-2026-08-06] 按分类选分母：有时差的用 T-1 净值，无的用 T 净值
         premium = None
-        if new_price is not None and t1_nav is not None and t1_nav > 0:
-            premium = round((float(new_price) - t1_nav) / t1_nav * 100, 4)
+        if new_price is not None:
+            if category in ('QDII欧美', '黄金原油') and t1_nav is not None and t1_nav > 0:
+                premium = round((float(new_price) - t1_nav) / t1_nav * 100, 4)
+            elif new_nav is not None and float(new_nav) > 0:
+                premium = round((float(new_price) - float(new_nav)) / float(new_nav) * 100, 4)
+            elif t1_nav is not None and t1_nav > 0:
+                # 无当日净值时的降级：用 T-1（仅兜底，不掩盖缺失）
+                premium = round((float(new_price) - t1_nav) / t1_nav * 100, 4)
             
         # [AI-2026-07-31] 净值日期一并落库：本表约定「行内 nav 即 date 当日净值」
         # （东财 nav_df 每行自带日期，date_str 就是净值日期；此前只写 nav 不写 nav_date 属遗漏）
@@ -869,7 +886,10 @@ class DailyUpdater(BaseApp):
         all_codes = list(fund_categories.keys())
         # [AI-2026-07-23] QDII欧美/黄金原油（美股基金）净值在北京时间上午尚未发布，
         # 按 expected = T-2 判定，下午 3 点后才改为 T-1，避免无谓的东财抓取。
+        # [AI-2026-08-06] 国内LOF/指数LOF/QDII亚洲/QDII日本 与 A 股同日收盘、无时差，
+        # T 日净值当日可得，expected 必须设为 T 日，否则会用 T-1 净值跳过 T 日采集。
         T2_CATEGORIES = {'黄金原油', 'QDII欧美'}
+        T0_CATEGORIES = {'国内LOF', '指数LOF', '国内指数', 'QDII亚洲', 'QDII日本'}
         # 北京时间下午 3 点后，美股基金 T-1 净值通常已发布
         NAV_CUTOFF_HOUR = 15
 
@@ -883,14 +903,21 @@ class DailyUpdater(BaseApp):
                 
             t_1_date = get_prev_trading_day(datetime.now())
             t_2_date = get_prev_trading_day(datetime.now(), n=2)
+            today_str = datetime.now().strftime('%Y-%m-%d')
             
             # 预期最新净值日期：
             #   QDII欧美/黄金原油：上午用 T-2，下午 3 点后用 T-1
+            #   国内LOF/指数LOF/QDII亚洲/QDII日本：与 A 股同日收盘，T 日净值当日可得
             #   其他基金：始终 T-1
             category = fund_categories.get(code, '')
             now_hour = datetime.now().hour
-            if category in T2_CATEGORIES and now_hour < NAV_CUTOFF_HOUR:
-                expected_nav_date = t_2_date.strftime('%Y-%m-%d')
+            if category in T2_CATEGORIES:
+                if now_hour < NAV_CUTOFF_HOUR:
+                    expected_nav_date = t_2_date.strftime('%Y-%m-%d')
+                else:
+                    expected_nav_date = t_1_date.strftime('%Y-%m-%d')
+            elif category in T0_CATEGORIES:
+                expected_nav_date = today_str
             else:
                 expected_nav_date = t_1_date.strftime('%Y-%m-%d')
             

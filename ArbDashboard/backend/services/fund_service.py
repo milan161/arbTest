@@ -1432,12 +1432,19 @@ class FundService:
                         valid_series = metrics_df.dropna(subset=[col])
                         metrics[col] = float(valid_series.iloc[0][col]) if not valid_series.empty else 0.0
 
-                    if metrics.get('shares_added') == 0.0:
-                        valid_shares = metrics_df.dropna(subset=['shares'])
-                        if len(valid_shares) >= 2:
-                            shares_t = float(valid_shares.iloc[0]['shares'])
-                            shares_t1 = float(valid_shares.iloc[1]['shares'])
-                            metrics['shares_added'] = float(shares_t - shares_t1)
+                    # [AI-2026-08-06] 修复：新增份额必须基于【相邻交易日】差值；
+                    # 若前一日份额缺失(如 VPS 当日漏采)，则显式留空(None)，禁止跨日兜底造出假差值(如 8-6减8-4)
+                    if 'shares' in metrics_df.columns and len(metrics_df) >= 2:
+                        _sa = metrics_df.dropna(subset=['shares']).sort_values('date')
+                        if len(_sa) >= 2:
+                            _prev = _sa['shares'].shift(1)
+                            _gap = (pd.to_datetime(_sa['date']) - pd.to_datetime(_sa['date'].shift(1))).dt.days
+                            _added = (_sa['shares'] - _prev).where(_prev.notna() & (_gap <= 4))
+                            _last = _added.iloc[-1]
+                            if pd.notna(_last):
+                                metrics['shares_added'] = float(_last)
+                            else:
+                                metrics['shares_added'] = None  # 中间日缺失，不跨日兜底
 
                     # [2026-07-30] 换手率(%) = 成交量(手) / 份额(万)，与 woody 网页对齐
                     #   推导：手×100=份；万×10000=份；份/份×100 = 手/万，故 trade_volume/shares 直接为百分比数值
@@ -2106,14 +2113,16 @@ class FundService:
             df['nav_chg'] = safe_pct_change(df['nav'])
             df['static_val_chg'] = safe_pct_change(df['static_val'])
 
-            # 回填 shares_added：若数据库里为 NULL/0，用相邻两天 shares 差值计算
-            # df 按 date DESC 排列，shift(-1) 取前一交易日（更早的那天）
+            # [AI-2026-08-06] 修复：新增份额须基于【相邻交易日】差值；
+            # 中间日缺失(如 VPS 漏采)时显式留空，禁止跨日兜底造出假差值。
+            # df 按 date DESC，改为升序后用 shift(1) 取严格前一日，仅当前一日有值且间隔<=4天才算。
             if 'shares' in df.columns:
-                mask_sa = df['shares_added'].isna() | (df['shares_added'] == 0)
-                if mask_sa.any():
-                    prev_shares = df['shares'].shift(-1)
-                    calc = df['shares'] - prev_shares
-                    df.loc[mask_sa, 'shares_added'] = calc[mask_sa]
+                _asc = df.sort_values('date')
+                _prev = _asc['shares'].shift(1)
+                _gap = (pd.to_datetime(_asc['date']) - pd.to_datetime(_asc['date'].shift(1))).dt.days
+                _calc = (_asc['shares'] - _prev).where(_prev.notna() & (_gap <= 4))
+                _asc['shares_added'] = _calc
+                df['shares_added'] = _asc['shares_added']
 
             # [2026-07-30] 换手率（与 woody 网页对齐，彻底修正此前用成交额错算）
             #   成交量(份) = trade_volume(手) × 100，份额(份) = shares(万) × 10000
