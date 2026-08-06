@@ -23,7 +23,9 @@
 """
 import os
 import json
+import time
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -34,6 +36,68 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 FREEZE_PATH = os.path.join(PROJECT_ROOT, 'database', 'rt_freeze.json')
 RT_CACHE_PATH = os.path.join(PROJECT_ROOT, 'database', 'rt_cache.json')
+
+# 进程内串行化：避免同一进程多线程同时替换同一缓存文件（启动期并发调用 update_rt_cache 的根因）
+_write_lock = threading.Lock()
+
+
+def _atomic_write_json(path: str, payload: dict) -> bool:
+    """原子写 JSON 到 path。
+    做法：写唯一临时文件 → os.replace 原子替换。Windows 下并发/被杀进程残留句柄会
+    导致 os.replace 抛 PermissionError / WinError 32(文件被占用) / 5(拒绝访问)，这里用
+    「唯一临时名 + 重试兜底」彻底消除启动期 '更新估值缓存失败' 警告。返回是否成功。"""
+    d = os.path.dirname(path)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        return False
+    # 唯一临时名（含 pid + 线程 id），多进程/多线程不会互相覆盖同一个 .tmp
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            try:
+                f.flush()
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    # 进程内串行替换（_write_lock 由调用方持有时更安全，这里再保一层）
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return True
+        except OSError:
+            if attempt < 5:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            # 最终仍失败：放弃原子性，直接覆盖目标（缓存非关键，至少不丢文件）
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                    except OSError:
+                        pass
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return True
+            except Exception:
+                pass
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return False
+    return False
 
 
 def _today_str() -> str:
@@ -96,11 +160,10 @@ def snapshot_realtime_freeze(fund_service) -> bool:
             'frozen_at': datetime.now().strftime('%H:%M:%S'),
             'funds': funds,
         }
-        os.makedirs(os.path.dirname(FREEZE_PATH), exist_ok=True)
-        tmp = FREEZE_PATH + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, FREEZE_PATH)
+        ok = _atomic_write_json(FREEZE_PATH, payload)
+        if not ok:
+            logger.warning("[FREEZE] 快照写入失败(文件被占用)，跳过本次冻结")
+            return False
         logger.info(f"[FREEZE] 已快照 {len(funds)} 只基金实时估值 → {FREEZE_PATH}")
         return True
     except Exception as e:
@@ -110,38 +173,40 @@ def snapshot_realtime_freeze(fund_service) -> bool:
 
 def update_rt_cache(data: list) -> None:
     """盘中每次算出有效 rt_val 即合并写入 database/rt_cache.json（最后有效值）。
-    合并式：只更新本次有效的基金，保留之前有效但本次缺失的，避免网络抖动丢缓存。"""
+    合并式：只更新本次有效的基金，保留之前有效但本次缺失的，避免网络抖动丢缓存。
+    [AI-2026-08-06] 进程内锁 + 唯一临时文件 + 跨进程重试，消除 Windows 下 os.replace
+    并发/被杀进程残留句柄导致的 WinError 5/13/32 警告。"""
     try:
-        cache = load_rt_cache() or {'updated_at': None, 'funds': {}}
-        funds = cache.get('funds', {})
-        touched = False
-        for r in data:
-            code = r.get('fund_code')
-            if not code:
-                continue
-            rt_val = r.get('rt_val')
-            rt_premium = r.get('rt_premium')
-            if rt_val is None and rt_premium is None:
-                continue
-            funds[code] = {
-                'rt_val': rt_val,
-                'rt_premium': rt_premium,
-                'price': r.get('price'),
+        with _write_lock:
+            cache = load_rt_cache() or {'updated_at': None, 'funds': {}}
+            funds = cache.get('funds', {})
+            touched = False
+            for r in data:
+                code = r.get('fund_code')
+                if not code:
+                    continue
+                rt_val = r.get('rt_val')
+                rt_premium = r.get('rt_premium')
+                if rt_val is None and rt_premium is None:
+                    continue
+                funds[code] = {
+                    'rt_val': rt_val,
+                    'rt_premium': rt_premium,
+                    'price': r.get('price'),
+                }
+                touched = True
+            if not touched:
+                return
+            payload = {
+                'updated_at': datetime.now().strftime('%H:%M:%S'),
+                'funds': funds,
             }
-            touched = True
-        if not touched:
-            return
-        payload = {
-            'updated_at': datetime.now().strftime('%H:%M:%S'),
-            'funds': funds,
-        }
-        os.makedirs(os.path.dirname(RT_CACHE_PATH), exist_ok=True)
-        tmp = RT_CACHE_PATH + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, RT_CACHE_PATH)
+            ok = _atomic_write_json(RT_CACHE_PATH, payload)
+        if not ok:
+            # 瞬时文件占用，缓存非关键路径，静默跳过避免刷屏 WARNING
+            logger.debug("[FREEZE] 估值缓存写入被跳过(瞬时文件占用)，不影响实时估值主流程")
     except Exception as e:
-        logger.warning(f"[FREEZE] 更新估值缓存失败: {e}")
+        logger.debug(f"[FREEZE] 更新估值缓存失败(已静默): {e}")
 
 
 def apply_freeze_to_dashboard(result: list) -> None:

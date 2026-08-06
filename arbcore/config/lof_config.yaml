@@ -35,8 +35,8 @@ funds:
   name: 南方原油
   category: 黄金原油
   holdings:
-    equity_ratio: 83.13
-    cash_ratio: 16.87
+    equity_ratio: 81.33
+    cash_ratio: 18.67
   holdings_portfolio: []
   future_hedging:
   - symbol: MCL
@@ -47,17 +47,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 62.36
+    weight: 65.55
     anchor: EU
   - symbol: USO-JP
-    weight: 33.57
+    weight: 23.95
     anchor: JP
   - symbol: USO
-    weight: 4.07
+    weight: 10.5
     anchor: US
   trade_etf: USO
   trade_future: MCL
-  position: 83.13
+  position: 81.33
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -79,8 +79,8 @@ funds:
   name: 嘉实原油
   category: 黄金原油
   holdings:
-    equity_ratio: 76.06
-    cash_ratio: 23.94
+    equity_ratio: 76.14
+    cash_ratio: 23.86
   holdings_portfolio:
   - symbol: USO
     weight: 17.22
@@ -126,14 +126,14 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO
-    weight: 61.24
+    weight: 59.01
     anchor: US
   - symbol: USO-EU
-    weight: 38.76
+    weight: 40.99
     anchor: EU
   trade_etf: USO
   trade_future: MCL
-  position: 76.06
+  position: 76.14
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -155,8 +155,8 @@ funds:
   name: 易方达原油
   category: 黄金原油
   holdings:
-    equity_ratio: 82.22
-    cash_ratio: 17.78
+    equity_ratio: 82.06
+    cash_ratio: 17.94
   holdings_portfolio:
   - symbol: CRUD.L
     weight: 18.52
@@ -197,17 +197,17 @@ funds:
     name: 微原油期货
   valuation_portfolio:
   - symbol: USO-EU
-    weight: 54.18
+    weight: 54.9
     anchor: EU
   - symbol: USO
-    weight: 40.43
+    weight: 42.57
     anchor: US
   - symbol: USO-HK
-    weight: 5.39
+    weight: 2.53
     anchor: HK
   trade_etf: USO
   trade_future: MCL
-  position: 82.22
+  position: 82.06
   sub_category: 原油
   woody_supported: true
   data_source: woody
@@ -270,17 +270,17 @@ funds:
   trade_etf: GLD
   trade_future: ''
   holdings:
-    equity_ratio: 84.06
-    cash_ratio: 15.94
+    equity_ratio: 83.85
+    cash_ratio: 16.15
   valuation_portfolio:
   - symbol: GLD
-    weight: 67.82
+    weight: 67.49
     anchor: US
   - symbol: USO-EU
-    weight: 23.5
+    weight: 23.43
     anchor: EU
   - symbol: USO
-    weight: 8.68
+    weight: 9.08
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
@@ -297,7 +297,7 @@ funds:
     currency: USD
     exchange: SMART
     name: 原油
-  position: 84.06
+  position: 83.85
   sub_category: 黄金
   woody_supported: true
   data_source: woody
@@ -633,8 +633,8 @@ funds:
   trade_etf: XOP
   trade_future: ''
   holdings:
-    equity_ratio: 99.0
-    cash_ratio: 1.0
+    equity_ratio: 100.0
+    cash_ratio: 0.0
   valuation_portfolio:
   - symbol: XOP
     weight: 100.0
@@ -650,7 +650,7 @@ funds:
   woody_supported: true
   data_source: woody
   related_index: XOP
-  position: 99.0
+  position: 100.0
   valuation_method: etf
   static_valuation:
     basis: etf_netvalue
@@ -977,8 +977,8 @@ funds:
   trade_etf: RSPH
   trade_future: ''
   holdings:
-    equity_ratio: 95.0
-    cash_ratio: 5.0
+    equity_ratio: 94.0
+    cash_ratio: 6.0
   valuation_portfolio:
   - symbol: RSPH
     weight: 100.0
@@ -986,7 +986,7 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 95.0
+  position: 94.0
   sub_category: 纯ETF
   woody_supported: true
   data_source: woody
@@ -1010,19 +1010,19 @@ funds:
   trade_etf: XLE
   trade_future: ''
   holdings:
-    equity_ratio: 91.79
-    cash_ratio: 8.21
+    equity_ratio: 92.5
+    cash_ratio: 7.5
   valuation_portfolio:
   - symbol: XLE
-    weight: 85.6
+    weight: 86.26
     anchor: US
   - symbol: USO
-    weight: 14.4
+    weight: 13.74
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 91.79
+  position: 92.5
   sub_category: 黄金原油
   woody_supported: true
   data_source: woody
@@ -1046,8 +1046,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 98.0
-    cash_ratio: 2.0
+    equity_ratio: 97.0
+    cash_ratio: 3.0
   valuation_portfolio:
   - symbol: MU
     weight: 13.61
@@ -1082,7 +1082,7 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 98.0
+  position: 97.0
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -1106,19 +1106,19 @@ funds:
   trade_etf: SOXX
   trade_future: ''
   holdings:
-    equity_ratio: 95.44
-    cash_ratio: 4.56
+    equity_ratio: 94.04
+    cash_ratio: 5.96
   valuation_portfolio:
   - symbol: SOXX
-    weight: 80.05
+    weight: 80.56
     anchor: US
   - symbol: SZ159560
-    weight: 19.95
+    weight: 19.44
     anchor: US
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 95.44
+  position: 94.04
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -1142,8 +1142,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 91.0
-    cash_ratio: 9.0
+    equity_ratio: 93.0
+    cash_ratio: 7.0
   valuation_portfolio:
   - symbol: ARKK
     weight: 23.82
@@ -1178,7 +1178,7 @@ funds:
   sina_index_url: ''
   holdings_portfolio: []
   future_hedging: []
-  position: 91.0
+  position: 93.0
   sub_category: 混合跨境
   woody_supported: true
   data_source: woody
@@ -2968,7 +2968,8 @@ funds:
   trade_etf: ''
   trade_future: ''
   holdings:
-    equity_ratio: 90
+    equity_ratio: 95.0
+    cash_ratio: 5.0
   valuation_portfolio:
   - symbol: AGG
     weight: 100
@@ -2988,10 +2989,10 @@ funds:
     source_priority:
     - IB
     - FUTU
+  position: 95.0
 - code: '161128'
   name: 标普信息科技
   category: QDII欧美
-  # [AI-2026-08-05] 补 data_source: woody —— 原配置残缺缺此字段，导致 daily_updater 采集过滤跳过 161128、因子永远为空、实时估值算不出。补后本地+（VPS同步YAML后）采集端均会认它
   data_source: woody
   trade_etf: VGT
   trade_future: ''
@@ -3003,7 +3004,6 @@ funds:
     anchor: US
   redemption_fee_rate: 0.5
   commission_rate: 0
-  # [AI-2026-08-05] 补全 161128 全套配置（参考同系列 161127 纯ETF结构）。原配置残缺缺此整套字段，导致实时估值组装失败/无数据。补后待 VPS 同步 YAML 并补采 161128 因子即可出估值（VPS 程序红线，需东哥侧触发）
   position: 95.0
   sub_category: 纯ETF
   woody_supported: true

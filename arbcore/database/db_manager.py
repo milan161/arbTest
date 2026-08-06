@@ -124,7 +124,10 @@ class DatabaseManager:
                 value TEXT NOT NULL DEFAULT '',
                 updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
             )''')
-            # [AI-2026-07-20] 种子数据：默认暂停 QDII亚洲/国内LOF/现金管理
+            # [AI-2026-08-06] 种子数据：默认暂停「QDII亚洲/国内LOF/现金管理」三类。
+            #   机制(东哥意图)：分类进 paused_set → 该分类全部基金默认隐藏；其中 paused_exempt=1 的单只基金豁免显示。
+            #   用途：东哥不想主看板显示太多基金，仅对少数 QDII香港/国内LOF 基金设 paused_exempt=1 让其显示。
+            #   注：表内已有值(如本次修复后的 ["QDII亚洲","国内LOF","现金管理"]) 不会覆盖；此处只管全新库的种子。
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM app_settings WHERE key='paused_categories'")
             if cursor.fetchone()[0] == 0:

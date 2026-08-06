@@ -25,6 +25,32 @@ except ImportError:
     logger.warning("[WARNING] 未安装 futu-api 库，富途读取器不可用 (pip install futu-api)")
 
 
+# [AI-2026-08-06] 把 futu SDK 自带的文件日志从 DEBUG 降到 WARNING。
+# 根因：futu/common/ft_logger.py 中 FTLog.__init__ 默认 _file_level=logging.DEBUG，
+# 每次行情 tick 都往 ~/.com.futunn.FutuOpenD/Log/py_YYYY_MM_DD.log 写 DEBUG，
+# 且其 TimedRotatingFileHandler(backupCount=20) 最坏可留 20 份 GB 级文件。
+# ARM 上 5 天累积到 5.2G（单文件最大 2.4G），磁盘 7%→21%，故在此源头降级。
+# 只降"写文件"级别，控制台 (FTConsoleLog) 保持原样，不影响任何行情功能与错误可见性。
+def _silence_futu_sdk_file_log():
+    if not FUTU_AVAILABLE:
+        return
+    try:
+        # 标准 logging 层面拦截（即使 SDK 内部 gate 放行，这里也会过滤掉）
+        logging.getLogger('FTFileLog').setLevel(logging.WARNING)
+        # SDK 内部 gate + handler 层面同步降级，省掉字符串格式化开销
+        from futu.common.ft_logger import logger as _ft_logger
+        _ft_logger._file_level = logging.WARNING
+        file_handler = getattr(_ft_logger, 'fileHandler', None)
+        if file_handler is not None:
+            file_handler.setLevel(logging.WARNING)
+    except Exception as exc:
+        # 仅日志降噪失败，不能影响主流程
+        logger.warning(f"[FUTU] SDK 文件日志降级失败（不影响行情）: {exc}")
+
+
+_silence_futu_sdk_file_log()
+
+
 class FutuReader:
     """富途行情长连接读取器
     
@@ -113,6 +139,7 @@ class FutuReader:
             try:
                 self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
                 self.subscribed_codes = set()
+                self._order_book_subscribed = set()  # [AI-2026-08-06] 重建 ctx 必须同步清空 ORDER_BOOK 订阅集合，否则新连接无盘口订阅、_fetch_order_book 跳过订阅直取空盘口→bid/ask 永久为 None
                 logger.info(f"{'='*50}\n[富途] 连接成功 (第 {attempt} 次尝试)\n{'='*50}")
                 self.disabled = False
                 self.connected = True  # [AI-2026-07-15] 跟踪实时连接状态（与 IB 一致）
@@ -157,6 +184,7 @@ class FutuReader:
             try:
                 self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
                 self.subscribed_codes = set()
+                self._order_book_subscribed = set()  # [AI-2026-08-06] 重建 ctx 必须同步清空 ORDER_BOOK 订阅集合（同 _try_connect_silent），否则新连接盘口订阅丢失、bid/ask 永久 None
                 self.disabled = False
                 self.connected = True  # [AI-2026-07-15] 与 IB 一致
                 logger.info(f"[富途] 手动重连成功 (第 {attempt} 次)")
@@ -220,6 +248,7 @@ class FutuReader:
                     try:
                         self.ctx = FutuReader._connect_with_timeout(self.host, self.port, timeout=5)
                         self.subscribed_codes = set()
+                        self._order_book_subscribed = set()  # [AI-2026-08-06] 懒重连建新 ctx 必须同步清空 ORDER_BOOK 订阅集合（同前），否则新连接盘口订阅丢失、bid/ask 永久 None
                         connected = True
                         logger.info(f"[富途] 连接成功 (第 {attempt} 次)")
                         self.disabled = False

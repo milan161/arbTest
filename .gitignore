@@ -58,6 +58,11 @@ docs/
 *.xls
 *.csv
 
+# === 误传/临时文件（2026-08-06 AI 误传后补，禁止再传） ===
+AGENTS.md.bak*
+sync_ufh.json
+_sync_ufh.json
+
 # === 杂项文件/脚本（移除全局/*.py，避免误伤根目录代码） ===
 *.zip
 *.bat

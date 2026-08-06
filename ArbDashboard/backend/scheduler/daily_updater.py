@@ -1343,7 +1343,11 @@ class DailyUpdater(BaseApp):
             return
 
         # 本地兜底
-        self.logger.warning("⚠️ [VPS] 未获取到今日期货数据，启动本地新浪API兜底...")
+        if self.db.is_access_synced_today(today_str, 'futures_vps_sync'):
+            # [AI-2026-08-06] 今日已由 VPS 同步过期货数据(仅因"防刷跳过"返回空列表)，无需告警；本地兜底补齐无害
+            self.logger.info("✅ [VPS] 今日期货数据此前已同步(VPS)，启动本地兜底补齐(无害)")
+        else:
+            self.logger.warning("⚠️ [VPS] 未获取到今日期货数据，启动本地新浪API兜底...")
         from arbcore.fetchers.data_fetcher import data_fetcher
         fallback_data = data_fetcher.get_futures_settlement_data()
         if fallback_data:
@@ -1364,9 +1368,10 @@ class DailyUpdater(BaseApp):
         self.logger.info("=== 步骤九：从VPS同步场内份额数据 ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
 
-        # [V10.4] 防刷检查：今日已同步过则跳过，避免每次启动重复拉取 VPS
-        if self.db.is_access_synced_today(today_str, source='jsl_shares_data'):
-            self.logger.info("✅ 今日份额数据已同步，跳过 VPS 拉取")
+        # [AI-2026-08-06] 防刷检查：今日已从 VPS 同步过则跳过，避免每次启动重复拉取 VPS
+        # 注意：原检查源 'jsl_shares_data' 因标记逻辑缺陷从未被成功写入，改用可靠标记的 'shares_vps_sync'
+        if self.db.is_access_synced_today(today_str, source='shares_vps_sync'):
+            self.logger.info("✅ 今日份额数据已同步(VPS)，跳过 VPS 拉取")
             return
 
         vps_shares_data = self._try_sync_all_from_vps('shares')
@@ -1433,7 +1438,7 @@ class DailyUpdater(BaseApp):
     # 公式: static_val = prev_nav * (1 + pos_ratio * (idx_ratio * fx_ratio - 1))
     # 与魔法公式区别：用指数比率代替 ETF 价格/hedge，无需 hedge 参数
     # ================================================================
-    def step11_simple_static_valuation(self):
+    def step11_simple_static_valuation(self, recent_days=None):
         """
         跟踪指数公式静态估值：覆盖 step10 未处理的基金
         公式: static_val = prev_nav * (1 + pos_ratio * (idx_ratio * fx_ratio - 1))
@@ -1514,6 +1519,18 @@ class DailyUpdater(BaseApp):
 
         total_updated = 0
 
+        if recent_days:
+            self.logger.info(f"   ⚙️ 仅核对近 {recent_days} 个交易日（优化：避免全量历史重算）")
+
+        def _close(a, b, eps=1e-9):
+            """浮点/None 安全比较：都为 None 视为相等；数值差小于 eps 视为相等。"""
+            if a is None or b is None:
+                return a is None and b is None
+            try:
+                return abs(float(a) - float(b)) < eps
+            except (TypeError, ValueError):
+                return a == b
+
         def process_batch(funds, batch_name, fx_type='none'):
             nonlocal total_updated
             if not funds:
@@ -1539,16 +1556,25 @@ class DailyUpdater(BaseApp):
                 idx_data = {r[0]: r[1] for r in idx_rows}
 
                 # 获取该基金的交易日数据
-                cursor.execute(
-                    "SELECT date, nav, price, index_close FROM unified_fund_history "
-                    "WHERE fund_code = ? AND nav IS NOT NULL ORDER BY date",
-                    (fund_code,))
+                if recent_days:
+                    # [AI-2026-08-06] 仅取近 N 个交易日重算（东哥确认：全量历史重算无意义，近 5 天足够）
+                    cursor.execute(
+                        "SELECT date, nav, price, index_close, static_val, premium, "
+                        "index_pct, calibration, rt_premium FROM unified_fund_history "
+                        "WHERE fund_code = ? AND nav IS NOT NULL ORDER BY date DESC LIMIT ?",
+                        (fund_code, recent_days))
+                else:
+                    cursor.execute(
+                        "SELECT date, nav, price, index_close, static_val, premium, "
+                        "index_pct, calibration, rt_premium FROM unified_fund_history "
+                        "WHERE fund_code = ? AND nav IS NOT NULL ORDER BY date",
+                        (fund_code,))
                 fund_rows = cursor.fetchall()
 
                 count = 0
                 last_fx_pct = 0
 
-                for date, nav, price, existing_idx_close in fund_rows:
+                for date, nav, price, existing_idx_close, ex_static, ex_premium, ex_index_pct, ex_calib, ex_rt_prem in fund_rows:
                     if not nav or float(nav) <= 0:
                         continue
 
@@ -1557,10 +1583,12 @@ class DailyUpdater(BaseApp):
                     # 无需额外 SQL 同步（旧逻辑若 index_close 已非空会跳过回写，导致修正不生效）。
                     if date in idx_data:
                         current_idx_close = idx_data[date]
-                        cursor.execute(
-                            "UPDATE unified_fund_history SET index_close = ? "
-                            "WHERE fund_code = ? AND date = ?",
-                            (current_idx_close, fund_code, date))
+                        # [AI-2026-08-06] 仅在 index_close 实际变化时才写回，避免每次启动全量冗余 UPDATE
+                        if not _close(current_idx_close, existing_idx_close):
+                            cursor.execute(
+                                "UPDATE unified_fund_history SET index_close = ? "
+                                "WHERE fund_code = ? AND date = ?",
+                                (current_idx_close, fund_code, date))
                     else:
                         current_idx_close = existing_idx_close
 
@@ -1649,6 +1677,13 @@ class DailyUpdater(BaseApp):
                         if premium is not None:
                             rt_premium = est_premium - premium
 
+                    # [AI-2026-08-06] 仅当计算结果与已存值不一致时才写回，
+                    # 避免每次启动全量历史重算产生无意义 UPDATE（非重复行，原即为 in-place UPDATE）
+                    if (_close(static_val, ex_static) and _close(premium, ex_premium)
+                            and _close(index_pct, ex_index_pct) and _close(calibration, ex_calib)
+                            and _close(rt_premium, ex_rt_prem)):
+                        continue  # 计算结果无变化，跳过写回
+
                     cursor.execute(
                         "UPDATE unified_fund_history SET static_val=?, premium=?, "
                         "index_pct=?, calibration=?, rt_premium=? "
@@ -1687,7 +1722,7 @@ class DailyUpdater(BaseApp):
             self._step4_fetch_prices()
             self.step4_fetch_lof_market()
             self._step10_calculate_static_valuation()
-            self.step11_simple_static_valuation()
+            self.step11_simple_static_valuation(recent_days=5)
             self.logger.info("🎉 [收盘后更新] 收盘价/净值/静态估值已更新！")
             return
 
@@ -1742,7 +1777,7 @@ class DailyUpdater(BaseApp):
         self.step8_fetch_sina_futures_from_vps()
         self.step9_fetch_jsl_shares_from_vps()
         self._step10_calculate_static_valuation()
-        self.step11_simple_static_valuation()
+        self.step11_simple_static_valuation(recent_days=5)
         self.logger.info("🎉 流水线执行完毕，数据大盘一切就绪！")
 
 if __name__ == "__main__":

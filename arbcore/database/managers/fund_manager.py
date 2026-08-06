@@ -148,10 +148,22 @@ class FundManager(BaseManager):
             try:
                 conn = self._get_conn()
                 for item in fund_list:
+                    # [AI-2026-08-06] 改用 ON CONFLICT DO UPDATE 而非 INSERT OR REPLACE：
+                    #   INSERT OR REPLACE 会整行删除旧记录再用默认值重插，导致 paused_exempt 被静默清零
+                    #   （东哥此前设的"暂停分类豁免显示"因此反复丢失）。现仅在冲突时更新同步字段，
+                    #   保留 paused_exempt（单只豁免显示）不被 sync 冲掉。主键 = fund_code。
                     conn.execute('''
-                        INSERT OR REPLACE INTO unified_fund_list
+                        INSERT INTO unified_fund_list
                         (category, fund_code, fund_name, related_index, idx_code, idx_name, pos_ratio, target_type)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(fund_code) DO UPDATE SET
+                            category=excluded.category,
+                            fund_name=excluded.fund_name,
+                            related_index=excluded.related_index,
+                            idx_code=excluded.idx_code,
+                            idx_name=excluded.idx_name,
+                            pos_ratio=excluded.pos_ratio,
+                            target_type=excluded.target_type
                     ''', (
                         item['category'],
                         item['code'],

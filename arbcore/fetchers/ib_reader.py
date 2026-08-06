@@ -129,6 +129,21 @@ class IBReader(EWrapper, EClient):
         self._stale_watchdog_running = False
         self._stale_watchdog_thread = None
 
+        # [AI-2026-08-06] 连接就绪门禁：仅当行情农场(2104/2106)就绪后才订阅，避免 IB 静默丢弃
+        # 连接握手期过早发出的 reqMktData(竞态根因，近期回归)。connection_ready 由 error() 收
+        # 2104/2106 置 True，并由 connect_time + 兜底超时强制置 True，防信号丢失永久不订阅。
+        self.connection_ready = False
+        self.connect_time = 0.0
+        self.subscribe_time = {}            # sym -> 订阅发起时间戳(死订阅检测用)
+        # [AI-2026-08-06] 死订阅自愈参数：阈值 60→300(美东深夜/流动性差时 60s 零 tick 完全正常，
+        # 原 60s 阈值实测导致 cancel+重订无限循环：13:13-13:22 触发 109 次，打断正常订阅并刷爆日志)；
+        # 连续重订 sub_dead_max_retries 次仍零 tick → 停止重订并打 ERROR 提示重启 Gateway。
+        self.sub_dead_threshold = 300       # 订阅后超过此秒数仍零 tick 视为死订阅，触发轻量重订
+        self.sub_dead_max_retries = 3       # 每 symbol 连续重订上限，超限判定 Gateway 侧推流僵死
+        self._dead_resub_count = {}         # sym -> 连续重订次数(收到首 tick 清零)
+        self._last_dead_alarm = 0.0         # Gateway 僵死告警限频时间戳
+        self.connection_ready_fallback = 30  # 连接超此秒数强制置 ready(防 2104/2106 信号丢失)
+
         # [AI-2026-08-04] 注册协议层容错钩子（进程内只注册一次）
         global _IB_READER_INSTANCE, _ORIG_THREAD_EXCEPTHOOK
         _IB_READER_INSTANCE = self
@@ -174,6 +189,8 @@ class IBReader(EWrapper, EClient):
             if self.isConnected():
                 self.connected = True
                 self.retry_delay = 1.0
+                self.connection_ready = False   # [AI-2026-08-06] 重置，等 2104/2106 或兜底超时
+                self.connect_time = time.time()
                 print(f"[IBReader] [OK] 连接成功 (端口: {target_port})")
                 return True
             else:
@@ -210,6 +227,8 @@ class IBReader(EWrapper, EClient):
             # 任何重连路径(含 excepthook 自愈)都会重新 reqMktData，避免旧 ReqId 残留导致重连后不重新订阅、收不到 tick。
             self.mkt_req_ids.clear()
             self.symbol_req_ids.clear()
+            self.connection_ready = False   # [AI-2026-08-06] 断连后需重新等行情农场就绪
+            self.subscribe_time.clear()
 
     def fetch_prev_closes_once(self):
         """如果昨收数据为空，则尝试获取一次。"""
@@ -339,12 +358,20 @@ class IBReader(EWrapper, EClient):
                     continue
                 # [AI-2026-08-03] 用长连接真实 tick 时间(last_tick_time)判定陈旧：
                 # 只要长连接持续无实时 tick 超过阈值即强制重连重新订阅（自愈零 tick）。
+                # [AI-2026-08-06] last_tick_time 现仅在首 tick 打点(非订阅时)。若从未收到 tick，
+                # 改用最早订阅时间判定停滞，避免死订阅被误判为"新鲜"而永不触发强制重连。
                 last_tick_ts = min(self.last_tick_time.values()) if self.last_tick_time else None
                 if last_tick_ts is None:
-                    continue
-                stale = (datetime.now() - datetime.fromtimestamp(last_tick_ts)).total_seconds()
-                if stale < self.stale_reconnect_threshold:
-                    continue
+                    if not self.symbol_req_ids:
+                        continue
+                    oldest_sub = min(self.subscribe_time.get(s, time.time()) for s in self.symbol_req_ids)
+                    if (datetime.now().timestamp() - oldest_sub) < self.stale_reconnect_threshold:
+                        continue
+                    stale = self.stale_reconnect_threshold + 1  # 强制触发
+                else:
+                    stale = (datetime.now() - datetime.fromtimestamp(last_tick_ts)).total_seconds()
+                    if stale < self.stale_reconnect_threshold:
+                        continue
                 now_ts = time.time()
                 if now_ts - self._last_forced_reconnect < self.stale_reconnect_cooldown:
                     continue
@@ -382,8 +409,12 @@ class IBReader(EWrapper, EClient):
                 # [V7.3] IB 只订阅核心套利标的，不拉取全量 SYMBOL_SOURCE_MAP
                 # 核心标的列表从配置读取，支持用户自定义
                 from arbcore.config.source_routing import IB_CORE_ARBITRAGE_SYMBOLS
-                self.symbols = list(IB_CORE_ARBITRAGE_SYMBOLS)
-                print(f"[IBReader] 核心套利标的: {self.symbols} ({len(self.symbols)} 只)")
+                new_symbols = list(IB_CORE_ARBITRAGE_SYMBOLS)
+                # [AI-2026-08-06] 仅当标的列表变化时才打印，避免每 5s 轮询循环反复刷屏
+                if new_symbols != getattr(self, '_last_printed_symbols', None):
+                    self._last_printed_symbols = new_symbols
+                    print(f"[IBReader] 核心套利标的: {new_symbols} ({len(new_symbols)} 只)")
+                self.symbols = new_symbols
             except Exception as e:
                 print(f"[IBReader] 加载核心套利标的异常: {e}，使用默认列表")
                 self.symbols = ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
@@ -414,6 +445,16 @@ class IBReader(EWrapper, EClient):
                 time.sleep(self.polling_interval * 2) # 非夜盘时段降低轮询频率
                 continue
 
+            # [AI-2026-08-06] 订阅门禁：未连接握手完成(行情农场 2104/2106 就绪)前不订阅，
+            # 避免 IB 静默丢弃连接握手期过早发出的 reqMktData(竞态根因，近期回归)。
+            if not self.connection_ready:
+                if self.connected and (time.time() - self.connect_time) > self.connection_ready_fallback:
+                    self.connection_ready = True
+                    logger.warning(f"[IB] 订阅门禁兜底超时({self.connection_ready_fallback}s)，强制解除并订阅")
+                else:
+                    time.sleep(2)
+                    continue
+
             for sym in self.symbols:
                 # 1. 建立并维持内存长连接订阅 (零违规风险)
                 if sym not in self.symbol_req_ids:
@@ -429,11 +470,38 @@ class IBReader(EWrapper, EClient):
                     # snapshot=False 开启持续长连接推送
                     self.reqMktData(req_id, c, "", False, False, [])
                     self.sources[sym] = "订阅请求中..."
-                    # 💡 核心修复：初始化时间戳，给予长连接 60 秒的建立宽限期，防止开局就误触兜底机制
-                    self.last_tick_time[sym] = time.time()
+                    self.subscribe_time[sym] = time.time()  # [AI-2026-08-06] 记录订阅时刻(死订阅检测用)
                     # [AI-2026-08-03] 提升为 print 级别：用户需要看到订阅是否成功发出，debug 级别在控制台不可见
                     print(f"[IBReader] 已发起 {sym} 夜盘长连接订阅 (ReqId: {req_id})")
-            
+
+            # [AI-2026-08-06] 死订阅自愈：已订阅但超过 sub_dead_threshold 仍零 tick(连接健康)，
+            # 取消并移除，让下一轮循环用新 ReqId 重订，无需整连。(last_tick_time 现仅在首 tick 打点)
+            # ⚠️ 重订上限：连续 sub_dead_max_retries 次仍零 tick → 停止重订并告警"疑似 Gateway 侧推流僵死"，
+            # 避免 cancel+重订无限循环(今日 13:13-13:22 实测 60s 阈值误伤触发 109 次，打断正常订阅并刷爆日志)。
+            for sym in list(self.symbol_req_ids.keys()):
+                st = self.subscribe_time.get(sym)
+                if st is None:
+                    continue
+                if self.last_tick_time.get(sym) is None and (time.time() - st) > self.sub_dead_threshold:
+                    cnt = self._dead_resub_count.get(sym, 0) + 1
+                    if cnt > self.sub_dead_max_retries:
+                        # 保留订阅挂着等真实 tick，不再 cancel 重订；仅限频告警，定位根因
+                        if time.time() - self._last_dead_alarm > 300:
+                            self._last_dead_alarm = time.time()
+                            logger.error(
+                                f"[IB] {sym} 连续重订 {cnt} 次仍零 tick(订阅 {int(time.time()-st)}s)："
+                                f"疑似 IB Gateway 侧实时行情推流僵死(非 app 订阅问题)，请重启 IB Gateway(托盘退出重进+重登录)")
+                        continue
+                    self._dead_resub_count[sym] = cnt
+                    rid = self.symbol_req_ids.pop(sym)
+                    self.mkt_req_ids.pop(rid, None)
+                    self.subscribe_time.pop(sym, None)
+                    try:
+                        self.cancelMktData(rid)
+                    except Exception:
+                        pass
+                    logger.warning(f"[IB] 死订阅自愈: {sym} 订阅 {int(time.time()-st)}s 零 tick，已取消待重订(第{cnt}次)")
+
             # [AI-2026-08-03] 已彻底移除"历史 BID/TRADES 快照兜底"：东哥红线——任何时候都不写
             # 历史快照冒充实时盘口（bid=ask=last 单一值）。没有真实盘口时前端显示"等待数据"，
             # 由 stale 看门狗负责长连接零 tick 自愈重连。底层的 tickPrice/tickSize 会毫秒级更新字典，
@@ -459,10 +527,17 @@ class IBReader(EWrapper, EClient):
     
     def reconnect(self):
         """手动重连（供用户点击"IB"按钮时调用）"""
-        # [V10.4] 如果已经连接，直接返回成功，避免 Error 326 重复客户号
+        # [V10.4] 已连接时原本直接 return(避免 Error 326)，但会丢失"连着无数据"的自愈机会。
+        # [AI-2026-08-06] 改为清空订阅池触发 polling 循环立即重订(不重连 socket)，自愈死订阅/竞态：
+        # 连着但零 tick 时点按钮也能救，不必重启 Gateway。
         if self.isConnected():
-            logger.info("[IB] 已经连接，跳过重复重连")
-            return True, "IB 已经连接"
+            logger.info("[IB] 已连接，清空订阅池以触发重订阅(自愈死订阅/竞态，不清 socket)")
+            self.mkt_req_ids.clear()
+            self.symbol_req_ids.clear()
+            self.subscribe_time.clear()
+            if not self.running:
+                self.start_polling()
+            return True, "IB 已连接，已触发重订阅"
         # [AI-2026-08-05] 修复：重连前先彻底断开旧连接（含僵尸TCP socket）。
         # isConnected()返回False时旧socket可能仍alive，不先断开则IB Gateway因重复
         # ClientId拒绝新连接(Error 326)，3次重连全失败。disconnect_from_ib()已改为
@@ -508,7 +583,14 @@ class IBReader(EWrapper, EClient):
             return
         # 🤫 彻底屏蔽 10089(延时警告) 和 10346(持仓通道被TWS强制抢占警告)
         # [V10.11] 新增 502（连接被拒/端口不对）— 端口重试过程中的 502 是预期行为，不应触发断连
-        if errorCode in [200, 502, 2104, 2106, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
+        # [AI-2026-08-06] 2104/2106=行情农场连接正常，是"可订阅"的就绪信号；收到即置 connection_ready
+        # 解除订阅门禁(配合 connect_time 兜底超时，防信号丢失永久不订阅)。
+        if errorCode in [2104, 2106]:
+            if not self.connection_ready:
+                self.connection_ready = True
+                logger.info(f"[IB] 行情农场就绪(代码 {errorCode})，解除订阅门禁")
+            return
+        if errorCode in [200, 502, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
             return
             
         if errorCode in [2103, 2105]:
@@ -548,6 +630,8 @@ class IBReader(EWrapper, EClient):
                 # 💡 只要长连接有任何跳动，都喂一口看门狗，重置30秒倒计时
                 if tickType in [1, 2, 4, 66, 67, 68]:
                     self.last_tick_time[sym] = time.time()
+                    # [AI-2026-08-06] 收到真实 tick → 清零该 symbol 的连续重订计数(死订阅自愈恢复正常)
+                    self._dead_resub_count.pop(sym, None)
                 
                 # 实时价格类型映射
                 tick_names = {
@@ -597,6 +681,8 @@ class IBReader(EWrapper, EClient):
             # 💡 只要长连接有任何跳动，都喂一口看门狗，防止被断线判定
             if tickType in [0, 3, 5, 69, 70, 71]:
                 self.last_tick_time[sym] = time.time()
+                # [AI-2026-08-06] 收到真实 tick → 清零该 symbol 的连续重订计数(死订阅自愈恢复正常)
+                self._dead_resub_count.pop(sym, None)
                 
             tick_names = {
                 0: "BidSize(买一量)", 3: "AskSize(卖一量)", 5: "LastSize(最新量)",
