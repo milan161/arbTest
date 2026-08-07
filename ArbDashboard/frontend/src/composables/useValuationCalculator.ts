@@ -417,7 +417,9 @@ export function useValuationCalculator() {
     const rawLofQty = targetLotsFuture.value * displayHedgeValue
     const finalLofQty = Math.round(rawLofQty / 100) * 100
     const pos = positionRatio.value
-    const exposure = finalLofQty * simLofPrice.value * pos
+    // [AI-2026-08-06] 对冲敞口必须用净值 NAV（不是 LOF 市价）——与 etf_hedge 路径保持一致
+    const baseNav = parseFloat(bd.nav) || simLofPrice.value
+    const exposure = finalLofQty * baseNav * pos
 
     return { lofQty: finalLofQty, hedgeValue: displayHedgeValue, exposure }
   })
@@ -449,7 +451,9 @@ export function useValuationCalculator() {
 
     const finalLofQty = Math.round((targetLotsPureFuture.value * displayHedgeValue) / 100) * 100
     const pos = positionRatio.value
-    const exposure = finalLofQty * simLofPrice.value * pos
+    // [AI-2026-08-06] 对冲敞口必须用净值 NAV（不是 LOF 市价）——与 etf_hedge 路径保持一致
+    const baseNav = parseFloat(bd.nav) || simLofPrice.value
+    const exposure = finalLofQty * baseNav * pos
 
     return { lofQty: finalLofQty, hedgeValue: displayHedgeValue, exposure }
   })

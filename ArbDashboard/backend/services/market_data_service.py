@@ -9,7 +9,7 @@ from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.ib_reader import IBReader
 from arbcore.fetchers.futu_reader import FutuReader
 from arbcore.fetchers.data_fetcher import DataFetcher
-from arbcore.utils.market_calendar import is_quote_window  # [AI-2026-08-04] 美股/港股盘口展示窗口 9:30-16:00
+from arbcore.utils.market_calendar import is_quote_window  # [AI-2026-08-07] 美股/港股盘口展示窗口 8:30-16:00（原 9:30）
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ class MarketDataService:
         
         # [FIX] 根据 source 决定是否走美股通道
         if source == 'IB':
-            # [AI-2026-08-04] 美股/港股盘口展示窗口（东哥拍板）：9:30-16:00 显示，16:00 后一律不显示。
+            # [AI-2026-08-07] 美股/港股盘口展示窗口（东哥修改）：8:30-16:00 显示，16:00 后一律不显示。
             # 与富途门禁(is_quote_window)一致；不影响 Lazy_trader 夜盘下单（其直连 ib_reader，不经此路径）。
             if not is_quote_window():
                 return None
@@ -388,7 +388,7 @@ class MarketDataService:
                 symbol = symbol[:-len(suffix)]
                 break
 
-        # [AI-2026-08-04] 美股/港股盘口展示窗口（东哥拍板）：16:00 后一律不显示，连冻结值都不留。
+        # [AI-2026-08-07] 美股/港股盘口展示窗口（东哥修改）：8:30-16:00，16:00 后一律不显示，连冻结值都不留。
         if not is_quote_window():
             return {'symbol': symbol, 'ib': None, 'futu': None}
 

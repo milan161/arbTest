@@ -77,6 +77,7 @@ Proxy.bat
 .omo/
 .open-mem/
 .opencode/
+_ai_backup/
 
 # === 编辑器与系统垃圾 ===
 /ArbDashboard/*.png

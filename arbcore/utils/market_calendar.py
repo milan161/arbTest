@@ -231,14 +231,15 @@ def is_a_share_session(now_dt: datetime = None) -> bool:
 # 套利交易只在 A 股盘 9:30-15:00；但港股 16:00 收盘、IB/Futu 夜盘(OVERNIGHT)也 16:00 结束，
 # 故美股/港股盘口展示放宽到 16:00；16:00 之后一律不显示（连冻结值都不留）。
 # 仅用于美股/港股实时盘口的"是否展示"判定；A 股仍走 is_a_share_session（15:00 冻结），两者互不干扰。
+# [AI-2026-08-07] 东哥修改：盘口展示窗口提前到 8:30（8:30=510），原 9:30=570
 def is_quote_window(now_dt: datetime = None) -> bool:
-    """判断当前是否处于美股/港股盘口展示时段（北京时间 9:30-16:00，含午休，周一~周五）。"""
+    """判断当前是否处于美股/港股盘口展示时段（北京时间 8:30-16:00，含午休，周一~周五）。"""
     if now_dt is None:
         now_dt = datetime.now(timezone(timedelta(hours=8)))  # UTC+8 全年不变（中国无夏令时）
     if not is_trading_day('A_SHARE', now_dt.date()):
         return False
     t = now_dt.hour * 60 + now_dt.minute
-    return 570 <= t <= 960  # 9:30=570, 16:00=960
+    return 510 <= t <= 960  # [AI-2026-08-07] 8:30=510, 16:00=960
 
 
 def is_shfe_open(now_dt: datetime = None) -> bool:

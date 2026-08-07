@@ -3,13 +3,13 @@ funds:
   valuation_method: basket
   static_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority: &id001
     - woody
     - IB
   dynamic_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority: &id002
     - IB
     - FUTU
@@ -27,11 +27,11 @@ funds:
   valuation_method: basket
   static_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority: *id001
   dynamic_valuation:
     basis: basket_price
-    symbol: USO-EU
+    symbol: ^USO-EU
     source_priority: *id002
 - code: '160216'
   valuation_method: basket

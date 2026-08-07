@@ -109,7 +109,8 @@ class CalcQuantity:
         calibration: float,
         multiplier: float,
         lof_price: float,
-        position: float = 1.0
+        position: float = 1.0,
+        nav: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         期货对冲数量计算。
@@ -125,6 +126,7 @@ class CalcQuantity:
             multiplier:     期货合约乘数（来自 futures_multipliers）
             lof_price:      LOF 现价（RMB）
             position:       仓位比例（0.0~1.0）
+            nav:            LOF 净值（用于计算真实敞口，优先于 lof_price）
         
         Returns:
             {
@@ -145,7 +147,10 @@ class CalcQuantity:
         raw_lof_qty = total_hedge_value / lof_price
         lof_qty = max(100, round(raw_lof_qty / 100) * 100)
         
-        exposure_rmb = lof_qty * lof_price * position
+        # [AI-2026-08-06] 实际 RMB 敞口：必须用净值 NAV（不是 LOF 市价）——与 etf_hedge 保持一致
+        # nav 提供时优先用净值；否则回退 lof_price（兼容旧调用）
+        _exposure_basis = nav if (nav is not None and nav > 0) else lof_price
+        exposure_rmb = lof_qty * _exposure_basis * position
         
         return {
             'mode': 'futures',
@@ -167,7 +172,8 @@ class CalcQuantity:
         calibration: float,
         lof_price: float,
         future_symbol: str,
-        position: float = 1.0
+        position: float = 1.0,
+        nav: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         [占位/实验性] 纯期货对冲（从期货代码自动获取乘数）。
@@ -183,6 +189,7 @@ class CalcQuantity:
             lof_price:      LOF 现价
             future_symbol:  期货代码（如 'MCL', 'GC'）
             position:       仓位比例
+            nav:            LOF 净值（用于计算真实敞口，优先于 lof_price）
         
         Returns:
             同 futures_hedge
@@ -195,6 +202,7 @@ class CalcQuantity:
             multiplier=multiplier,
             lof_price=lof_price,
             position=position,
+            nav=nav,  # [AI-2026-08-06] 透传 nav 参数
         )
     
     @staticmethod
@@ -219,33 +227,72 @@ class CalcQuantity:
         return n_contracts * price * multiplier
     
     @staticmethod
+    def _convert_yahoo_symbol(symbol: str) -> str:
+        """
+        符号归一化：将 ^XXX-YY 格式转换为 XXX（底层标的）。
+        
+        例如：
+            ^GLD-EU  →  GLD（GLD 在欧洲休市时刻的价格快照）
+            ^GLD-JP  →  GLD（GLD 在东京休市时刻的价格快照）
+            ^INDA-HK →  INDA（INDA 在香港休市时刻的价格快照）
+            GLD      →  GLD（本身不变）
+        
+        这是 Woody 的 ConvertYahooNetValueSymbol 函数的 Python 实现。
+        ^XXX-YY 不是不同交易所上市的 ETF，而是同一标的在不同时区休市时刻的价格快照。
+        """
+        import re
+        pattern = r'^\^([A-Z]+)-[A-Z]{2}$'
+        match = re.match(pattern, symbol)
+        if match:
+            return match.group(1)  # 返回底层标的
+        return symbol  # 不符合格式则返回原字符串
+    
+    @staticmethod
     def _basket_breakdown(
         exposure_usd: float,
         portfolio: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        actual_holdings: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, Any]:
         """
-        一篮子持仓拆解：按权重将总敞口分配到各标的。
+        一篮子持仓拆解：按权重将总敞口分配到各标的，并与 Woody 算法完全对齐。
+        
+        Woody 算法（palmmicroapi.py __calc_holdings_quantity）：
+        1. 各成分分别算：qty_i = fAmount × ratio_i% / price_i
+        2. 符号归一化：^GLD-EU → GLD, ^GLD-JP → GLD
+        3. 聚合到真实标的：arReal['GLD'] = qty_GLD + qty_^GLD-EU + qty_^GLD-JP
+        4. fMax 约束：如果用户提供了实际持仓，检查是否超出，等比缩放
+        5. 各成分分别取整（floor），聚合后总量也取整
+        
+        Woody 显示格式：
+        - 主消息：「买入 INDA 3798@50.41」— 3798 是聚合后总量（floor）
+        - 补充内容：「^INDA-EU 978 + ^INDA-JP 57 + ^INDA-HK 49」— 各成分取整分量
         
         Args:
             exposure_usd:  总 USD 敞口
             portfolio:     [{'symbol':str, 'weight':float, 'price':float}, ...]
+            actual_holdings: 用户实际持仓 {真实标的：股数}，如 {'GLD': 10, 'INDA': 5}
+                           如果为 None，则不做 fMax 约束
         
         Returns:
-            [{'symbol':str, 'shares':float, 'is_short':bool, 'weight_pct':float}, ...]
+            {
+                'total': {真实标的: 聚合后取整数量},  # 主消息用
+                'components': [{原始符号, 取整数量, ...}],  # 补充内容用
+            }
         """
         if exposure_usd <= 0 or not portfolio:
-            return []
+            return {'total': {}, 'components': []}
         
-        breakdown = []
+        import math
+        
+        # 第 1 步：各成分分别算
+        ar_quantity = {}  # {原始符号: 股数}
         for item in portfolio:
             symbol = item.get('symbol', '')
             weight = float(item.get('weight', 0))
             price = float(item.get('price', 0))
             
-            # weight=0 跳过（包括 Woody 对 -0.4 股当作 0 的处理）
-            if weight == 0:
-                continue
-            if price <= 0:
+            # weight=0 或 price<=0 跳过
+            if weight == 0 or price <= 0:
                 continue
             
             # 金额敞口 = 总敞口 × 权重占比
@@ -256,16 +303,73 @@ class CalcQuantity:
                 continue
             
             shares = allocated_usd / price
+            ar_quantity[symbol] = shares
+        
+        # 第 2 步：符号归一化 + 聚合到真实标的
+        ar_real = {}  # {真实标的：聚合后股数}
+        for symbol, shares in ar_quantity.items():
+            real_symbol = CalcQuantity._convert_yahoo_symbol(symbol)
+            if real_symbol in ar_real:
+                ar_real[real_symbol] += shares
+            else:
+                ar_real[real_symbol] = shares
+        
+        # 第 3 步：fMax 约束缩放（Woody 的 fMax 机制）
+        if actual_holdings:
+            f_max = 0.0
+            for real_symbol, theoretical_qty in ar_real.items():
+                actual_qty = actual_holdings.get(real_symbol)
+                if actual_qty is not None and actual_qty > 0.000001:
+                    f_compare = theoretical_qty / actual_qty
+                    if f_compare > f_max:
+                        f_max = f_compare
             
-            # Woody 风格：绝对值 < 1 股的当作 0 不显示
-            if abs(shares) < 1:
+            if f_max > 1.0:
+                for symbol in ar_quantity:
+                    ar_quantity[symbol] /= f_max
+                
+                # 重新聚合
+                ar_real = {}
+                for symbol, shares in ar_quantity.items():
+                    real_symbol = CalcQuantity._convert_yahoo_symbol(symbol)
+                    if real_symbol in ar_real:
+                        ar_real[real_symbol] += shares
+                    else:
+                        ar_real[real_symbol] = shares
+        
+        # 第 4 步：各成分分别取整（floor）
+        ar_dst = {}  # {原始符号: 取整后股数}
+        for symbol, shares in ar_quantity.items():
+            ar_dst[symbol] = math.floor(shares) if shares >= 0 else 0
+        
+        # 第 5 步：构建返回结果
+        # total: 聚合后真实标的的取整总量
+        total = {}
+        for real_symbol, agg_shares in ar_real.items():
+            floored_total = math.floor(agg_shares)
+            if floored_total >= 1:
+                total[real_symbol] = floored_total
+        
+        # components: 各原始成分的取整分量（用于补充内容显示）
+        components = []
+        for symbol, floored_shares in ar_dst.items():
+            if floored_shares < 1:
                 continue
             
-            breakdown.append({
+            item = next((i for i in portfolio if i.get('symbol') == symbol), None)
+            weight = float(item.get('weight', 0)) if item else 0
+            price = float(item.get('price', 0)) if item else 0
+            weight_ratio = weight / 100.0 if abs(weight) > 1 else weight
+            
+            components.append({
                 'symbol': symbol,
-                'shares': round(shares, 1),
-                'is_short': shares < 0,
+                'shares': floored_shares,
+                'is_short': floored_shares < 0,
                 'weight_pct': round(weight_ratio * 100, 4),
+                'price': price,
             })
         
-        return breakdown
+        return {
+            'total': total,
+            'components': components,
+        }
