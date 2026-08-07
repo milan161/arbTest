@@ -116,7 +116,7 @@ class DashboardSnapshotService:
         while self._running:
             # [AI-2026-08-05] 不再跳过暂停分类：豁免基金(paused_exempt=1)需要快照循环正常运行。
             # get_unified_dashboard_data 内部会按 paused_exempt 过滤，非豁免基金不会出现在快照中。
-            # 无豁免基金的暂停分类（如现金管理）会返回空列表，有缓存兜底开销可忽略。
+            # 无豁免基金的暂停分类（如现金管理）会返回空列表，有缓存备用源开销可忽略。
             started = time.monotonic()
             try:
                 await self.refresh_once(key, None, category, use_db_watchlist=use_db_watchlist)

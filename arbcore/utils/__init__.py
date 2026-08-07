@@ -12,7 +12,7 @@ try:
 except ImportError:
     logger.warning("chinese_calendar 未安装，A股交易日判断仅依赖周末过滤。建议: pip install chinese-calendar")
 
-# 备用硬编码 2026 年 A 股休市日（当 chinese_calendar 不可用时兜底）
+# 备用硬编码 2026 年 A 股休市日（当 chinese_calendar 不可用时备用源）
 _HOLIDAYS_2026 = frozenset({
     # 元旦
     date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3),
@@ -55,7 +55,7 @@ def is_a_share_trading_day(d: date = None) -> bool:
     if _HAS_CALENDAR:
         return _cal_is_workday(d)
 
-    # 兜底：硬编码列表
+    # 备用源：硬编码列表
     return d not in _HOLIDAYS_2026
 
 

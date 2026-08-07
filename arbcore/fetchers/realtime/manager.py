@@ -73,7 +73,7 @@ class RealtimeMarketManager:
             full_config = self.db_manager.get_data_source_config("realtime_market")
 
         if not full_config:
-            # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。新浪优先、腾讯降级兜底。
+            # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。新浪优先、腾讯降级备用源。
             priority_names = self.priority_list or _load_realtime_priority() or ["tdx", "guojin", "galaxy", "sina", "tencent"]
             full_config = [{"source_name": name, "config_json": "{}"} for name in priority_names]
             self.priority_list = priority_names
@@ -169,7 +169,7 @@ class RealtimeMarketManager:
                     logger.warning(user_msg)
                     if self.system_status: self.system_status.add_milestone("WARNING", user_msg)
         
-        # 如果没有任何主源成功，尝试启动新浪兜底
+        # 如果没有任何主源成功，尝试启动新浪备用源
         if not self.active_fetchers and "sina" in self.priority_list:
             sina = SinaRealtimeFetcher()
             if sina.connect():
@@ -177,7 +177,7 @@ class RealtimeMarketManager:
                 self.active_fetchers["sina"] = sina
                 if self.symbols:
                     sina.subscribe(self.symbols)
-                logger.warning(f"{'='*50}\n所有极速源失效，已启动【新浪轮询】兜底\n{'='*50}")
+                logger.warning(f"{'='*50}\n所有极速源失效，已启动【新浪轮询】备用源\n{'='*50}")
 
     def subscribe(self, symbols: List[str]):
         self.symbols = list(set(self.symbols + symbols))
@@ -193,7 +193,7 @@ class RealtimeMarketManager:
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """按照优先级从活跃源中获取行情，异常熔断保护"""
-        # [AI-2026-08-04] 东哥拍板：新浪优先、腾讯降级兜底（与 start() 默认一致）。
+        # [AI-2026-08-04] 东哥拍板：新浪优先、腾讯降级备用源（与 start() 默认一致）。
         for source_name in (self.priority_list or ["tdx", "guojin", "galaxy", "sina", "tencent"]):
             if source_name in self.active_fetchers:
                 try:

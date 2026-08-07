@@ -55,7 +55,7 @@ class MarketDataService:
         # [白银] 初始化 DataFetcher（新浪数据源）
         self.data_fetcher = DataFetcher()
         
-        # [V10.1] 富途兜底日志去重：每 symbol 每 300 秒最多记一次 warning
+        # [V10.1] 富途备用源日志去重：每 symbol 每 300 秒最多记一次 warning
         self._futu_warn_cooldown: Dict[str, float] = {}
 
         # [V10.1] 熔断器状态：{source_key: consecutive_failures}
@@ -241,7 +241,7 @@ class MarketDataService:
                 if now - last_log > 30:
                     logger.info(f"⏳ IB正在获取{symbol}，请稍后...")
                     self._ib_wait_log_time[symbol] = now
-                # IB 有数据但没盘口 → 不返回，继续走富途兜底
+                # IB 有数据但没盘口 → 不返回，继续走富途备用源
             elif not is_ib_night and self.ib_reader and self.ib_reader.connected:
                 logger.debug(f"[MDS] 非夜盘时段，跳过IB直接走富途 {symbol}")
             elif self.ib_reader and not self.ib_reader.connected:
@@ -249,7 +249,7 @@ class MarketDataService:
             else:
                 logger.debug(f"⚠️ IB Reader未初始化，美股ETF{symbol}尝试回退至富途")
             
-            # 2. 富途兜底（全时段可用）
+            # 2. 富途备用源（全时段可用）
             if self.futu_reader:
                 if self._circuit_is_tripped('富途') or getattr(self.futu_reader, 'disabled', False):
                     # [AI-2026-07-15] 熔断或禁用状态直接跳过，避免调 get_prices 返回"禁用"产生刷屏 WARNING
@@ -287,12 +287,12 @@ class MarketDataService:
                             now = time.time()
                             last_warn = self._futu_warn_cooldown.get(symbol, 0)
                             if now - last_warn > 300:
-                                logger.warning(f"⚠️ 富途兜底获取{symbol}失败: {msg}")
+                                logger.warning(f"⚠️ 富途备用源获取{symbol}失败: {msg}")
                                 self._futu_warn_cooldown[symbol] = now
                 except Exception as e:
                     if not getattr(self.futu_reader, 'disabled', False):
                         self._circuit_record_failure('富途')
-                    logger.error(f"⚠️ 富途兜底获取{symbol}异常: {e}")
+                    logger.error(f"⚠️ 富途备用源获取{symbol}异常: {e}")
             
             # 3. 都拿不到数据：区分原因返回
             if is_ib_night:
@@ -323,7 +323,7 @@ class MarketDataService:
                         bid = quote.get('bid', 0)
                         ask = quote.get('ask', 0)
                         last = quote.get('last', 0)
-                        # [AI-2026-08-03] 同 IB 分支兜底：富途全 0 视为无数据，不返回错误 0 价。
+                        # [AI-2026-08-03] 同 IB 分支备用源：富途全 0 视为无数据，不返回错误 0 价。
                         if bid > 0 or ask > 0 or last > 0:
                             self._circuit_record_success('富途')
                             return {
@@ -362,7 +362,7 @@ class MarketDataService:
             # [AI-2026-07-21] 加 NK（日经225期货）：新浪 hf_NK 有延期行情，富途无期货、IB 期货行情暂未购买
             if re.match(r'^(MGC|MCL|MES|MNQ|GC|CL|SI|HG|ES|NQ|NK)$', symbol):
                 return self._get_sina_futures_quote(symbol)
-            # 其他 SINA 源标的走 RealtimeMarketManager 兜底
+            # 其他 SINA 源标的走 RealtimeMarketManager 备用源
             if symbol not in self.realtime_manager.symbols:
                 self.realtime_manager.subscribe([symbol])
             return self.realtime_manager.get_quote(symbol)
@@ -432,7 +432,7 @@ class MarketDataService:
 
         return {'symbol': symbol, 'ib': ib_q, 'futu': futu_q}
 
-    # [AI-2026-07-13] 新浪 hf_ 期货盘口直取（含微合约兜底）
+    # [AI-2026-07-13] 新浪 hf_ 期货盘口直取（含微合约备用源）
     # 微合约新浪不提供直接数据，从母合约取同价（报价单位相同）
     _MICRO_TO_PARENT = {
         'MGC': 'GC',
@@ -447,7 +447,7 @@ class MarketDataService:
             import requests
             headers = {'Referer': 'https://finance.sina.com.cn/'}
 
-            # 尝试取目标合约（微合约可能为空，后续从母合约兜底）
+            # 尝试取目标合约（微合约可能为空，后续从母合约备用源）
             targets = [symbol]
             if symbol in self._MICRO_TO_PARENT:
                 targets.append(self._MICRO_TO_PARENT[symbol])

@@ -280,7 +280,7 @@ def _fetch_sina_global_index(symbol: str, days: int = 30) -> list:
 
     尝试以下途径获取历史数据：
     1. 新浪 US_MinKService 日线 API（可能支持 N225）
-    2. 新浪实时接口 int_nikkei（仅最新收盘价，兜底）
+    2. 新浪实时接口 int_nikkei（仅最新收盘价，备用源）
 
     Args:
         symbol: 指数代码，如 'N225'
@@ -317,7 +317,7 @@ def _fetch_sina_global_index(symbol: str, days: int = 30) -> list:
     except Exception as e:
         logger.debug(f"[SINA-GLOBAL] US_MinKService 获取 {symbol} 失败: {e}")
 
-    # 2. 兜底：使用新浪实时接口 int_nikkei 获取最新收盘价
+    # 2. 备用源：使用新浪实时接口 int_nikkei 获取最新收盘价
     try:
         sina_code = 'int_nikkei'
         url = f"http://hq.sinajs.cn/list={sina_code}"
@@ -390,7 +390,7 @@ def repair_with_sina(days_back: int = 30) -> dict:
     
     流程：
     1. 遍历所有 related_index
-    2. A股指数 → Sina API（优先）→ QQ API（兜底）
+    2. A股指数 → Sina API（优先）→ QQ API（备用源）
     3. 港股指数 → QQ API
     4. 写入 index_history
     5. 重算 static_val

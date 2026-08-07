@@ -99,10 +99,26 @@ class ETFRotationService:
         except Exception as e:
             logger.warning(f"[FX] 获取新浪在岸价失败: {e}")
 
-        # 兜底：如果交易所开盘但新浪失败，用数据库最近中间价 * 1.02 粗略估算
-        if _fx_cache['rate'] > 0:
-            return _fx_cache['rate']
-        return 7.25
+        # [AI-2026-08-07] 实时拉取失败：回退 DB 当日真实在岸价（exchange_rate.usd_cny_spot，每日9:20由daily_updater入库），
+        # 仍无则返 None（缺失即显 --，禁止用 7.25 假常量掩盖，SUPREME 铁律）
+        db_spot = self._get_db_spot('usd_cny_spot')
+        if db_spot is not None:
+            return db_spot
+        return None
+
+    def _get_db_spot(self, col: str) -> Optional[float]:
+        """从 exchange_rate 取当日真实汇率（9:20由daily_updater入库的真值），缺失返None。"""
+        try:
+            conn = self.db._get_conn()
+            cur = conn.cursor()
+            row = cur.execute(
+                f"SELECT {col} FROM exchange_rate WHERE {col} IS NOT NULL ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+            if row and row[0] is not None:
+                return float(row[0])
+        except Exception as e:
+            logger.debug(f"[FX] DB真值查询失败 {col}: {e}")
+        return None
 
     # ─── 汇率: 人民币中间价（LOF 用）───────────────────
 
@@ -118,7 +134,7 @@ class ETFRotationService:
                 return float(row[0])
         except Exception as e:
             logger.warning(f"[FX] 获取中间价失败: {e}")
-        # 兜底：回落为在岸价
+        # 备用源：回落为在岸价
         return self.get_realtime_fx_spot()
 
     # ─── 实时行情: 美股锚点价格 ────────────────────────
@@ -159,7 +175,7 @@ class ETFRotationService:
         - LOF: 从 fund_daily_factors 获取 nav/position/hedge
         - ETF: 从 unified_fund_history 获取 nav，固定 position=0.95
         """
-        result = {'nav': 0.0, 'position': 0.95, 'hedge': None}
+        result = {'nav': 0.0, 'position': None, 'hedge': None}  # [AI-2026-08-07] position 初始 None，禁止 0.95 默认
 
         if fund_type == 'LOF':
             # LOF: 优先从 fund_daily_factors 取最新数据
@@ -173,10 +189,10 @@ class ETFRotationService:
                 if not df.empty:
                     row = df.iloc[0]
                     result['nav'] = float(row['nav']) if pd.notna(row['nav']) and row['nav'] > 0 else 0.0
-                    result['position'] = float(row['position']) if pd.notna(row['position']) else 0.95
+                    result['position'] = float(row['position']) if pd.notna(row['position']) else None  # [AI-2026-08-07] 缺失即 None
                     result['hedge'] = float(row['hedge']) if pd.notna(row['hedge']) else None
 
-                # 兜底: 从 unified_fund_history 取 nav
+                # 备用源: 从 unified_fund_history 取 nav
                 if result['nav'] <= 0:
                     df2 = pd.read_sql(
                         "SELECT COALESCE(nav, 0) as nav FROM unified_fund_history "
@@ -225,7 +241,7 @@ class ETFRotationService:
         hedge = (US_prev_close * FX_mid) / (NAV * position)
         fx 参数由调用方根据基金类型传入（LOF→中间价，ETF→在岸价）
         """
-        if nav <= 0 or position <= 0:
+        if nav <= 0 or position is None or position <= 0:
             return None
         try:
             conn = self.db._get_conn()
@@ -318,7 +334,7 @@ class ETFRotationService:
             rt_val = 0.0
             rt_premium = 0.0
 
-            if nav > 0 and us_price > 0 and fx > 0:
+            if nav > 0 and us_price > 0 and fx is not None and fx > 0:  # [AI-2026-08-07] fx 可能为 None
                 # 如果 hedge 缺失，动态计算（用同类型汇率）
                 if hedge is None or hedge <= 0:
                     hedge = self._compute_hedge(code, us_sym, nav, position, fx)
@@ -342,8 +358,8 @@ class ETFRotationService:
 
         return {
             'funds': result_funds,
-            'fx_spot': round(fx_spot, 4),
-            'fx_mid': round(fx_mid, 4),
+            'fx_spot': round(fx_spot, 4) if fx_spot is not None else None,
+            'fx_mid': round(fx_mid, 4) if fx_mid is not None else None,
             'us_prices': us_prices,
             'update_time': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
         }

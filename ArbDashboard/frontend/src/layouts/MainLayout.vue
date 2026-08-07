@@ -30,6 +30,7 @@
           :collapsed-width="64"
           :collapsed-icon-size="22"
           :options="menuOptions"
+          :theme-overrides="menuThemeOverrides"
           class="custom-menu"
         />
       </div>
@@ -123,11 +124,18 @@ import {
   AlertTriangle,
   Repeat,
   Zap,
+  ServerCog,
 } from 'lucide-vue-next'
 import { useAppStore, useMarketStore } from '../store'
 
 const collapsed = ref(false)
 const activeKey = ref('dashboard')
+
+// [AI-2026-08-07] 压缩菜单行高：naive-ui 菜单项高度由主题变量 itemHeight 控制(默认42px)，
+// 单改 padding 无效(项高固定、内容垂直居中)，必须覆写 itemHeight 才能真正变矮。
+const menuThemeOverrides = {
+  itemHeight: '32px'
+}
 
 const showDataAlert = ref(false)
 const navAlertText = ref('')
@@ -261,17 +269,23 @@ const menuOptions = [
     label: () => h(RouterLink, { to: '/lazymode' }, { default: () => '我的交易' }),
     key: 'lazymode',
     icon: renderIcon(Bot)
+  },
+  {
+    label: () => h(RouterLink, { to: '/maintenance' }, { default: () => '后台维护' }),
+    key: 'maintenance',
+    icon: renderIcon(ServerCog)
   }
 ]
 </script>
 
 <style scoped>
-.logo { height: 58px; display: flex; align-items: center; padding: 0 14px; gap: 10px; }
+.logo { height: 46px; display: flex; align-items: center; padding: 0 14px; gap: 10px; }
 .logo-text { font-size: 18px; font-weight: 800; background: linear-gradient(120deg, #1d4ed8, #0891b2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.sidebar-footer { padding: 10px; border-top: 1px solid #edf1f7; background: #fbfdff; }
+.sidebar-footer { padding: 8px; border-top: 1px solid #edf1f7; background: #fbfdff; }
 :deep(.n-menu-item-content--selected) { background-color: #eff6ff !important; }
 :deep(.n-menu-item-content--selected .n-menu-item-content-header a) { color: #2563eb !important; }
-:deep(.n-menu-item-content) { border-radius: 8px; margin: 1px 8px; color: #526173; font-weight: 650; padding-top: 6px; padding-bottom: 6px; }
+:deep(.n-menu-item) { height: 32px !important; }
+:deep(.n-menu-item-content) { border-radius: 8px; margin: 0 8px; color: #526173; font-weight: 650; }
 .nav-alert-bar {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: #92400e;

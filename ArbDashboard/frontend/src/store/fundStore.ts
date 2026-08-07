@@ -24,8 +24,8 @@ export interface FundItem {
   shares: number
   shares_added: number
   turnover_rate: number
-  price_change: number
-  prev_close: number
+  price_change?: number | null
+  prev_close?: number | null
   nav_date: string
   index_close: number
   index_pct: number

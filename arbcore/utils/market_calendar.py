@@ -42,7 +42,7 @@ def _ensure_exchange_calendars():
         _HAS_EXCHANGE_CALENDARS = True
         logger.info(f"[MARKET-CAL] exchange_calendars 加载成功，{len(_cal_cache)} 个交易所日历")
     except Exception as e:
-        logger.warning(f"[MARKET-CAL] exchange_calendars 加载失败: {e}，所有非A股交易所将按 US 日历兜底")
+        logger.warning(f"[MARKET-CAL] exchange_calendars 加载失败: {e}，所有非A股交易所将按 US 日历备用源")
 
 # ---------------------------------------------------------------------------
 # A股日历（复用 chinese_calendar）
@@ -54,7 +54,7 @@ try:
 except ImportError:
     logger.warning("[MARKET-CAL] chinese_calendar 未安装，A股判断仅依赖周末过滤")
 
-# 2026年A股休市硬编码兜底
+# 2026年A股休市硬编码备用源
 _HOLIDAYS_2026 = frozenset({
     date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3),
     date(2026, 2, 17), date(2026, 2, 18), date(2026, 2, 19),
@@ -123,7 +123,7 @@ def symbol_to_exchange(symbol: str) -> Optional[str]:
         if clean.endswith(suffix):
             return exchange
 
-    # 2. 港股指数（放在美股兜底前）
+    # 2. 港股指数（放在美股备用源前）
     if any(clean.startswith(p) for p in _HK_INDEX_PREFIXES):
         return 'XHKG'
     
@@ -178,7 +178,7 @@ def is_trading_day(exchange: str, d: date = None) -> bool:
     if exchange in ('NYSE', 'NASDAQ'):
         _ensure_exchange_calendars()
         if not _HAS_EXCHANGE_CALENDARS:
-            # 兜底：仅周末过滤
+            # 备用源：仅周末过滤
             return d.weekday() < 5
         cal = _cal_cache.get('NYSE')
         if cal:
@@ -188,7 +188,7 @@ def is_trading_day(exchange: str, d: date = None) -> bool:
     # 港股 / 日本 / 瑞士
     _ensure_exchange_calendars()
     if not _HAS_EXCHANGE_CALENDARS:
-        return d.weekday() < 5  # 兜底
+        return d.weekday() < 5  # 备用源
     cal = _cal_cache.get(exchange)
     if cal:
         return cal.is_session(d)

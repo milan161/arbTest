@@ -54,9 +54,9 @@ def get_multiplier(symbol: str) -> float:
         symbol: 期货代码，如 'MCL', 'GC', 'SI', 'AG'
     
     Returns:
-        合约乘数，未找到返回 1.0（兜底）
+        合约乘数，未找到返回 None（SUPREME 铁律：禁止用 1.0 默认值掩盖配置缺失）
     """
-    return FUTURES_MULTIPLIERS.get(symbol.upper(), 1.0)
+    return FUTURES_MULTIPLIERS.get(symbol.upper(), None)
 
 
 def list_all_multipliers() -> Dict[str, float]:

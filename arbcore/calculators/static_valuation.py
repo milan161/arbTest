@@ -146,7 +146,7 @@ class StaticValuationCalculator:
         b_fx = base_row['exchange_rate']
         c_fx = row['exchange_rate']
         position = base_row['position']
-        # [AI-2026-08-04 SUPREME 铁律] 禁止用 equity_ratio 兜底 position。
+        # [AI-2026-08-04 SUPREME 铁律] 禁止用 equity_ratio 备用源 position。
         # 此变量实际未参与估值（估值走 assembled['position']），但按铁律仍不兜底。
         if pd.isna(position):
             position = None
@@ -156,7 +156,7 @@ class StaticValuationCalculator:
         # hedge 是否可用由 valuation_method 决定（index/亚洲/国内LOF 强制 None，防误走魔法）。
         # 标的类型（ETF/指数/期货）只决定喂进来的 components，不改变公式本身。
         # [AI-2026-07-27] 补传 category：valuation_method 为空串的基金（如 513000 QDII日本）
-        # 由 yaml valuation_routing.category_fallback 兜底路由，防止误走魔法公式
+        # 由 yaml valuation_routing.category_fallback 备用源路由，防止误走魔法公式
         assembled = assemble_static_components(
             row, base_row, portfolio,
             fund_config.get('related_index', ''),

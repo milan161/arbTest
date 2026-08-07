@@ -62,6 +62,11 @@ const router = createRouter({
           component: LazyMode
         },
         {
+          path: 'maintenance',
+          name: 'Maintenance',
+          component: () => import('../views/Maintenance.vue')
+        },
+        {
           path: 'developing',
           name: 'Developing',
           component: () => import('../views/Developing.vue')

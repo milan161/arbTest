@@ -52,7 +52,7 @@ except ImportError:
 # ibapi 内部 EReader 线程(_readerthread) 用 utf-8 解码失败抛 UnicodeDecodeError，该异常未捕获会导致
 # 后端进程崩溃(后台 task 判定 failed)。此处注册全局线程异常钩子，仅拦截该已知协议杂音，触发 IBReader
 # 自愈重连(断开并置 connected=False，由 _polling_loop 重连)，且不向 stderr 抛 traceback，避免进程被判失败。
-# 严守 AGENTS.md TOP1 红线：绝不动 exchange="OVERNIGHT"、绝不加快史快照兜底。
+# 严守 AGENTS.md TOP1 红线：绝不动 exchange="OVERNIGHT"、绝不加快史快照备用源。
 _IB_READER_INSTANCE = None
 _ORIG_THREAD_EXCEPTHOOK = None
 
@@ -119,7 +119,7 @@ class IBReader(EWrapper, EClient):
         # [V10.0] 不再启动后台连接线程，用户手动触发 reconnect() 即可
 
         # [AI-2026-08-02] 陈旧数据强制重连看门狗参数（详见 014 文档第九节）
-        self.stale_reconnect_threshold = 600   # [AI-2026-08-03] 已连接但长连接零 tick 超过此秒数(夜盘)则强制重连自愈；无兜底机制，纯靠长连接真实 tick 时间判定
+        self.stale_reconnect_threshold = 600   # [AI-2026-08-03] 已连接但长连接零 tick 超过此秒数(夜盘)则强制重连自愈；无备用源机制，纯靠长连接真实 tick 时间判定
         self.stale_reconnect_cooldown = 600    # 两次强制重连最小间隔(秒)，防抖动
         self._last_forced_reconnect = 0
         # [AI-2026-08-05] 断连自动重连（自愈断连）：连接彻底断了(非"连着无tick")时，夜盘时段自动重连，
@@ -131,7 +131,7 @@ class IBReader(EWrapper, EClient):
 
         # [AI-2026-08-06] 连接就绪门禁：仅当行情农场(2104/2106)就绪后才订阅，避免 IB 静默丢弃
         # 连接握手期过早发出的 reqMktData(竞态根因，近期回归)。connection_ready 由 error() 收
-        # 2104/2106 置 True，并由 connect_time + 兜底超时强制置 True，防信号丢失永久不订阅。
+        # 2104/2106 置 True，并由 connect_time + 保护超时强制置 True，防信号丢失永久不订阅。
         self.connection_ready = False
         self.connect_time = 0.0
         self.subscribe_time = {}            # sym -> 订阅发起时间戳(死订阅检测用)
@@ -189,7 +189,7 @@ class IBReader(EWrapper, EClient):
             if self.isConnected():
                 self.connected = True
                 self.retry_delay = 1.0
-                self.connection_ready = False   # [AI-2026-08-06] 重置，等 2104/2106 或兜底超时
+                self.connection_ready = False   # [AI-2026-08-06] 重置，等 2104/2106 或保护超时
                 self.connect_time = time.time()
                 print(f"[IBReader] [OK] 连接成功 (端口: {target_port})")
                 return True
@@ -254,7 +254,7 @@ class IBReader(EWrapper, EClient):
             c_prev = Contract()
             c_prev.symbol = sym
             c_prev.secType = "IND" if sym == "VIX" else "STK"
-            # [AI-2026-08-03] 铁律 TOP1：夜盘任何情况禁止 SMART/ISLAND/ARCA。前收盘兜底抓取改走 OVERNIGHT。
+            # [AI-2026-08-03] 铁律 TOP1：夜盘任何情况禁止 SMART/ISLAND/ARCA。前收盘备用源抓取改走 OVERNIGHT。
             c_prev.exchange = "CBOE" if sym == "VIX" else "OVERNIGHT"
             c_prev.currency = "USD"
             self.req_events[req_id_prev] = threading.Event()
@@ -309,18 +309,18 @@ class IBReader(EWrapper, EClient):
     def _stale_watchdog_loop(self):
         """[AI-2026-08-02] 陈旧数据强制重连看门狗（独立线程，避免与轮询线程相互 join 死锁）
 
-        触发条件（全部满足才动作）：
-          1) self.connected 且 EClient.isConnected() 为真（确实"连着"）
-          2) 当前为美股夜盘时段 is_us_night_session()（此时本应有持续盘口推送）
-          3) self.last_update_time 已停滞超过 stale_reconnect_threshold 秒（"假连接无数据"）
-          4) 距上次强制重连已超过 stale_reconnect_cooldown 秒（防抖动）
+        唯一触发条件（满足才动作）：
+          - self.connected / EClient.isConnected() 为假（连接确实断了）
+            且当前为美股夜盘时段 is_us_night_session()
+          → 自动重连（自愈隔夜/盘中掉线）。
 
-        动作：stop_polling() -> disconnect_from_ib() -> reconnect()
-          - 严守 014 文档红线：disconnect_from_ib 内含 sleep(1)(红线7) 与 prices/last_update_time 清空(红线9)；
-            reconnect() 内含 next_order_id=None 重置(红线3) 与 start_polling()(红线4)；重新订阅保持
-            reqMktData(snapshot=False)(红线10) 与全 tickType 保留(红线11)。本函数绝不动 exchange/
-            primaryExchange/order 字段(红线1/2/5)。
-          - 仅当长连接长时间零 tick（前端无真实盘口）才触发重连自愈，正常行情下永不动。
+        [AI-2026-08-07] 移除原"情况A：已连接但停滞600s强制断开重连"分支。
+          理由：① "连着但零tick"多为农场切换/低流动性/订阅待激活，IB会自行恢复，
+                不等于连接死了；② 强制拆连接引发 client_id 互踢(Error326)与订阅竞态，
+                且 stop_polling() 把看门狗自己关掉、reconnect() 失败分支不重启看门狗→
+                看门狗永久自杀（2026-08-07 实测 10:22 后静默死）。
+          连接存活但无 tick 已由订阅级"死订阅重订"负责，无需拆连接。
+          红线约束（disconnect_from_ib/reconnect）在 Job1 自动重连时同样严守：
           - 即时停用开关：环境变量 ARB_IB_STALE_GUARD=0 可不经改代码关闭本看门狗。
         """
         # 即时停用开关：无需改代码即可关闭看门狗
@@ -351,46 +351,9 @@ class IBReader(EWrapper, EClient):
                     except Exception as e:
                         logger.warning(f"[IB] 看门狗自动重连异常: {e}")
                     continue
-                # 以下为情况A：已连接但行情停滞 → 强制重连(原逻辑)
-                if not self.connected or not self.isConnected():
-                    continue
-                if not self.is_us_night_session():
-                    continue
-                # [AI-2026-08-03] 用长连接真实 tick 时间(last_tick_time)判定陈旧：
-                # 只要长连接持续无实时 tick 超过阈值即强制重连重新订阅（自愈零 tick）。
-                # [AI-2026-08-06] last_tick_time 现仅在首 tick 打点(非订阅时)。若从未收到 tick，
-                # 改用最早订阅时间判定停滞，避免死订阅被误判为"新鲜"而永不触发强制重连。
-                last_tick_ts = min(self.last_tick_time.values()) if self.last_tick_time else None
-                if last_tick_ts is None:
-                    if not self.symbol_req_ids:
-                        continue
-                    oldest_sub = min(self.subscribe_time.get(s, time.time()) for s in self.symbol_req_ids)
-                    if (datetime.now().timestamp() - oldest_sub) < self.stale_reconnect_threshold:
-                        continue
-                    stale = self.stale_reconnect_threshold + 1  # 强制触发
-                else:
-                    stale = (datetime.now() - datetime.fromtimestamp(last_tick_ts)).total_seconds()
-                    if stale < self.stale_reconnect_threshold:
-                        continue
-                now_ts = time.time()
-                if now_ts - self._last_forced_reconnect < self.stale_reconnect_cooldown:
-                    continue
-                self._last_forced_reconnect = now_ts
-                logger.warning(
-                    f"[IB] 陈旧数据看门狗触发：已连接但行情停滞 {stale:.0f}s 无更新"
-                    f"（夜盘时段本应有数据），强制断开重连以自愈"
-                )
-                # 红线6/7/9：先停轮询（本看门狗线程调用，安全 join 轮询线程），再断连
-                self.stop_polling()
-                try:
-                    self.disconnect_from_ib()
-                except Exception as e:
-                    logger.warning(f"[IB] 强制重连-断连异常: {e}")
-                # 红线3/4：重连并重启轮询（新线程）；本看门狗线程不阻塞
-                try:
-                    self.reconnect()
-                except Exception as e:
-                    logger.warning(f"[IB] 强制重连异常: {e}")
+                # [AI-2026-08-07] 情况A（连着但停滞→强制断开重连）已移除：见函数 docstring。
+                # 连接存活但无 tick 交给订阅级"死订阅重订"处理，看门狗只负责真断自愈。
+                # 此处 fall-through 到循环顶部 30s 后再次判定，不执行任何拆连接动作。
             except Exception as e:
                 logger.warning(f"[IB] 看门狗循环异常: {e}")
 
@@ -450,7 +413,7 @@ class IBReader(EWrapper, EClient):
             if not self.connection_ready:
                 if self.connected and (time.time() - self.connect_time) > self.connection_ready_fallback:
                     self.connection_ready = True
-                    logger.warning(f"[IB] 订阅门禁兜底超时({self.connection_ready_fallback}s)，强制解除并订阅")
+                    logger.warning(f"[IB] 订阅门禁保护超时({self.connection_ready_fallback}s)，强制解除并订阅")
                 else:
                     time.sleep(2)
                     continue
@@ -502,7 +465,7 @@ class IBReader(EWrapper, EClient):
                         pass
                     logger.warning(f"[IB] 死订阅自愈: {sym} 订阅 {int(time.time()-st)}s 零 tick，已取消待重订(第{cnt}次)")
 
-            # [AI-2026-08-03] 已彻底移除"历史 BID/TRADES 快照兜底"：东哥红线——任何时候都不写
+            # [AI-2026-08-03] 已彻底移除"历史 BID/TRADES 快照备用源"：东哥红线——任何时候都不写
             # 历史快照冒充实时盘口（bid=ask=last 单一值）。没有真实盘口时前端显示"等待数据"，
             # 由 stale 看门狗负责长连接零 tick 自愈重连。底层的 tickPrice/tickSize 会毫秒级更新字典，
             # 此处仅做短暂停留。
@@ -584,7 +547,7 @@ class IBReader(EWrapper, EClient):
         # 🤫 彻底屏蔽 10089(延时警告) 和 10346(持仓通道被TWS强制抢占警告)
         # [V10.11] 新增 502（连接被拒/端口不对）— 端口重试过程中的 502 是预期行为，不应触发断连
         # [AI-2026-08-06] 2104/2106=行情农场连接正常，是"可订阅"的就绪信号；收到即置 connection_ready
-        # 解除订阅门禁(配合 connect_time 兜底超时，防信号丢失永久不订阅)。
+        # 解除订阅门禁(配合 connect_time 保护超时，防信号丢失永久不订阅)。
         if errorCode in [2104, 2106]:
             if not self.connection_ready:
                 self.connection_ready = True

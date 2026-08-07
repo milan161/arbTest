@@ -12,7 +12,7 @@ import logging
 import requests
 import yaml
 
-# [AI-2026-07-29] 收编：valuation_method 改从主 YAML 读取，删 valuation_mapping 硬编码；统一用 resolve_method 按 category 兜底
+# [AI-2026-07-29] 收编：valuation_method 改从主 YAML 读取，删 valuation_mapping 硬编码；统一用 resolve_method 按 category 补充默认方法
 from arbcore.calculators.valuation_data_engine import resolve_method
 # [AI-2026-07-27] 统一估值核心（估值引擎+数据引擎分离）：QDII日本实时复用篮子公式，NK期货价作单组件
 from arbcore.calculators.unified_valuation import basket_valuation
@@ -74,7 +74,7 @@ except Exception as e:
 # [V11.0] 实时在岸价缓存（15秒 TTL）
 _SPOT_FX_CACHE: Dict[str, float] = {'rate': 0.0, 'time': 0.0}
 
-def _get_realtime_spot_fx() -> float:
+def _get_realtime_spot_fx() -> Optional[float]:
     """从新浪获取 USD/CNY 实时在岸价（实盘汇率），15秒缓存"""
     now = time.time()
     if now - _SPOT_FX_CACHE['time'] < 15 and _SPOT_FX_CACHE['rate'] > 0:
@@ -98,15 +98,19 @@ def _get_realtime_spot_fx() -> float:
                     return rate
     except Exception as e:
         logger.warning(f"[FX] 获取新浪在岸价失败: {e}")
-    # 兜底：用缓存旧值
-    if _SPOT_FX_CACHE['rate'] > 0:
-        return _SPOT_FX_CACHE['rate']
-    return 0.0
+    # [AI-2026-08-07] live 失败 → 真源备用：回退 DB exchange_rate.usd_cny_spot
+    # （每日 9:20 由 daily_updater 从新浪入库的真值，非假数据，符合铁律）
+    db_rate = _get_db_latest_spot('usd_cny_spot')
+    if db_rate:
+        logger.debug(f"[FX] live在岸价失败，回退DB真值(9:20落库): {db_rate}")
+        return db_rate
+    # 连 DB 真值也无 → 返 None，显 --，禁止用缓存旧值/0.0 掩盖（SUPREME 铁律）
+    return None
 
 # [AI-2026-07-23] JPY/CNY 在岸价缓存（实时估值用）
 _JPY_SPOT_FX_CACHE = {'rate': 0.0, 'time': 0.0}
 
-def _get_realtime_jpy_spot_fx() -> float:
+def _get_realtime_jpy_spot_fx() -> Optional[float]:
     """从新浪获取 JPY/CNY 实时在岸价（实盘汇率），15秒缓存
 
     [AI-2026-07-23] 新浪 fx_sjpycny 返回每1日元汇率（如 0.0416），
@@ -136,10 +140,34 @@ def _get_realtime_jpy_spot_fx() -> float:
                     return rate
     except Exception as e:
         logger.warning(f"[FX] 获取日元在岸价失败: {e}")
-    if _JPY_SPOT_FX_CACHE['rate'] > 0:
-        return _JPY_SPOT_FX_CACHE['rate']
-    return 0.0
+    # [AI-2026-08-07] live 失败 → 真源备用：回退 DB exchange_rate.jpy_cny_spot（9:20 落库真值）
+    db_rate = _get_db_latest_spot('jpy_cny_spot')
+    if db_rate:
+        logger.debug(f"[FX] live日元在岸价失败，回退DB真值(9:20落库): {db_rate}")
+        return db_rate
+    # 连 DB 真值也无 → 返 None，显 --（SUPREME 铁律）
+    return None
 
+
+
+# [AI-2026-08-07] 真源备用：live 在岸价拉取失败时，回退 DB exchange_rate 表最新落库真值
+# （每日 9:20 由 daily_updater 从新浪入库的 usd_cny_spot / jpy_cny_spot，是真实值非假数据，符合铁律）
+def _get_db_latest_spot(sym_col: str) -> Optional[float]:
+    try:
+        import sqlite3, os
+        db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'database', 'arb_master.db')
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                f"SELECT {sym_col} FROM exchange_rate WHERE {sym_col} IS NOT NULL ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        if row and row[0] and float(row[0]) > 0:
+            return float(row[0])
+    except Exception as e:
+        logger.warning(f"[FX] 读取DB在岸价真值({sym_col})失败: {e}")
+    return None
 
 
 # [债券ETF] 引入债券ETF估值服务
@@ -210,8 +238,9 @@ def _ensure_daily_snapshot(conn):
         _daily_snapshot['jpy_cny_spot'] = _get_realtime_jpy_spot_fx()
         # 加载实时在岸价（用于 spot rate 基金）
         _daily_snapshot['usd_cny_spot'] = _get_realtime_spot_fx()
-        if _daily_snapshot['usd_cny_spot'] <= 0:
-            logger.warning("[SNAPSHOT] 在岸价获取失败，将用中间价兜底（周末/非交易时段可能如此）")
+        if _daily_snapshot['usd_cny_spot'] is None or _daily_snapshot['usd_cny_spot'] <= 0:
+            # [AI-2026-08-07] 缺失显 --，不回退中间价（SUPREME 铁律：禁止用旧值/其他源掩盖）
+            logger.warning("[SNAPSHOT] 在岸价获取失败（非交易时段/网络异常），ETF实时估值将显 --")
         # [AI-2026-08-02] 日元在岸价落库已移至 daily_updater step3（9:20 清晨刷新，确定时点）。
         #   _ensure_daily_snapshot 只负责加载（读），不负责写库（避免 web 进程首次加载时间不固定）。
         _daily_snapshot['loaded'] = True
@@ -352,7 +381,7 @@ def _get_ag0_future_quote():
 _index_pct_cache = {}  # "HSCEI_2026-06-18" -> float
 
 _index_pct_cache_time = {}
-def get_index_change_percent(symbol: str) -> float:
+def get_index_change_percent(symbol: str) -> Optional[float]:
     """
     [新浪/腾讯指数极速接口] 直接拉取指数日内涨跌幅百分比
     无感对接国内指数（000xxx, 399xxx）、恒生指数HSI等，无需频繁维护静态基准价
@@ -378,7 +407,7 @@ def get_index_change_percent(symbol: str) -> float:
     if cache_key in _index_pct_cache_time and now_ts - _index_pct_cache_time[cache_key] < 60 and cache_key in _index_pct_cache:
         return _index_pct_cache[cache_key]
 
-    result = 0.0
+    result = None
     try:
         # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
         if 'HSTECH' in clean_sym:
@@ -435,7 +464,7 @@ def get_index_change_percent(symbol: str) -> float:
                     logger.info(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
                     result = float(parts[3])
                     
-            # [V7.2] 新浪降级策略：使用腾讯接口兜底 (完美解决新浪没有中证指数的问题)
+            # [V7.2] 新浪优先、腾讯作为备用源（完美解决新浪没有中证指数的问题）
             if result == 0.0:
                 prefix = 'sz' if clean_sym.startswith(('399', '159')) else 'sh'
                 url_tencent = f"http://qt.gtimg.cn/q={prefix}{clean_sym}"
@@ -443,12 +472,13 @@ def get_index_change_percent(symbol: str) -> float:
                 if r_tc.status_code == 200 and 'v_' in r_tc.text:
                     tc_parts = r_tc.text.split('"')[1].split('~')
                     if len(tc_parts) >= 33:
-                        logger.info(f"[INDEX-TENCENT] 兜底获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
+                        # [AI-2026-08-07] 腾讯备用源补取属正常行为，降级DEBUG避免刷屏（数据逻辑不变）
+                        logger.debug(f"[INDEX-TENCENT] 备用源获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
                         result = float(tc_parts[32])
     except Exception as e:
         logger.debug(f"Index fetch failed for {symbol}: {e}")
     # 写入日内缓存
-    if result != 0.0:
+    if result is not None:
         _index_pct_cache[cache_key] = result
         _index_pct_cache_time[cache_key] = time.time()
     return result
@@ -535,8 +565,8 @@ def _classify_index_symbol(sym: str) -> str:
         return ('hk', sym)
     return ('other', sym)
 
-def _build_index_daily_fallback(symbols: List[str], conn, now) -> Dict[str, Dict[str, float]]:
-    """[V10.16] 从 index_history 兜底读取最新收盘价，并计算真实涨跌幅
+def _build_index_daily_backup(symbols: List[str], conn, now) -> Dict[str, Dict[str, float]]:
+    """[V10.16] 从 index_history 备用源读取最新收盘价，并计算真实涨跌幅
 
     涨跌幅 = (最新收盘价 - 前一个交易日收盘价) / 前一个交易日收盘价 × 100
 
@@ -645,7 +675,7 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
     [AI-2026-07-07] 改用 exchange_calendars 日历判断各市场交易日
 
     - 非交易日（周末/假期）→ 全部指数走 index_history 收盘价，不调任何 API
-    - 某交易所非交易日（如美股假期A股正常）→ 该交易所指数走 DB 兜底
+    - 某交易所非交易日（如美股假期A股正常）→ 该交易所指数走 DB 备用源
     - 15:00后 A股指数 → 直接取 index_history 收盘价，不调API
     - 16:00后 港股指数 → 直接取 index_history 收盘价，不调API
     - 交易时段内 → 正常拉腾讯/新浪/东财API
@@ -680,16 +710,16 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
     for ex, syms in exchange_syms.items():
         # 1a. 是否交易日？
         if not is_trading_day(ex, now.date()):
-            # 非交易日 → 全部走 DB 兜底
+            # 非交易日 → 全部走 DB 备用源
             if conn:
                 try:
-                    part = _build_index_daily_fallback(syms, conn, now)
+                    part = _build_index_daily_backup(syms, conn, now)
                     if part:
                         db_results.update(part)
                         logger.debug(f"[INDEX-DB] {ex} 非交易日 {now.date()}，"
                                      f"{len(part)}/{len(syms)} 个指数取上一交易日收盘价")
                 except Exception as e:
-                    logger.warning(f"[INDEX-DB] {ex} 兜底失败: {e}")
+                    logger.warning(f"[INDEX-DB] {ex} 备用源读取失败: {e}")
             continue
 
         # 1b. 交易日内：判断是否已收盘
@@ -698,7 +728,7 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
         elif ex == 'XHKG':
             closed = now.hour >= 16
         elif ex == 'JPX':
-            # [AI-2026-07-22] 日本指数(N225)不再需要实时行情，直接始终判定为收盘以读取 index_history 的 Yahoo 数据兜底
+            # [AI-2026-07-22] 日本指数(N225)不再需要实时行情，直接始终判定为收盘以读取 index_history 的 Yahoo 数据备用源
             closed = True
         else:
             # 其他交易所（如美股指数）默认不在此API获取
@@ -707,11 +737,11 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
         if closed:
             if conn:
                 try:
-                    part = _build_index_daily_fallback(syms, conn, now)
+                    part = _build_index_daily_backup(syms, conn, now)
                     if part:
                         db_results.update(part)
                 except Exception as e:
-                    logger.warning(f"[INDEX-DB] {ex} 收盘兜底失败: {e}")
+                    logger.warning(f"[INDEX-DB] {ex} 收盘备用源读取失败: {e}")
         else:
             api_syms.extend(syms)
 
@@ -756,7 +786,7 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
 def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, float]]:
     """
     [V10.14] 从腾讯→新浪→东财 三级瀑布获取实时指数行情
-    仅用于还在交易时段的指数（收盘后的指数已在 prefetch_index_changes 中走DB兜底）
+    仅用于还在交易时段的指数（收盘后的指数已在 prefetch_index_changes 中走DB备用源）
     """
     if not symbols:
         return {}
@@ -809,7 +839,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         # [V10.19] CSI代码(如930914)跳过腾讯/新浪，直接走东财
         if _is_csi_index_code(clean_sym):
             # CSI代码腾讯sh/sz查询返回无意义数据(如sh930914→v_pv_none_match)
-            # 跳过腾讯/新浪，让东财兜底处理
+            # 跳过腾讯/新浪，让东财作为备用源处理
             continue
         elif clean_sym.isdigit() and len(clean_sym) == 6:
             if clean_sym.startswith('399') or clean_sym.startswith('159') or clean_sym.startswith('3999'):
@@ -853,7 +883,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
 
     res = {}
     
-    # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。改为新浪优先、腾讯降级兜底。
+    # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。改为新浪优先、腾讯作为备用源。
     # 2. 优先从新浪获取（res 为空时全量尝试）
     missing_sina_reqs = set()
     for ret_code, syms in sina_to_syms.items():
@@ -911,8 +941,8 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         except Exception as e:
             logger.warning(f"预取新浪指数异常: {e}")
 
-    # [AI-2026-08-04] 新浪优先后，腾讯仅兜底新浪未拿到的指数（非主力源）
-    # 1. 腾讯兜底获取
+    # [AI-2026-08-04] 新浪优先后，腾讯仅补充新浪未拿到的指数（非主力源）
+    # 1. 腾讯备用源补充
     if tencent_requests:
         url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
         try:
@@ -928,13 +958,12 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                             for original_sym in tc_to_syms[code]:
                                 if original_sym not in res:
                                     res[original_sym] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
-                            logger.info(f"[INDEX-TENCENT] 兜底获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
+                            # [AI-2026-08-07] 腾讯备用源补取属正常行为，降级DEBUG避免刷屏（数据逻辑不变）
+                            logger.debug(f"[INDEX-TENCENT] 备用源获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
         except Exception as e:
             logger.warning(f"预取腾讯指数异常: {e}")
-        except Exception as e:
-            logger.warning(f"预取新浪指数兜底异常: {e}")
 
-    # [V10.12] 3. 东财API兜底：港股/CSI非标指数（腾讯/新浪不识别的）
+    # [V10.12] 3. 东财API备用源：港股/CSI非标指数（腾讯/新浪不识别的）
     # 东财 secid 映射规则：
     #   HSSI, HSMI, HSFML25, HSSCBBAI → 124.{code}
     #   HSCEI → 100.{code}
@@ -955,7 +984,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         if sym in res:
             continue  # 已有数据，跳过
         # 已在腾讯/新浪获取成功的 ret_code 也跳过
-        # 判断是否需要东财兜底
+        # 判断是否需要东财备用源
         secid = None
         if clean_sym in EM_SECID_MAP:
             secid = EM_SECID_MAP[clean_sym]
@@ -1455,14 +1484,15 @@ class FundService:
 
                     # [AI-2026-07-09] 修复涨跌幅：prev_close 必须是"昨收"（前一日收盘价），
                     # 不能是 iloc[0]（当日最新价，与现价相同会导致涨跌幅≈0 或错乱）。
-                    # valid_prices 按日期降序（iloc[0]=当日），昨收取 iloc[1]，不足则用 iloc[0] 兜底。
+                    # valid_prices 按日期降序（iloc[0]=当日），昨收取 iloc[1]，不足则显 None（禁止用当日价兜底）。
                     if not valid_prices.empty:
                         if len(valid_prices) >= 2:
                             metrics['prev_close'] = valid_prices.iloc[1]['price']
                         else:
-                            metrics['prev_close'] = valid_prices.iloc[0]['price']
+                            # [AI-2026-08-07] 不足两日(无昨收)显 None，禁止用当日价/0 充当昨收（SUPREME 铁律）
+                            metrics['prev_close'] = None
                     else:
-                        metrics['prev_close'] = 0
+                        metrics['prev_close'] = None
 
                 # ── 4. 实时价格（从预取的 quotes_dict 取，避免逐只序列调用） ──
                 # [AI-2026-07-29] 历史/卡片显示的「收盘价(price)」必须是 DB 官方收盘，
@@ -1610,7 +1640,7 @@ class FundService:
                             except:
                                 pass
                         
-                        # [优先级3] 降级：新浪 nf_AG0 接口兜底
+                        # [优先级3] 降级：新浪 nf_AG0 接口补充
                         if ag_future_price <= 0 or settlement_price <= 0:
                             try:
                                 headers = {'Referer': 'https://finance.sina.com.cn/'}
@@ -1857,11 +1887,11 @@ class FundService:
                                             metrics['rt_val'] = round(rt_val, 4)
                                             if metrics.get('price', 0) > 0:
                                                 metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
-                                            logger.debug(f"[{code}] NK实时估值(兜底): nk={nk_price}, jpy={jpy_spot}, rt_val={rt_val:.4f}")
+                                            logger.debug(f"[{code}] NK实时估值(备用源): nk={nk_price}, jpy={jpy_spot}, rt_val={rt_val:.4f}")
                                 except Exception as e:
                                     logger.warning(f"[{code}] NK实时估值失败: {e}")
 
-                            # 尝试用 trade_etf 兜底 [V10.8]
+                            # 尝试用 trade_etf 备用源 [V10.8]
                             # basket为空时（如162411的XOP），直接用 trade_etf 获取实时ETF价格做 hedge 估值
                             # 放在 current_fx 条件外，让无basket基金也能走魔法公式
                             if not metrics.get('rt_val'):
@@ -1900,7 +1930,7 @@ class FundService:
                                                         spot_fx = _daily_snapshot.get('usd_cny_spot', 0)
                                                         fx = spot_fx if spot_fx > 0 else 0
                                                     else:
-                                                        # current_fx 可能为空，从 base_data 兜底
+                                                        # current_fx 可能为空，从 base_data 补充(mid真值)
                                                         fx = current_fx if (current_fx and current_fx > 0) else float(base_data.get('exchange_rate', 0) or 0)
                                                     if b_nav > 0 and b_hedge > 0 and fx > 0:
                                                         # val = nav * (1 - pos) + (etf_price * fx) / hedge
@@ -1915,7 +1945,7 @@ class FundService:
                     import traceback
                     logger.error(f"实时计算 {code} 估值失败: {e}\n{traceback.format_exc()}")
 
-                # [V6.1] 备用兜底：如果实时计算失败（例如未连行情源，或美股休市无最新价），从采样表获取最近一次的记录
+                # [V6.1] 备用源：如果实时计算失败（例如未连行情源，或美股休市无最新价），从采样表获取最近一次的记录
                 if not metrics.get('rt_val') or metrics['rt_val'] <= 0:
                     # [AI-2026-07-06] 篮子基金ETF行情缺失时跳过stale兜底（INDA等低流动性场景）
                     if _basket_missing_etf:
@@ -1929,10 +1959,10 @@ class FundService:
                             if not sample_df.empty:
                                 sample_date = str(sample_df.iloc[0]['date'])
                                 today_str = datetime.now().strftime('%Y-%m-%d')
-                                # [2026-07-30 FIX] 仅接受"当日"采样作实时兜底，防止展示陈旧历史快照
+                                # [2026-07-30 FIX] 仅接受"当日"采样作实时备用源，防止展示陈旧历史快照
                                 # （库里曾残留 6 周前的采样，会当成"实时估值"误导用户）
                                 if sample_date != today_str:
-                                    logger.debug(f"[{code}] 采样表最新记录({sample_date})非当日，跳过实时兜底")
+                                    logger.debug(f"[{code}] 采样表最新记录({sample_date})非当日，跳过实时备用源")
                                     metrics['rt_val'] = None
                                     metrics['rt_premium'] = None
                                 else:
@@ -1955,14 +1985,16 @@ class FundService:
                 # 3. [V4.0] 灵魂逻辑重算 (确保静态溢价率和涨跌幅不为 0)
                 cp = float(metrics.get('price') or 0)
                 sv = float(metrics.get('static_val') or 0)
-                pc = float(metrics.get('prev_close') or 0)
-                
+                _pc_raw = metrics.get('prev_close')
+                pc = float(_pc_raw) if _pc_raw else None
+
                 if cp > 0 and sv > 0:
                     metrics['static_premium'] = (cp / sv - 1) * 100
-                if cp > 0 and pc > 0:
+                # [AI-2026-08-07] 缺失昨收(prev_close)时 price_change 显 None → 前端显 --，禁止用 0 掩盖
+                if cp > 0 and pc is not None and pc > 0:
                     metrics['price_change'] = (cp / pc - 1) * 100
                 else:
-                    metrics['price_change'] = 0
+                    metrics['price_change'] = None
 
                 # [AI-2026-07-29] 实时溢价(rt_premium) 用 realtime_price 重算，
                 #   与 static_premium(用官方收盘价) 区分：rt_premium = 实时价/rt_val - 1
@@ -2308,7 +2340,7 @@ class FundService:
             # 多篮子基金（如161116→GLD+^GLD-EU）显示价格（price），列名"GLD价格/^GLD-EU价格"
             yaml_trade_etf = _YAML_TRADE_ETF.get(fund_code, '')
             etf_price_map = {}  # {symbol: {date: {price, chg}}}
-            is_single_etf = False  # 异常兜底，避免 UnboundLocalError
+            is_single_etf = False  # 异常保护，避免 UnboundLocalError
             col_name = 'price'
             try:
                 # 1) 从 related_index 获取主 ETF
@@ -2579,7 +2611,7 @@ class FundService:
                 return {"status": "error", "message": f"Fund {code} not found in database"}
 
             # [AI-2026-07-20] trade_future 优先从 YAML 读取（NK/MNQ/MES/MGC 等），
-            # 名字推断仅作兜底（原油→CL / 金→GC / 白银→AG0）。
+            # 名字推断仅作补充（原油→CL / 金→GC / 白银→AG0）。
             # 修复：QDII日本/纳指等原硬编码推断全落到空串，导致纯期货/期货校准功能失效。
             trade_future = _YAML_TRADE_FUTURE.get(code, '')
             if not trade_future:
@@ -2592,7 +2624,7 @@ class FundService:
 
             # [AI-2026-07-20] trade_etf 优先从 YAML 取（SPY/QQQ），避免用 related_index（.INX/.NDX）
             # [AI-2026-07-29] valuation_method 改从主 YAML(lof_config.yaml) 读取（单一真相源），
-            # 空串经 resolve_method 按 category 兜底；前端 isQDIIJapan 已改为读 category，不再依赖此值
+            # 空串经 resolve_method 按 category 补充；前端 isQDIIJapan 已改为读 category，不再依赖此值
             _yaml_fund_cfg = self.config_service.get_fund_config(code) or {} if self.config_service else {}
             _raw_method = _yaml_fund_cfg.get('valuation_method') or ''
             _method = _raw_method if _raw_method else resolve_method('', f_row[3] if len(f_row) > 3 else '')
@@ -2663,7 +2695,7 @@ class FundService:
                         break
                 etf_symbols.append(sym)
 
-            # [V10.8] basket为空时用 trade_etf 兜底获取行情（如162411→XOP）
+            # [V10.8] basket为空时用 trade_etf 备用源获取行情（如162411→XOP）
             if not etf_symbols:
                 trade_etf = fund_cfg.get('trade_etf', '')
                 if trade_etf and trade_etf != '-':
@@ -2750,7 +2782,7 @@ class FundService:
                         "price": float(row[5]) if row[5] is not None else 0.0
                     }
 
-                    # 如果没有独立校准值，查找全局期货校准值兜底
+                    # 如果没有独立校准值，查找全局期货校准值补充
                     if t1_data["calibration"] == 0.0 and future_symbol:
                         base_fsym = future_symbol
                         if 'MGC' in future_symbol or 'GC' in future_symbol:

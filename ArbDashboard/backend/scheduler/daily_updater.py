@@ -299,7 +299,7 @@ class DailyUpdater(BaseApp):
                 self.logger.warning("🖥️ [DASHBOARD_MODE] 东京暂无新增 woody 因子（可能当日尚未落盘），沿用库内既有因子，不熔断")
             return True
 
-        # Level 1: 实时 API (确保拿回最新的，或者作为 VPS 失败后的兜底)
+        # Level 1: 实时 API (确保拿回最新的，或者作为 VPS 失败后的备用源)
         try:
             self.logger.info("🛡️ [Level 1] 尝试通过实时 API 刷新今日因子...")
             success = WoodyAPIService.fetch_and_process(self.db, codes, backup_dir, source_id='woody_lof')
@@ -458,7 +458,7 @@ class DailyUpdater(BaseApp):
             self.logger.error(f"❌ 同步YAML配置失败: {e}")
 
     def step3_fetch_exchange_rate(self):
-        """[AI-2026-07-08] 步骤三：抓取汇率（中间价/在岸价/离岸价）存入库，2 级降级：VPS 同步 → 本地直连兜底"""
+        """[AI-2026-07-08] 步骤三：抓取汇率（中间价/在岸价/离岸价）存入库，2 级降级：VPS 同步 → 本地直连备用源"""
         self.logger.info("=== 步骤三：抓取汇率（中间价/在岸价/离岸价） ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
 
@@ -492,7 +492,7 @@ class DailyUpdater(BaseApp):
                     hkd_val = content.get('hkd_cny_mid')
                     cny_spot_val = content.get('usd_cny_spot')
                     cnh_val = content.get('usd_cnh')
-                    # 中间价缺失则尝试用其他汇率兜底日期，避免整条跳过
+                    # 中间价缺失则尝试用其他汇率备用源日期，避免整条跳过
                     if date_info and (usd_val or cny_spot_val or cnh_val):
                         date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
                         self.db.upsert_exchange_rate(
@@ -521,7 +521,7 @@ class DailyUpdater(BaseApp):
             self.logger.info("✅ 今日已同步过人民币中间价，跳过实时抓取。")
             return
 
-        # Level 1: 实时抓取作为兜底（[AI-2026-07-08] 单级兜底补全：中间价 + 在岸价 + 离岸价 一次抓全）
+        # Level 1: 实时抓取作为备用源（[AI-2026-07-08] 单级备用源补全：中间价 + 在岸价 + 离岸价 一次抓全）
         self.logger.info("📡 [Level 1] 尝试实时抓取人民币中间价/在岸价/离岸价...")
         from arbcore.fetchers.data_fetcher import data_fetcher
         exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
@@ -545,7 +545,7 @@ class DailyUpdater(BaseApp):
                 except Exception as e:
                     self.logger.error(f"❌ 本地汇率解析异常: {e}")
 
-        # [AI-2026-07-08] Level 1 兜底补全：在岸价 + 离岸价 直连新浪（VPS 未提供时单级也能补齐）
+        # [AI-2026-07-08] Level 1 备用源补全：在岸价 + 离岸价 直连新浪（VPS 未提供时单级也能补齐）
         # 在岸价 USDCNY
         try:
             conn_spot = self.db._get_conn()
@@ -562,7 +562,7 @@ class DailyUpdater(BaseApp):
                         self.db.upsert_exchange_rate(spot_date, usd_cny_spot=spot_rate)
                         self.logger.info(f"✅ [Level 1] 在岸价 USDCNY 入库: {spot_date} -> {spot_rate}")
         except Exception as e:
-            self.logger.error(f"❌ [Level 1] 在岸价直连兜底失败: {e}")
+            self.logger.error(f"❌ [Level 1] 在岸价直连备用源失败: {e}")
         # [AI-2026-08-02] JPY/CNY 在岸价——ETF 实时估值 fx_base 用（与 USD 在岸价同管道、同时点 9:20 清晨刷新）
         # 铁律：ETF 实时估值两端都在岸价；LOF 两端都中间价；静态估值一律中间价。QDII日本 4 只都是 ETF。
         try:
@@ -597,10 +597,10 @@ class DailyUpdater(BaseApp):
                         self.db.upsert_exchange_rate(cnh_date, usd_cnh=cnh_rate)
                         self.logger.info(f"✅ [Level 1] 离岸价 CNH 入库: {cnh_date} -> {cnh_rate}")
         except Exception as e:
-            self.logger.error(f"❌ [Level 1] 离岸价直连兜底失败: {e}")
+            self.logger.error(f"❌ [Level 1] 离岸价直连备用源失败: {e}")
 
         # [AI-2026-07-23] JPY/CNY 日元汇率——优先使用国家外汇管理局中间价
-        # [AI-2026-07-10] 原新浪在岸价仅作兜底
+        # [AI-2026-07-10] 原新浪在岸价仅作备用源
         try:
             conn_jpy = self.db._get_conn()
             has_jpy = conn_jpy.execute(
@@ -617,16 +617,16 @@ class DailyUpdater(BaseApp):
                     self.db.upsert_exchange_rate(jpy_date_str, jpy_cny_mid=jpy_rate)
                     self.logger.info(f"✅ [Level 1] JPY/CNY 中间价入库: {jpy_date_str} -> {jpy_rate}")
                 else:
-                    # 兜底：新浪在岸价
+                    # 备用源：新浪在岸价
                     jpy_data = data_fetcher.fetch_jpy_cny_rate()
                     if jpy_data:
                         jpy_date = pd.to_datetime(str(jpy_data.get('日期', today_str))).strftime('%Y-%m-%d')
                         jpy_rate = jpy_data.get('jpy_cny_rate')
                         if jpy_rate is not None:
                             self.db.upsert_exchange_rate(jpy_date, jpy_cny_mid=jpy_rate)
-                            self.logger.info(f"✅ [Level 1] JPY/CNY 兜底入库(新浪): {jpy_date} -> {jpy_rate}")
+                            self.logger.info(f"✅ [Level 1] JPY/CNY 备用源入库(新浪): {jpy_date} -> {jpy_rate}")
         except Exception as e:
-            self.logger.error(f"❌ [Level 1] JPY/CNY 直连兜底失败: {e}")
+            self.logger.error(f"❌ [Level 1] JPY/CNY 直连备用源失败: {e}")
 
         self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价/日元）采集结束。")
 
@@ -669,7 +669,7 @@ class DailyUpdater(BaseApp):
             elif new_nav is not None and float(new_nav) > 0:
                 premium = round((float(new_price) - float(new_nav)) / float(new_nav) * 100, 4)
             elif t1_nav is not None and t1_nav > 0:
-                # 无当日净值时的降级：用 T-1（仅兜底，不掩盖缺失）
+                # 无当日净值时的降级：用 T-1（仅备用，不掩盖缺失）
                 premium = round((float(new_price) - t1_nav) / t1_nav * 100, 4)
             
         # [AI-2026-07-31] 净值日期一并落库：本表约定「行内 nav 即 date 当日净值」
@@ -1175,10 +1175,10 @@ class DailyUpdater(BaseApp):
                 elif any(sym.endswith(suffix) for suffix in ['-EU', '-JP', '-HK']):
                     regional_etfs.add(f"^{sym}")
                     
-        # 兜底：如果没提取到，给个默认集
+        # [AI-2026-08-07] 提取为空即跳过，禁止用默认集掩盖（缺失即不跑，不编造标的，SUPREME 铁律）
         if not regional_etfs:
-            regional_etfs = {'^GLD-EU', '^GLD-JP', '^USO-EU', '^USO-JP', '^USO-HK', 
-                             '^INDA-EU', '^INDA-JP', '^INDA-HK'}
+            self.logger.warning("⚠️ 区域ETF提取为空（config 未配置区域变种），跳过历史行情爬取")
+            return
 
         # === 防刷检查：先检查数据库中是否已有最新数据 ===
         # 考虑美股时差：北京时间5月28日，美国是5月27日
@@ -1306,8 +1306,8 @@ class DailyUpdater(BaseApp):
 
 
     def step8_fetch_sina_futures_from_vps(self):
-        """步骤八：从VPS同步新浪期货数据，并带有本地接口兜底（收盘价和结算价）"""
-        self.logger.info("=== 步骤八：获取新浪期货数据 (VPS优先 -> 本地兜底) ===")
+        """步骤八：从VPS同步新浪期货数据，并带有本地接口备用源（收盘价和结算价）"""
+        self.logger.info("=== 步骤八：获取新浪期货数据 (VPS优先 -> 本地备用源) ===")
         today_str = datetime.now().strftime('%Y-%m-%d')
         
         # 如果今天的数据已经同步成功过，直接跳过
@@ -1344,7 +1344,7 @@ class DailyUpdater(BaseApp):
 
         if vps_today_success:
             # [AI-2026-07-23] VPS 同步成功后，检查 NK 数据是否存在
-            # VPS 可能有其他期货数据但缺少 NK，需要从新浪兜底补齐
+            # VPS 可能有其他期货数据但缺少 NK，需要从新浪备用源补齐
             try:
                 nk_check = conn.execute(
                     "SELECT COUNT(*) FROM futures_daily WHERE symbol='NK' AND date=? AND settle_price > 0",
@@ -1369,12 +1369,12 @@ class DailyUpdater(BaseApp):
             self.logger.info("✅ [VPS] 今日期货数据同步完成！")
             return
 
-        # 本地兜底
+        # 本地备用源
         if self.db.is_access_synced_today(today_str, 'futures_vps_sync'):
-            # [AI-2026-08-06] 今日已由 VPS 同步过期货数据(仅因"防刷跳过"返回空列表)，无需告警；本地兜底补齐无害
-            self.logger.info("✅ [VPS] 今日期货数据此前已同步(VPS)，启动本地兜底补齐(无害)")
+            # [AI-2026-08-06] 今日已由 VPS 同步过期货数据(仅因"防刷跳过"返回空列表)，无需告警；本地备用源补齐无害
+            self.logger.info("✅ [VPS] 今日期货数据此前已同步(VPS)，启动本地备用源补齐(无害)")
         else:
-            self.logger.warning("⚠️ [VPS] 未获取到今日期货数据，启动本地新浪API兜底...")
+            self.logger.warning("⚠️ [VPS] 未获取到今日期货数据，启动本地新浪API备用源...")
         from arbcore.fetchers.data_fetcher import data_fetcher
         fallback_data = data_fetcher.get_futures_settlement_data()
         if fallback_data:
@@ -1386,9 +1386,9 @@ class DailyUpdater(BaseApp):
                 if symbol and (settle is not None or close_price is not None):
                     self.db.upsert_futures_daily(date=today_str, symbol=symbol, settle_price=settle, close_price=close_price, volume=volume)
             self.db.mark_access_synced(today_str, source='futures_data')
-            self.logger.info(f"✅ [本地兜底] 今日期货数据获取完成！")
+            self.logger.info(f"✅ [本地备用源] 今日期货数据获取完成！")
         else:
-            self.logger.error("❌ [本地兜底] 获取期货数据失败。")
+            self.logger.error("❌ [本地备用源] 获取期货数据失败。")
 
     def step9_fetch_jsl_shares_from_vps(self):
         """步骤九：从VPS同步场内份额数据（含深交所+上交所）"""

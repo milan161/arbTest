@@ -361,7 +361,8 @@ const allColumns: DataTableColumns<any> = [
       return c(a) - c(b)
     },
     render(row: any) {
-      const chg = row.prev_close ? (curPrice(row) - row.prev_close) / row.prev_close * 100 : (row.price_change || 0)
+      const chg = row.prev_close ? (curPrice(row) - row.prev_close) / row.prev_close * 100 : row.price_change
+      if (chg === null || chg === undefined) return '-'
       if (chg === 0 && (!curPrice(row) || curPrice(row) === 0)) return '-'
       return h('span', { class: 'num-cell strong', style: { color: priceColor(chg) } }, formatPercent(chg, 2))
     }

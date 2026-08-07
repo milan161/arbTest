@@ -22,7 +22,7 @@ _REGION_SUFFIXES = ('-EU', '-JP', '-HK')
 
 # ─────────────────────────────────────────────────────────────
 # [AI-2026-07-27] 估值类型路由：由 lof_config.yaml `valuation_routing` 节驱动
-# yaml 缺失该节时用 _DEFAULT_ROUTING 兜底（与 yaml 中内容保持一致）。
+# yaml 缺失该节时用 _DEFAULT_ROUTING 备用（与 yaml 中内容保持一致）。
 # hedge 语义（2026-07-27 用 woody API JSON 数值核对）：
 #   hedge = calibration / position（含仓位）；calibration = 基准价×基准汇率/净值（不含仓位）；
 #   hedge 计价标的因基金而异（162411=XOP、161125=SPY、161130=QQQ、513000=NKY期货），
@@ -72,7 +72,7 @@ def load_valuation_routing() -> Dict[str, Any]:
 
 
 def resolve_method(valuation_method: str, category: str = '') -> str:
-    """基金未显式配置 valuation_method（空串）时，按 category 兜底路由。"""
+    """基金未显式配置 valuation_method（空串）时，按 category 备用路由。"""
     m = (valuation_method or '').strip()
     if m:
         return m
@@ -137,10 +137,10 @@ def assemble_dynamic_components(
       { 'components': [...], 'fx_base': float, 'fx_now': float, 'hedge': float|None, 'ok': bool }
     """
     portfolio = fund_cfg.get('valuation_portfolio', []) or fund_cfg.get('hedging_portfolio', [])
-    # [AI-2026-08-04 SUPREME 铁律] 禁止用 equity_ratio 兜底 position。
+    # [AI-2026-08-04 SUPREME 铁律] 禁止用 equity_ratio 填补 position。
     # position 缺失时为 None，由 basket_valuation 自然返回 None（H5 显示"--"）。
-    # 根因：get_base_data 的 LEFT JOIN 在 factors 滞后时取不到当日 position → 被兜底成 1.0 → H 失真。
-    # 修复在 get_base_data 侧（回溯最近 factors 行），此处仅删除兜底。
+    # 根因：get_base_data 的 LEFT JOIN 在 factors 滞后时取不到当日 position → 被误填成 1.0 → H 失真。
+    # 修复在 get_base_data 侧（回溯最近 factors 行），此处仅删除该填补逻辑。
     position = _clean_float(base_data.get('position'))
     fx_base = _clean_float(base_data.get('exchange_rate'))
     fx_now = None  # 由调用方在 calculate 时单独传入
@@ -200,13 +200,13 @@ def assemble_static_components(
       portfolio      : 基金持仓列表
       related_index : 跟踪指数代码（QDII日本=N225、QDII亚洲=HSI 等）；空表示无
       valuation_method : 来自 lof_config.yaml，决定 hedge 是否可用
-      category       : 基金类别；valuation_method 为空串时按 yaml category_fallback 兜底路由
+      category       : 基金类别；valuation_method 为空串时按 yaml category_fallback 备用路由
 
     [AI-2026-07-27] hedge 路由改为 yaml valuation_routing 驱动（static_hedge 列）：
       - 'index' / 'equity_asia' / 'lof_domestic'：hedge 强制 None（走指数/单组件矩阵公式）。
         原因：静态路径取的是指数价（.INX/.NDX/N225），而 woody hedge 以 SPY/QQQ/NKY期货 计价，
         标的不一致，误用会差 10 倍/41 倍（161125/161130）或引入期现基差（513000）。
-      - '' / 'etf'：hedge 取自 base_row（etf 命中魔法，缺失则矩阵兜底）；'basket' 永远矩阵。
+      - '' / 'etf'：hedge 取自 base_row（etf 命中魔法，缺失则矩阵备用源）；'basket' 永远矩阵。
       - 513000/513880 的 valuation_method 为空串，靠 category_fallback（QDII日本→index）守卫。
 
     返回：
@@ -215,7 +215,7 @@ def assemble_static_components(
     nav_base = _clean_float(base_row.get('nav'))
     fx_base = _clean_float(base_row.get('exchange_rate'))
     fx_now = _clean_float(row.get('exchange_rate'))
-    # [AI-2026-08-04 SUPREME 铁律] 禁止用 0.95 兜底 position。缺失则为 None。
+    # [AI-2026-08-04 SUPREME 铁律] 禁止用 0.95 填补 position。缺失则为 None。
     position = _clean_float(base_row.get('position'))
 
     components = []

@@ -56,7 +56,7 @@ class HistoricalDataManager:
         if fetcher:
             return fetcher.fetch_prices(symbol, **kwargs)
         
-        # 兜底用 sina
+        # 改用 sina
         return self.fetchers["sina"].fetch_prices(symbol, **kwargs)
 
     def get_historical_data_with_priority(self, symbol: str, data_type: str = "prices") -> pd.DataFrame:

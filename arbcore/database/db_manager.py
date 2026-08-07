@@ -143,7 +143,7 @@ class DatabaseManager:
 
             conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95, target_type TEXT DEFAULT 'ETF')''')
             # [AI-2026-07-25] 已删除 jsl_fund_list 建表（表已废弃，零调用方死代码）
-            # [AI-2026-07-25] 补齐 fund_watchlist：原代码从未建此表，全新环境会 no such table 导致"我的关注"报错。加 IF NOT EXISTS 兜底。
+            # [AI-2026-07-25] 补齐 fund_watchlist：原代码从未建此表，全新环境会 no such table 导致"我的关注"报错。加 IF NOT EXISTS 保护。
             conn.execute('''CREATE TABLE IF NOT EXISTS fund_watchlist (fund_code TEXT PRIMARY KEY, added_at TIMESTAMP DEFAULT (datetime('now','localtime')))''')
             try: conn.execute('ALTER TABLE unified_fund_list ADD COLUMN target_type TEXT DEFAULT \'ETF\'')
             except sqlite3.OperationalError: pass

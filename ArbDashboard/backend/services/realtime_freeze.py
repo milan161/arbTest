@@ -12,7 +12,7 @@
 
 两个持久化文件（都在 database/）：
 1) rt_freeze.json   —— 每日 15:00:05 由 APScheduler 拍的"官方收盘锚点"（优先用）。
-2) rt_cache.json    —— 盘中每次算出有效 rt_val 就持续缓存「最后有效值」（兜底用）。
+2) rt_cache.json    —— 盘中每次算出有效 rt_val 就持续缓存「最后有效值」（改用）。
    解决"用户不常驻、15:00 没拍到 → 盘后全空白"的问题：只要盘中开过后端，
    盘后/重启即显示最后一次有效实时估值 + 「最后有效 HH:MM」标签。
 
@@ -45,7 +45,7 @@ def _atomic_write_json(path: str, payload: dict) -> bool:
     """原子写 JSON 到 path。
     做法：写唯一临时文件 → os.replace 原子替换。Windows 下并发/被杀进程残留句柄会
     导致 os.replace 抛 PermissionError / WinError 32(文件被占用) / 5(拒绝访问)，这里用
-    「唯一临时名 + 重试兜底」彻底消除启动期 '更新估值缓存失败' 警告。返回是否成功。"""
+    「唯一临时名 + 重试保护」彻底消除启动期 '更新估值缓存失败' 警告。返回是否成功。"""
     d = os.path.dirname(path)
     try:
         os.makedirs(d, exist_ok=True)

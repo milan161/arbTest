@@ -33,7 +33,7 @@ def basket_valuation(
         用 O(1) 直接计算：base_nav*(1-pos) + (current_price*fx_now)/hedge。
       - 这是 woody 每日算好 hedge 这个常数的原因：实时高频算得更快。
 
-    矩阵公式（兜底）路径：
+    矩阵公式（备用源）路径：
       - 多组件，或 hedge 缺失时的单组件，均走：
         base_nav * (1 + pos * (Σ wᵢ*(Pᵢ/Pᵢ₀) * (fx_now/fx_base) - 1))
 

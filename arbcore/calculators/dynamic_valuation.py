@@ -72,7 +72,7 @@ class DynamicValuationCalculator:
             category = str(cat_df.iloc[0]['category']).strip() if not cat_df.empty else ''
             us_categories = {'黄金原油', 'QDII欧美', '混合跨境', '白银'}
             if category in us_categories:
-                # 先尝试从 fund_basket_weights 获取 ETF 代码，兜底用 related_index（单一ETF基金如162411）
+                # 先尝试从 fund_basket_weights 获取 ETF 代码，缺失则补充用 related_index（单一ETF基金如162411）
                 etf_syms = pd.read_sql(
                     "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code = ?",
                     conn, params=(fund_code,)
@@ -118,13 +118,13 @@ class DynamicValuationCalculator:
                             base_date = base_row['date']
                             logger.info(f"  ✅ [{fund_code}] 回溯后基准日调整为 {base_date}")
 
-            # [AI-2026-07-27] 删除旧的「向前取最近 hedge」兜底（原第②级，当年三条路径里最不精确的）：
+            # [AI-2026-07-27] 删除旧的「向前取最近 hedge」填补（原第②级，当年三条路径里最不精确的）：
             # 删除后仅剩两级：① 魔法公式(hedge在) ② 矩阵(篮子)标准公式(hedge缺，自然降级)。
-            # 改为：hedge 缺失时不再用陈旧值兜底——calculate() 会直接落到
+            # 改为：hedge 缺失时不再用陈旧值填补——calculate() 会直接落到
             # 矩阵(篮子)标准公式，仅依赖 usa_etf_daily_prices.netvalue(Yahoo) +
             # exchange_rate(官方中间价) + yaml 权重/仓位，全链路可脱离 Woody 独立计算。
             # [AI-2026-08-04 SUPREME 铁律] position 缺失时由 get_base_data 回溯最近 factors 行，
-            # 不再用 yaml holdings.equity_ratio 兜底（兜底成 1.0 会导致篮子 H 失真 4%~25%）。
+            # 不再用 yaml holdings.equity_ratio 填补（误填成 1.0 会导致篮子 H 失真 4%~25%）。
 
             # [AI-2026-07-21] 补充底层 ETF 基准价格：查询 fund_basket_weights 判断基金会是否为多篮子
             # 有 basket 条目的基金（如161116→GLD+^GLD-EU）必须取 price（市场价格），矩阵公式需要真实价格变化率
@@ -158,11 +158,11 @@ class DynamicValuationCalculator:
             # [AI-2026-07-21 用户要求] 不兜底静默填充，数据缺失就让其缺失，真实暴露
 
             # [AI-2026-08-04 SUPREME 铁律] position 缺失时回溯最近有 factors 的日期，
-            # 禁止用 equity_ratio 兜底（兜底成 1.0 会导致篮子 H 失真 4%~25%）。
+            # 禁止用 equity_ratio 填补（误填成 1.0 会导致篮子 H 失真 4%~25%）。
             # 根因：unified_fund_history 更新到 08-03 但 fund_daily_factors 滞后 07-31，
-            # LEFT JOIN 同日期取不到 position → None → assemble_dynamic_components 兜底成 1.0。
+            # LEFT JOIN 同日期取不到 position → None → assemble_dynamic_components 误填成 1.0。
             # 修复：从 fund_daily_factors 取该基金最近有非空 position 的行，补回 position/hedge/calibration。
-            # 这不是兜底（不编造数据），而是回溯到最近的真实数据点（与上方 ETF 数据回溯同理）。
+            # 这不是掩盖缺失（不编造数据），而是回溯到最近的真实数据点（与上方 ETF 数据回溯同理）。
             if base_row.get('position') is None or pd.isna(base_row.get('position')):
                 factor_df = pd.read_sql(
                     """SELECT position, hedge, calibration FROM fund_daily_factors
@@ -179,7 +179,12 @@ class DynamicValuationCalculator:
                         base_row['calibration'] = fr['calibration']
                     logger.info(f"  ✅ [{fund_code}] position 回溯至最近 factors 行: pos={base_row['position']}")
                 else:
-                    logger.warning(f"  ⚠️ [{fund_code}] fund_daily_factors 无任何有效 position 行，position 将为 None")
+                    # [AI-2026-08-07] 无 basket 的基金（国内LOF等）本就不依赖 position，缺失属预期→DEBUG；
+                    # 仅带 basket 却缺 position 才是真异常→WARNING（铁律：仍不误填成 1.0）
+                    if basket_count > 0:
+                        logger.warning(f"  ⚠️ [{fund_code}] fund_daily_factors 无任何有效 position 行，position 将为 None")
+                    else:
+                        logger.debug(f"  [{fund_code}] 无 basket 且 fund_daily_factors 无 position 行（国内LOF等预期如此），position=None，估值显 --")
 
             self._base_data_cache[fund_code] = base_row
             self._cache_timestamp[fund_code] = time.time()
@@ -195,7 +200,7 @@ class DynamicValuationCalculator:
         实时估值矩阵推演
 
         [AI-2026-07-27] 重构：直调统一估值核心 basket_valuation（估值引擎 + 数据引擎分离）。
-        - 数据装配（组件价格解析、hedge 路由、仓位兜底）全部下沉到 assemble_dynamic_components；
+        - 数据装配（组件价格解析、hedge 路由、仓位回溯）全部下沉到 assemble_dynamic_components；
           hedge 是否可用由 lof_config.yaml `valuation_routing` 的 dynamic_hedge 列驱动
           （实时路径取的是交易标的价 SPY/QQQ/XOP，与 woody hedge 计价标的一致，index 类允许魔法）。
         - basket_valuation 内部自动路由：hedge>0 且单组件 → 魔法公式；否则矩阵(篮子)标准公式。

@@ -451,7 +451,7 @@ class DataFetcher:
     def fetch_jpy_cny_rate(self):
         """获取 JPY/CNY 日元兑人民币汇率
         
-        [AI-2026-07-23] 修复：优先使用国家外汇管理局中间价，新浪在岸价仅作兜底。
+        [AI-2026-07-23] 修复：优先使用国家外汇管理局中间价，新浪在岸价仅作备用源。
         所有静态估值必须使用中间价，新浪在岸价与官方中间价偏差可达 0.15%。
         
         Returns:
@@ -473,8 +473,8 @@ class DataFetcher:
         except Exception as e:
             logger.warning(f"官方中间价获取失败，回退到新浪: {e}")
 
-        # 2. 兜底：新浪在岸价
-        logger.info("从新浪财经获取 JPY/CNY 日元汇率（兜底）")
+        # 2. 备用源：新浪在岸价
+        logger.info("从新浪财经获取 JPY/CNY 日元汇率（备用源）")
         try:
             url = "https://hq.sinajs.cn/list=fx_sjpycny"
             headers = {

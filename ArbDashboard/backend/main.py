@@ -665,13 +665,13 @@ async def lifespan(app: FastAPI):
         logger.info("[FREEZE] 实时估值冻结调度器已启动（每日 15:00 后快照，asyncio 零依赖）")
         system_status.add_milestone("SUCCESS", "实时估值冻结调度器已启动")
 
-        # 启动兜底：若此刻已过 15:00 且今日尚未冻结（如后端盘中才启动），立即补快照一次
+        # 启动备用源：若此刻已过 15:00 且今日尚未冻结（如后端盘中才启动），立即补快照一次
         _now = _dt.now()
         if _now.weekday() not in (5, 6) and _now.hour >= 15:
             _fz = load_realtime_freeze()
             if not _fz or _fz.get('date') != _now.strftime('%Y-%m-%d'):
                 snapshot_realtime_freeze(fund_service)
-                logger.info("[FREEZE] 启动兜底：补拍今日冻结快照")
+                logger.info("[FREEZE] 启动备用源：补拍今日冻结快照")
     except Exception as e:
         logger.error(f"[FREEZE] 调度器启动失败（冻结功能停用，其余正常）: {e}")
         system_status.add_milestone("ERROR", f"冻结调度器启动失败: {e}")
@@ -885,6 +885,128 @@ async def get_market():
 async def get_system_milestones():
     """获取系统运行里程碑日志"""
     return {"status": "ok", "data": system_status.get_milestones()}
+
+# [AI-2026-08-07] 后台维护页：对比「本地」与「H5(ARM)」各数据源最新日期 + 程序健康。
+# 远程脚本通过 ssh arm 在 ARM 上查询其本地库；用临时文件 stdin 传入，避免 Windows(cmd) 下 heredoc 失效。
+# 缺失/异常字段一律返回 None，绝不兜底成旧值/常量（SUPREME 铁律）。
+_REMOTE_FRESHNESS_SCRIPT = r'''
+import sqlite3, json, os
+cands = [
+    "/home/ubuntu/arbtest/database/arb_master.db",
+    os.path.expanduser("~/arbtest/database/arb_master.db"),
+    "/home/ubuntu/arbtest/ArbDashboard/../database/arb_master.db",
+]
+db = None
+for c in cands:
+    if c and os.path.exists(c):
+        db = c
+        break
+out = {}
+try:
+    if not db:
+        out["_error"] = "ARM DB not found"
+    else:
+        con = sqlite3.connect(db); cur = con.cursor()
+        def mx(s):
+            try:
+                cur.execute(s); r = cur.fetchone(); return r[0] if r else None
+            except Exception:
+                return None
+        out["lof_price"] = mx("SELECT MAX(date) FROM unified_fund_history")
+        out["lof_nav"] = mx("SELECT MAX(nav_date) FROM unified_fund_history")
+        out["static_val"] = mx("SELECT MAX(date) FROM unified_fund_history WHERE static_val IS NOT NULL")
+        out["us_etf"] = mx("SELECT MAX(date) FROM usa_etf_daily_prices")
+        out["fx_mid"] = mx("SELECT MAX(date) FROM exchange_rate")
+        out["fx_spot"] = mx("SELECT MAX(updated_at) FROM exchange_rate WHERE usd_cny_spot IS NOT NULL")
+        out["futures"] = mx("SELECT MAX(date) FROM futures_daily")
+        out["fund_factors"] = mx("SELECT MAX(date) FROM fund_daily_factors")
+        out["index_hist"] = mx("SELECT MAX(date) FROM index_history")
+        cur.execute("SELECT MAX(sync_date), MAX(sync_time) FROM access_sync_status")
+        rr = cur.fetchone()
+        out["vps_sync_date"] = rr[0] if rr else None
+        out["vps_sync_time"] = rr[1] if rr else None
+        con.close()
+except Exception as e:
+    out["_error"] = str(e)
+print(json.dumps(out))
+'''
+
+
+def _build_freshness_report(db_path: str) -> dict:
+    """读取单个库各数据源最新日期。缺失/异常字段返回 None（绝不兜底）。"""
+    import sqlite3
+    out = {}
+    try:
+        con = sqlite3.connect(db_path); cur = con.cursor()
+        def mx(s):
+            try:
+                cur.execute(s); r = cur.fetchone(); return r[0] if r else None
+            except Exception:
+                return None
+        out["lof_price"] = mx("SELECT MAX(date) FROM unified_fund_history")
+        out["lof_nav"] = mx("SELECT MAX(nav_date) FROM unified_fund_history")
+        out["static_val"] = mx("SELECT MAX(date) FROM unified_fund_history WHERE static_val IS NOT NULL")
+        out["us_etf"] = mx("SELECT MAX(date) FROM usa_etf_daily_prices")
+        out["fx_mid"] = mx("SELECT MAX(date) FROM exchange_rate")
+        out["fx_spot"] = mx("SELECT MAX(updated_at) FROM exchange_rate WHERE usd_cny_spot IS NOT NULL")
+        out["futures"] = mx("SELECT MAX(date) FROM futures_daily")
+        out["fund_factors"] = mx("SELECT MAX(date) FROM fund_daily_factors")
+        out["index_hist"] = mx("SELECT MAX(date) FROM index_history")
+        cur.execute("SELECT MAX(sync_date), MAX(sync_time) FROM access_sync_status")
+        rr = cur.fetchone()
+        out["vps_sync_date"] = rr[0] if rr else None
+        out["vps_sync_time"] = rr[1] if rr else None
+        con.close()
+    except Exception as e:
+        out["_error"] = str(e)
+    return out
+
+
+def _fetch_h5_report_via_ssh() -> tuple:
+    """通过 ssh arm 查询 ARM(H5) 库。返回 (report_dict_or_None, error_or_None)。"""
+    import tempfile
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(_REMOTE_FRESHNESS_SCRIPT)
+            tmp = f.name
+        cmd = 'ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
+        proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r"),
+                              capture_output=True, text=True, timeout=25)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout.strip().splitlines()[-1]), None
+        return None, (proc.stderr or proc.stdout or "no output").strip()[:400]
+    except subprocess.TimeoutExpired:
+        return None, "SSH 超时（arm 不可达 / 网络中断 / 不在可访问 arm 的网络）"
+    except Exception as e:
+        return None, str(e)[:400]
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+
+@app.get("/api/system/maintenance-report")
+async def get_maintenance_report():
+    """后台维护：本地 vs H5(ARM) 各数据源最新日期 + 程序健康。供前端「后台维护」页使用。"""
+    try:
+        import asyncio
+        local = _build_freshness_report(root_db_path)
+        h5, h5_error = await asyncio.to_thread(_fetch_h5_report_via_ssh)
+        return {
+            "status": "ok",
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "today": datetime.now().strftime("%Y-%m-%d"),
+            "local_db": root_db_path,
+            "uptime_seconds": int(time.time() - START_TIME),
+            "local": local,
+            "h5": h5,
+            "h5_error": h5_error,
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 @app.get("/api/fund/{code}/history")
 async def get_fund_history(code: str):
@@ -1259,7 +1381,7 @@ async def lazy_calc(fund_code: str = "162411"):
         # 3. 确定 underlying_symbol 和最相关的 ETF 实时价格
         portfolio = fund_cfg.get("valuation_portfolio", [])
         underlying_symbol = portfolio[0].get("symbol", "") if portfolio else ""
-        # [V10.8] basket为空时用 trade_etf（related_index）兜底（如162411→XOP）
+        # [V10.8] basket为空时用 trade_etf（related_index）备用源（如162411→XOP）
         if not underlying_symbol:
             underlying_symbol = fund_cfg.get("trade_etf", "")
         underlying_clean = ""
@@ -1275,7 +1397,7 @@ async def lazy_calc(fund_code: str = "162411"):
         us_ask = 0.0
         us_bid_size = 0
         us_ask_size = 0
-        # [V10.8] 优先从 rt_quotes 取；basket为空时 rt_quotes 为空，直接行情驱动兜底
+        # [V10.8] 优先从 rt_quotes 取；basket为空时 rt_quotes 为空，直接行情驱动备用源
         if underlying_clean and underlying_clean in rt_quotes and rt_quotes[underlying_clean]:
             q = rt_quotes[underlying_clean]
             us_bid = float(q.get("bid", 0) or 0)
@@ -1303,18 +1425,18 @@ async def lazy_calc(fund_code: str = "162411"):
 
         # 4. hedge 值（复用 get_valuation_meta 返回的）
         hedge = float(base_data.get("hedge", 0)) if base_data else 0
-        position = float(fund_cfg.get("position", 95.0)) / 100.0 if fund_cfg else 0.95
+        position = float(fund_cfg.get("position")) / 100.0 if fund_cfg and fund_cfg.get("position") is not None else None  # [AI-2026-08-07] 缺失即 None，禁止 0.95 默认
 
         # 5. Lazy 特有溢价计算（safe 砸单 / peg 内卷）
         # 正确公式: val = base_nav * (1 - pos) + (us_price * fx) / hedge  (注意: 第二项不乘pos)
         base_nav = float(base_data.get("nav", 0)) if base_data else 0
-        if base_nav > 0 and hedge > 0:
+        if base_nav > 0 and hedge > 0 and position is not None:  # [AI-2026-08-07] position 可能 None
             val_safe = base_nav * (1 - position) + (us_bid * latest_fx) / hedge
         else:
             val_safe = 0
         premium_safe = (lof_bid / val_safe - 1) * 100 if val_safe > 0 else 0
 
-        if base_nav > 0 and hedge > 0:
+        if base_nav > 0 and hedge > 0 and position is not None:  # [AI-2026-08-07] position 可能 None
             peg_price = (us_ask - 0.01) if us_ask > 0.01 else us_ask
             val_peg = base_nav * (1 - position) + (peg_price * latest_fx) / hedge
         else:
@@ -1386,23 +1508,23 @@ async def lazy_place_order(request: Request):
                 if not h_df.empty:
                     hedge = float(h_df.iloc[0]['hedge'])
                 else:
-                    # 兜底：动态推算
+                    # 备用源：动态推算
                     pos_df = pd.read_sql(
                         "SELECT position FROM fund_daily_factors "
                         "WHERE fund_code=? AND position IS NOT NULL ORDER BY date DESC LIMIT 1",
                         conn2, params=[fund_code]
                     )
-                    position = float(pos_df.iloc[0]['position']) if not pos_df.empty else 0.95
+                    position = float(pos_df.iloc[0]['position']) if not pos_df.empty else None  # [AI-2026-08-07] 缺失即 None
                     nav_df = pd.read_sql(
                         "SELECT nav, price FROM unified_fund_history "
                         "WHERE fund_code=? AND nav>0 ORDER BY date DESC LIMIT 1",
                         conn2, params=[fund_code]
                     )
-                    nav = float(nav_df.iloc[0]['nav']) if not nav_df.empty else 1.0
+                    nav = float(nav_df.iloc[0]['nav']) if not nav_df.empty else None  # [AI-2026-08-07] 缺失即 None
                     fx_df = pd.read_sql(
                         "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn2
                     )
-                    fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else 7.25
+                    fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else None  # [AI-2026-08-07] 缺失即 None，禁止 7.25 假常量
                     # hedge = (ETF基价 * 汇率) / (净值 * 仓位)
                     # 用 t1 的 etf 收盘价作为基价近似
                     etf_base = 0.0
@@ -1415,14 +1537,20 @@ async def lazy_place_order(request: Request):
                         )
                         if not etf_df.empty:
                             etf_base = float(etf_df.iloc[0]['price'])
-                    if etf_base > 0 and nav > 0 and position > 0:
+                    if etf_base > 0 and nav is not None and nav > 0 and position is not None and position > 0 and fx is not None:  # [AI-2026-08-07] guard None
                         hedge = (etf_base * fx) / (nav * position)
                     else:
-                        hedge = 1.0
+                        hedge = None  # [AI-2026-08-07] SUPREME：推算所需数据不全，禁止 1.0 假常量，缺失即 None 显 --
                 conn2.close()
             except Exception:
-                hedge = 1.0
+                hedge = None  # [AI-2026-08-07] SUPREME：异常也禁止 1.0 假常量
             # 换算：ETF 股数 = LOF 份数 / hedge（与 Analysis.vue l.1123 完全一致）
+            if hedge is None or hedge <= 0:
+                # [AI-2026-08-07] 对冲系数缺失/推算失败，无法换算 ETF 数量——拒绝臆测下单，显 -- 
+                return JSONResponse(status_code=422, content={
+                    "status": "error",
+                    "message": "对冲系数 hedge 不足（缺失/推算失败），无法换算 ETF 数量，已停止下单（绝不臆测数量）"
+                })
             etf_quantity = max(1, int(round(lof_quantity / hedge)))
 
         if mode == "peg":

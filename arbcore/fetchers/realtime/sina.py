@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class SinaRealtimeFetcher(BaseRealtimeFetcher):
     """
     新浪财经实时行情抓取器（HTTP 轮询模式）。
-    作为终极兜底方案。
+    作为终极备用源方案。
     """
     
     def __init__(self):
