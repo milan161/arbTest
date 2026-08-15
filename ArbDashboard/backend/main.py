@@ -139,7 +139,10 @@ else:
 
 # 1. [V3.11 统一数据库路径]
 root_db_path = os.path.abspath(os.path.join(workspace_root, "..", "database", "arb_master.db"))
+# [AI-2026-08-16] 交易数据独立库：成交/配对/策略规则等敏感交易数据与市场因子分离，隐私保护
+tran_db_path = os.path.abspath(os.path.join(workspace_root, "..", "database", "arb_tran.db"))
 logger.info(f"📂 Using database at {root_db_path}")
+logger.info(f"🔒 交易库 at {tran_db_path}")
 
 # Define project root (ArbDashboard directory)
 project_root = workspace_root
@@ -177,7 +180,9 @@ except Exception as e:
 
 # 2. Initialize Database Manager FIRST
 # [V3.11] 使用统一数据库路径 D:\Study\arbTest\database\arb_master.db
-db = DatabaseManager(db_path=root_db_path)
+db = DatabaseManager(db_path=root_db_path, include_trading=False)
+# [AI-2026-08-16] 交易独立库（含 user_trades/broker_redemption_fees/arbitrage_pairs/fund_fees 交易表）
+tran_db = DatabaseManager(db_path=tran_db_path, include_trading=True)
 
 def _print_data_source_banners():
     """启动后统一打印各数据源连接状态（清晰的双层提醒标志）并写入里程碑日志"""
@@ -255,7 +260,8 @@ dashboard_snapshot_service = DashboardSnapshotService(
     market_data_service=market_data_service,
 )
 config_manager_service = ConfigManagerService(project_root)
-ledger_service = LedgerService(db)
+# [AI-2026-08-16] 账本服务连交易库 tran，对账时 ATTACH master 读因子
+ledger_service = LedgerService(tran_db, master_db_path=root_db_path)
 etf_rotation_service = ETFRotationService(db, market_data_service=market_data_service)
 
 def _is_script_running(script_name: str) -> bool:
@@ -337,7 +343,7 @@ else:
     try:
         from private.rule_engine import rule_engine
         # 注入依赖
-        rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, trading_service=trading_service, db_path=root_db_path)
+        rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, trading_service=trading_service, db_path=tran_db_path, master_db_path=root_db_path)
         logger.info("✅ RuleEngine (DB驱动) loaded.")
     except (ImportError, NameError) as e:
         rule_engine = None
@@ -724,18 +730,17 @@ async def export_share_db():
     tmp_path = os.path.join(tempfile.gettempdir(), f"arb_master_share_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
 
     # 日期过滤映射: {表名: (日期列名: str | None)}，None 表示全部复制
+    # [AI-2026-08-16] 移除交易/策略表(auto_trade_rules/broker_redemption_fees/fund_fees/user_trades)，
+    # 交易数据已迁 arb_tran.db，share 库只含净值/估值/溢价等市场数据，杜绝隐私泄露。
     date_filter_map = {
         'access_sync_status': 'sync_date',
         'app_settings': None,
-        'auto_trade_rules': None,
-        'broker_redemption_fees': None,
         'data_source_config': None,
         'etf_raw_api_data': None,
         'etf_rotation_list': None,
         'exchange_rate': 'date',
         'fund_basket_weights': 'date',
         'fund_daily_factors': 'date',
-        'fund_fees': None,
         'fund_purchase_status': None,        # 全部保留（金额配置）
         'futures_daily': 'date',
         'index_history': 'date',
@@ -744,7 +749,6 @@ async def export_share_db():
         'unified_fund_history': 'date',
         'unified_fund_list': None,
         'usa_etf_daily_prices': 'date',
-        'user_trades': 'trade_date',
     }
 
     try:
@@ -2030,13 +2034,14 @@ async def smart_monitor_start(request: Request):
     lof_quantity = data.get("lof_quantity", 0)
     trade_etf = data.get("trade_etf", "")
     lof_broker = data.get("lof_broker", "yinhe_qmt")
+    hedge_order = data.get("hedge_order", None)  # [AI-2026-08-15] 前端选择器：lof_first / ib_first（None=按fund_config默认）
     # [AI-2026-07-20] 前端算好的各档溢价率（与盘口表 tag 同源），后端直接使用不再自算
     bid_premiums = data.get("bid_premiums", None)
     ask_premiums = data.get("ask_premiums", None)
     if not fund_code or not trade_etf or not lof_quantity:
         return JSONResponse(status_code=400, content={"status": "error", "message": "缺少必要参数(fund_code/trade_etf/lof_quantity)"})
     success, msg = _smart_start(
-        fund_code, direction, target_premium, lof_quantity, trade_etf, lof_broker,
+        fund_code, direction, target_premium, lof_quantity, trade_etf, hedge_order, lof_broker,
         bid_premiums=bid_premiums, ask_premiums=ask_premiums,
         lazy_trader=_smart_lt, fund_service=_smart_fs,
         market_data_service=_smart_mds, trading_service=_smart_ts,
@@ -2056,6 +2061,21 @@ async def smart_monitor_stop(request: Request):
     if success:
         return {"status": "ok", "message": msg}
     return JSONResponse(status_code=400, content={"status": "error", "message": msg})
+
+# [AI-2026-08-15] 用户点"手动撤销美股ETF"：标记 IB 腿已接管，程序放手
+@app.post("/api/private/smart_monitor/mark_ib_taken_over")
+async def smart_monitor_mark_ib_taken_over(request: Request):
+    if not _smart_status:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "SmartOpenMonitor not loaded"})
+    data = await request.json()
+    fund_code = data.get("fund_code", "")
+    from private.smart_open_monitor import get_all_monitors
+    monitors = get_all_monitors()
+    m = monitors.get(fund_code)
+    if not m:
+        return JSONResponse(status_code=400, content={"status": "error", "message": f"{fund_code} 监控器不存在"})
+    m.mark_ib_leg_user_taken_over()
+    return {"status": "ok", "message": f"{fund_code} 美股ETF腿已标记用户接管"}
 
 @app.get("/api/private/smart_monitor/status")
 async def smart_monitor_status():
@@ -2274,6 +2294,105 @@ async def confirm_ledger_excel(request: Request):
         logger.error("[ExcelImport] Confirm error: %s", e)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
+# --- [AI-2026-08-15] IB 真实成交同步（替代手动 Excel 记录）---
+# 盈透 reqExecutions 无法返回历史成交，改为解析 IB 网页导出的活动账单 CSV。
+_TRANSACTION_DIR = r"D:/Study/arbTest/ArbDashboard/data/TransactionRecord"
+
+@app.post("/api/ledger/ib-sync")
+async def sync_ib_executions():
+    try:
+        res = ledger_service.import_ib_csv_dir(_TRANSACTION_DIR)
+    except Exception as e:
+        logger.error(f"[IBSync] CSV 导入异常: {e}")
+        return {"ok": False, "error": f"IB 账单导入异常: {e}"}
+    if not res.get("file"):
+        return {"ok": False, "error": f"目录 {_TRANSACTION_DIR} 无CSV文件（请先从IB网页导出活动账单CSV放入该目录）"}
+    return {"ok": True, "file": res.get("file"), "count": res.get("count", 0)}
+
+@app.get("/api/ledger/ib-executions")
+async def get_ib_executions_api(days: int = 0):
+    data = ledger_service.get_ib_executions(days=days)
+    return {"ok": True, "data": data}
+
+# --- [AI-2026-08-15] 华宝(通达信)历史成交导入（解析导出的txt，替代手动Excel）---
+_TDX_IMPORT_DIR = _TRANSACTION_DIR   # 与 IB csv 同目录：ArbDashboard/data/TransactionRecord
+
+@app.post("/api/ledger/tdx-sync")
+async def sync_tdx_executions(request: Request = None):
+    # [AI-2026-08-15] code_filter：源头过滤，只导入指定基金代码（默认华宝油气 162411），避免无关交易泄密
+    code = None
+    if request is not None:
+        try:
+            body = await request.json()
+            code = (body.get("code") or "").strip() or None
+        except Exception:
+            code = None
+    try:
+        res = ledger_service.import_tdx_dir(_TDX_IMPORT_DIR, pattern="*华宝*.txt", code_filter=code)
+    except Exception as e:
+        logger.error(f"[TDXSync] 导入异常: {e}")
+        return {"ok": False, "error": f"华宝成交导入异常: {e}"}
+    if not res.get("file"):
+        return {"ok": False, "error": f"目录 {_TDX_IMPORT_DIR} 无txt文件（请先导出华宝历史成交txt放入该目录）"}
+    return {"ok": True, "file": res.get("file"), "count": res.get("count", 0), "filter": code or "全部"}
+
+@app.get("/api/ledger/tdx-executions")
+async def get_tdx_executions_api(code: str = None, category: str = None, days: int = 0):
+    data = ledger_service.get_tdx_executions(code=code, category=category, days=days)
+    return {"ok": True, "data": data}
+
+# --- [AI-2026-08-15] 银河QMT历史成交（经桥接策略 QUERY_DEALS 实时查询） ---
+@app.post("/api/ledger/qmt-sync")
+async def sync_qmt_executions():
+    # [AI-2026-08-15] 银河历史成交改为解析"通达信导出的银河账户txt"（文件名含'银河'）。
+    # 原桥接 QUERY_DEALS（策略 ContextInfo 查历史成交）已确认此 QMT 版本无历史接口，弃用。
+    try:
+        res = ledger_service.import_galaxy_dir(_TDX_IMPORT_DIR)
+    except Exception as e:
+        logger.error(f"[QMTSync] 导入异常: {e}")
+        return {"ok": False, "error": f"银河成交导入异常: {e}"}
+    if not res.get("file"):
+        return {"ok": False, "error": "目录无银河成交txt（请先在通达信导出银河账户历史成交，文件名含'银河'，放入 TransactionRecord 目录）"}
+    return {"ok": True, "file": res.get("file"), "count": res.get("count", 0)}
+
+@app.get("/api/ledger/qmt-executions")
+async def get_qmt_executions_api(code: str = None, days: int = 0):
+    data = ledger_service.get_qmt_executions(code=code, days=days)
+    return {"ok": True, "data": data}
+
+# --- [AI-2026-08-15] 手动配对对账（扶正假对账）---
+@app.get("/api/ledger/unpaired-trades")
+async def get_unpaired_trades_api():
+    data = ledger_service.get_unpaired_trades()
+    return {"ok": True, "data": data}
+
+@app.post("/api/ledger/pair-match")
+async def pair_match_api(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    leg_keys = body.get("leg_keys") or []
+    force = bool(body.get("force", False))
+    result = ledger_service.match_pair(leg_keys, force=force)
+    return result
+
+@app.get("/api/ledger/matched-pairs")
+async def get_matched_pairs_api():
+    data = ledger_service.get_matched_pairs()
+    return {"ok": True, "data": data}
+
+@app.post("/api/ledger/unmatch-pair")
+async def unmatch_pair_api(request: Request):
+    try:
+        body = await request.json()
+        pair_id = int(body.get("pair_id", 0))
+    except Exception:
+        pair_id = 0
+    if not pair_id:
+        return {"ok": False, "error": "缺少 pair_id"}
+    return ledger_service.unmatch_pair(pair_id)
+
 # --- Ledger / Bookkeeping APIs ---
 @app.get("/api/ledger/trades")
 async def get_ledger_trades(status: str = 'ACTIVE'):
@@ -2335,19 +2454,6 @@ async def get_prev_close(fund_code: str):
 async def get_fee_rate(fund_code: str, broker: str = ''):
     rate = ledger_service.get_fee_rate(fund_code, broker)
     return {"status": "ok", "rate": rate}
-
-# --- 清理测试假数据 ---
-@app.post("/api/ledger/clear-fake-data")
-async def clear_fake_data():
-    conn = db._get_conn()
-    try:
-        conn.execute("DELETE FROM user_trades WHERE id IN (1,2,3,4)")
-        conn.commit()
-        return {"status": "ok", "message": "已删除4条测试假数据"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        conn.close()
 
 # --- Fee & Commission Management APIs ---
 @app.get("/api/config/fees/{code}")

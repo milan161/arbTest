@@ -26,6 +26,7 @@ ArbDashboard/backend/core/database/
 !/database/readme.txt
 # 各目录下的实盘数据库（禁止上传）
 **/arb_master.db
+**/arb_tran.db
 
 # === 非程序3的项目目录 (全部屏蔽) ===
 /LOFarb/
@@ -77,6 +78,7 @@ Proxy.bat
 .omo/
 .open-mem/
 .opencode/
+.workbuddy/
 _ai_backup/
 
 # === 编辑器与系统垃圾 ===
@@ -93,6 +95,7 @@ dist/
 *.pyo
 *.pyd
 *.log
+*.lock
 .DS_Store
 Thumbs.db
 

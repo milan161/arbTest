@@ -129,6 +129,10 @@ class TencentRealtimeFetcher(BaseRealtimeFetcher):
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         clean_symbol = symbol.split('.')[0]
+        # [AI-2026-08-15] 兼容带 SH/SZ 前缀输入（fund_basket_weights 存 'SZ159560'）：
+        # 腾讯行情池 key 为去前缀纯数字（'159560'），带前缀直查永远 miss。
+        if len(clean_symbol) > 2 and clean_symbol[:2].upper() in ('SH', 'SZ') and clean_symbol[2:].isdigit():
+            clean_symbol = clean_symbol[2:]
         return self.quotes.get(clean_symbol)
 
     def normalize_symbol(self, symbol: str) -> str:

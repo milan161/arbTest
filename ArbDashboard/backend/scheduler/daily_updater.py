@@ -1116,6 +1116,32 @@ class DailyUpdater(BaseApp):
 
         self.logger.info(f"✅ [VPS-INDEX] 指数数据同步完成")
 
+    # [AI-2026-08-15] 新增：新浪 rt_hkHSSI 昨收记录器 → index_history(HSSI, source='sina')
+    # Yahoo ^HSSI 已下架(404)，woody 自身也是用新浪 rt_hkHSSI 日记录器维护 ^HSSI 历史。
+    def step5b2_record_hssi_daily(self):
+        """从新浪记录 HSSI 昨收，写 index_history(HSSI, source='sina')。
+        早晨(港股已收盘)跑时 rt_hkHSSI[3]=昨收=上一港股交易日收盘。"""
+        self.logger.info("=== 步骤五B2：新浪 HSSI 昨收记录器 ===")
+        try:
+            import urllib.request
+            url = "http://hq.sinajs.cn/list=rt_hkHSSI"
+            req = urllib.request.Request(url, headers={"Referer": "https://finance.sina.com.cn"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                text = resp.read().decode('gbk')
+            parts = text.split('"')[1].split(',')
+            if len(parts) < 4:
+                self.logger.warning(f"   ⚠️ [HSSI] 新浪返回异常: {text[:80]}")
+                return
+            prev_close = float(parts[3])
+            d = datetime.now().date() - timedelta(days=1)
+            while d.weekday() >= 5:
+                d -= timedelta(days=1)
+            date_str = d.strftime('%Y-%m-%d')
+            self.db.upsert_index_history(symbol='HSSI', date=date_str, close=prev_close, source='sina')
+            self.logger.info(f"   ✅ [HSSI] {date_str} -> close={prev_close} (source=sina)")
+        except Exception as e:
+            self.logger.error(f"   ❌ [HSSI] 记录失败: {e}")
+
     # [AI-2026-07-20] 新增：从 VPS 同步 Yahoo ETF 净值（^XOP-IV → usa_etf_daily_prices.netvalue）
     def step5c_sync_vps_etf_nav(self):
         """从 VPS 同步 Yahoo ETF 净值（^XOP-IV, ^SPY-IV 等），写入 usa_etf_daily_prices.netvalue"""
@@ -1799,6 +1825,7 @@ class DailyUpdater(BaseApp):
         self.step4_5_sync_fund_purchase_status()
         self.step5_fetch_usa_market_data()
         self.step5b_sync_vps_index_data()
+        self.step5b2_record_hssi_daily()
         self.step5c_sync_vps_etf_nav()
         self.step7_fetch_extra_calibrations()
         self.step8_fetch_sina_futures_from_vps()

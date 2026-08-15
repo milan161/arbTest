@@ -1602,12 +1602,12 @@ funds:
     basis: index
     symbol: '869'
     source_priority:
-    - eastmoney
+    - tencent
   dynamic_valuation:
     basis: index
     symbol: '869'
     source_priority:
-    - eastmoney
+    - tencent
 - code: '161124'
   name: 港股小盘LOF
   category: QDII亚洲
@@ -1634,6 +1634,34 @@ funds:
   dynamic_valuation:
     basis: index
     symbol: HSSI
+    source_priority:
+    - sina
+- code: '510900'
+  name: 恒生国企ETF
+  category: QDII亚洲
+  holdings:
+    equity_ratio: 95.0
+    cash_ratio: 5.0
+  valuation_portfolio: []
+  holdings_portfolio: []
+  future_hedging: []
+  position: 95.0
+  sub_category: 指数
+  trade_etf: ''
+  trade_future: ''
+  woody_supported: false
+  data_source: hkindex
+  related_index: HSCEI
+  valuation_method: equity_asia
+  static_valuation:
+    basis: index
+    symbol: HSCEI
+    source_priority:
+    - sina
+    - tencent
+  dynamic_valuation:
+    basis: index
+    symbol: HSCEI
     source_priority:
     - sina
 - code: '160706'
@@ -3033,52 +3061,52 @@ last_futures_settlement_date: '2026-04-07'
 symbol_sources:
   SPY: IB
   QQQ: IB
-  IWM: IB
-  DIA: IB
-  XLK: IB
-  XLF: IB
+  IWM: FUTU
+  DIA: FUTU
+  XLK: FUTU
+  XLF: FUTU
   XLE: IB
-  XLV: IB
-  XLI: IB
-  XLP: IB
+  XLV: FUTU
+  XLI: FUTU
+  XLP: FUTU
   XLY: IB
-  XLU: IB
-  XLRE: IB
-  XLB: IB
-  SOXX: IB
-  SMH: IB
-  ARKK: IB
-  ARKG: IB
-  ARKQ: IB
-  AIQ: IB
-  BOTZ: IB
-  FINX: IB
+  XLU: FUTU
+  XLRE: FUTU
+  XLB: FUTU
+  SOXX: FUTU
+  SMH: FUTU
+  ARKK: FUTU
+  ARKG: FUTU
+  ARKQ: FUTU
+  AIQ: FUTU
+  BOTZ: FUTU
+  FINX: FUTU
   GLD: IB
   SLV: IB
-  IAU: IB
-  GDX: IB
-  GDXJ: IB
+  IAU: FUTU
+  GDX: FUTU
+  GDXJ: FUTU
   USO: IB
   XOP: IB
-  OIL: IB
-  BNO: IB
-  CPER: IB
-  DBC: IB
-  PDBC: IB
-  EWA: IB
-  EWC: IB
-  EWJ: IB
-  EWZ: IB
-  EWY: IB
-  EWH: IB
-  EWI: IB
-  EWG: IB
-  EWU: IB
-  FXI: IB
-  MCHI: IB
+  OIL: FUTU
+  BNO: FUTU
+  CPER: FUTU
+  DBC: FUTU
+  PDBC: FUTU
+  EWA: FUTU
+  EWC: FUTU
+  EWJ: FUTU
+  EWZ: FUTU
+  EWY: FUTU
+  EWH: FUTU
+  EWI: FUTU
+  EWG: FUTU
+  EWU: FUTU
+  FXI: FUTU
+  MCHI: FUTU
   KWEB: IB
   INDA: IB
-  VIX: IB
+  VIX: FUTU
   '510050': TDX
   '510300': TDX
   '510500': TDX
@@ -3217,66 +3245,66 @@ symbol_sources:
   '399803': TDX
   .SPHCMSHP: SINA
   '399997': TDX
-  HKMES: IB
-  SGOL: IB
-  GC: IB
+  HKMES: FUTU
+  SGOL: FUTU
+  GC: FUTU
   CES300: TDX
-  AAAU: IB
+  AAAU: FUTU
   000903: TDX
   000922: TDX
   '399989': TDX
   H30094.CSI: TDX
   '399986': TDX
   000869: TDX
-  HKHSCI: IB
-  GLDM: IB
+  HKHSCI: FUTU
+  GLDM: FUTU
   950090.CSI: TDX
-  HKTOP: IB
+  HKTOP: FUTU
   '930997': TDX
   00148: FUTU
-  AMD: IB
+  AMD: FUTU
   BRNT.L: TDX
-  VNQ: IB
-  CL: IB
+  VNQ: FUTU
+  CL: FUTU
   '399975': TDX
-  RSPH: IB
+  RSPH: FUTU
   NKY: SINA
   000852: TDX
   03175.HK: TDX
   930875.CSI: TDX
-  UGL: IB
-  HSMC: IB
+  UGL: FUTU
+  HSMC: FUTU
   .SPACEVCP: SINA
   VGT: IB
   '399363': TDX
   '399987': TDX
   00992: FUTU
   '399809': TDX
-  DAX: IB
+  DAX: FUTU
   '930713': TDX
   CRUD.L: TDX
   H11136.CSI: TDX
-  ARKX: IB
+  ARKX: FUTU
   .SP500-45: SINA
   '399998': TDX
-  DBO: IB
+  DBO: FUTU
   '399300': TDX
-  SIVR: IB
+  SIVR: FUTU
   H11136: TDX
-  IAUM: IB
+  IAUM: FUTU
   '930875': TDX
   CSI_H11136: TDX
   XBI: IB
   '950090': TDX
   '930720': TDX
-  CSGLDC: IB
-  ZGLD: IB
-  AGG: IB
-  BAR: IB
+  CSGLDC: FUTU
+  ZGLD: FUTU
+  AGG: FUTU
+  BAR: FUTU
   '399441': TDX
-  HKBK: IB
+  HKBK: FUTU
   N225: SINA
-  HSCCE: IB
+  HSCCE: FUTU
   BRNB.L: TDX
   H30094: TDX
   '501018': TDX

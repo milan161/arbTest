@@ -175,8 +175,15 @@ def update_rt_cache(data: list) -> None:
     """盘中每次算出有效 rt_val 即合并写入 database/rt_cache.json（最后有效值）。
     合并式：只更新本次有效的基金，保留之前有效但本次缺失的，避免网络抖动丢缓存。
     [AI-2026-08-06] 进程内锁 + 唯一临时文件 + 跨进程重试，消除 Windows 下 os.replace
-    并发/被杀进程残留句柄导致的 WinError 5/13/32 警告。"""
+    并发/被杀进程残留句柄导致的 WinError 5/13/32 警告。
+    [AI-2026-08-15] 盘中守卫：盘后(≥15:00)不再写缓存。原因——QDII亚洲/国内LOF 盘后
+    走指数极速估值（nav×最近两日指数涨跌幅）照样算出非 None 的 rt_val，若盘后也写，
+    会把"最后有效实时值"污染成盘后估算值（rt_cache.json updated_at 变成 21:5x）。
+    缓存只保留盘中(<15:00)最后有效实时值，供盘后定格显示（与"15:00 后 LOF 不能交易、
+    估值无意义应定格"的套利口径一致）。"""
     try:
+        if should_apply_freeze():
+            return
         with _write_lock:
             cache = load_rt_cache() or {'updated_at': None, 'funds': {}}
             funds = cache.get('funds', {})
@@ -233,12 +240,18 @@ def apply_freeze_to_dashboard(result: list) -> None:
                 item['rt_frozen'] = True
                 item['rt_frozen_note'] = '15:00冻结'
 
-    # 2) 回退：仍有 rt_val=None 的，用最后有效缓存（解决不常驻导致 15:00 没拍到）
+    # 2) 回退：rt_val 仍为 None 的，或指数极速类(QDII亚洲/国内LOF，盘后用指数外推
+    #    算出估算值、同样应定格)未冻的，用最后有效缓存（解决不常驻导致 15:00 没拍到）。
+    #    [AI-2026-08-15] 已由第 1 步"15:00冻结"覆盖的基金跳过，保持快照锚点优先。
     cache = load_rt_cache()
     if cache and cache.get('funds'):
         updated_at = cache.get('updated_at') or ''
         for item in result:
-            if item.get('rt_val') is not None:
+            if item.get('rt_frozen'):
+                continue
+            cat = item.get('category')
+            est_class = cat in ('QDII亚洲', '国内LOF')
+            if item.get('rt_val') is not None and not est_class:
                 continue
             code = item.get('fund_code')
             c = cache['funds'].get(code)

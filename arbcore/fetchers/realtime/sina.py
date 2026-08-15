@@ -132,11 +132,22 @@ class SinaRealtimeFetcher(BaseRealtimeFetcher):
                     self._notify_update(code, quote)
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-        return self.quotes.get(symbol)
+        # [AI-2026-08-15] 原样优先（兼容 rt_hkHSSI 等特殊 key），再兼容带 SH/SZ 大写前缀
+        # 的 A股代码（fund_basket_weights 存 'SZ159560'；新浪行情池 key 为小写 'sz159560'）。
+        q = self.quotes.get(symbol)
+        if q is not None:
+            return q
+        s = symbol.upper()
+        if s.startswith(('SH', 'SZ')) and len(s) > 2 and s[2:].isdigit():
+            code = s[2:]
+            return self.quotes.get(f"sz{code}") or self.quotes.get(f"sh{code}") or self.quotes.get(code)
+        return None
 
     def normalize_symbol(self, symbol: str) -> str:
         s = symbol.upper()
         if len(s) == 5 and s.isdigit(): return f"rt_hk{s}"
+        if s.isalpha():  # 纯字母=港交所指数（HSSI/HSI/HSCEI/HSTECH...），新浪用 rt_hk 前缀
+            return f"rt_hk{s}"
         if s.startswith('5') or s.startswith('6'):
             return f"sh{s}"
         return f"sz{s}"

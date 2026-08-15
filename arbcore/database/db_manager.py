@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, include_trading=False):
         if db_path is None:
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
             db_path = os.path.join(base_dir, 'database', 'arb_master.db')
@@ -21,6 +21,9 @@ class DatabaseManager:
         os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
         self.db_path = db_path
         self.lock = threading.Lock()
+        # [AI-2026-08-16] include_trading: True 时建交易对账表(user_trades/broker_redemption_fees/arbitrage_pairs/fund_fees)，
+        # 用于 arb_tran.db（交易独立库）。master 库(False)不建交易表，保证隐私与 share 导出干净。
+        self.include_trading = include_trading
         
         # Composition: delegate to specialized managers
         self.funds = FundManager(self.db_path, self.lock)
@@ -201,91 +204,92 @@ class DatabaseManager:
             ''')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_intraday_code_date ON fund_intraday_quotes(fund_code, date)')
 
-            # [V4.6] 新增实盘交易对账表 (强化多账号与快速赎回支持)
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS user_trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fund_code TEXT NOT NULL,
-                    fund_name TEXT,
-                    account_suffix TEXT, -- 账号尾号 (如 1 或 6)
-                    action TEXT, -- BUY / SELL / REDEEM
-                    volume INTEGER,
-                    price REAL,
-                    amount REAL,
-                    hedge_symbol TEXT,
-                    hedge_price REAL,
-                    hedge_vol INTEGER,
-                    fees REAL DEFAULT 0,
-                    trade_date TEXT DEFAULT (date('now', 'localtime')),
-                    remind_date TEXT, -- 赎回提醒日
-                    status TEXT DEFAULT 'ACTIVE', -- ACTIVE / CLOSED
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+            if self.include_trading:
+                # [V4.6] 新增实盘交易对账表 (强化多账号与快速赎回支持)
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS user_trades (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fund_code TEXT NOT NULL,
+                        fund_name TEXT,
+                        account_suffix TEXT, -- 账号尾号 (如 1 或 6)
+                        action TEXT, -- BUY / SELL / REDEEM
+                        volume INTEGER,
+                        price REAL,
+                        amount REAL,
+                        hedge_symbol TEXT,
+                        hedge_price REAL,
+                        hedge_vol INTEGER,
+                        fees REAL DEFAULT 0,
+                        trade_date TEXT DEFAULT (date('now', 'localtime')),
+                        remind_date TEXT, -- 赎回提醒日
+                        status TEXT DEFAULT 'ACTIVE', -- ACTIVE / CLOSED
+                        notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
 
-            # [V4.6] 基金费率与佣金设置表
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS fund_fees (
-                    fund_code TEXT PRIMARY KEY,
-                    redemption_fee_rate REAL DEFAULT 0.5, -- 正常赎回费率 (%)
-                    commission_rate REAL DEFAULT 0, -- 券商返佣或折扣 (%)
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+                # [V4.6] 基金费率与佣金设置表
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS fund_fees (
+                        fund_code TEXT PRIMARY KEY,
+                        redemption_fee_rate REAL DEFAULT 0.5, -- 正常赎回费率 (%)
+                        commission_rate REAL DEFAULT 0, -- 券商返佣或折扣 (%)
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
 
-            # 券商赎回费表
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS broker_redemption_fees (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    category TEXT,
-                    fund_code TEXT,
-                    broker_name TEXT,
-                    fee_rate TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(fund_code, broker_name)
-                )
-            ''')
+                # 券商赎回费表
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS broker_redemption_fees (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        category TEXT,
+                        fund_code TEXT,
+                        broker_name TEXT,
+                        fee_rate TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(fund_code, broker_name)
+                    )
+                ''')
 
-            # [V9.2] 套利对账本（匹配Excel格式：A股买卖+美股空平+盈亏汇总）
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS arbitrage_pairs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fund_code TEXT,
-                    fund_name TEXT,
-                    -- A股买入
-                    buy_date TEXT,
-                    buy_price REAL,
-                    buy_volume INTEGER,
-                    buy_amount REAL,
-                    buy_account TEXT,
-                    -- A股卖出/赎回
-                    sell_date TEXT,
-                    sell_price REAL,
-                    sell_amount REAL,
-                    redemption_fee REAL DEFAULT 0,
-                    -- 美股做空
-                    hedge_symbol TEXT,
-                    short_date TEXT,
-                    short_price REAL,
-                    short_volume INTEGER,
-                    short_amount REAL,
-                    -- 美股买平
-                    cover_date TEXT,
-                    cover_price REAL,
-                    cover_amount REAL,
-                    us_commission REAL DEFAULT 0,
-                    -- 汇总
-                    pnl_rmb REAL,
-                    pnl_usd REAL,
-                    status TEXT DEFAULT 'ACTIVE',
-                    buy_notes TEXT,
-                    sell_notes TEXT,
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+                # [V9.2] 套利对账本（匹配Excel格式：A股买卖+美股空平+盈亏汇总）
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS arbitrage_pairs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fund_code TEXT,
+                        fund_name TEXT,
+                        -- A股买入
+                        buy_date TEXT,
+                        buy_price REAL,
+                        buy_volume INTEGER,
+                        buy_amount REAL,
+                        buy_account TEXT,
+                        -- A股卖出/赎回
+                        sell_date TEXT,
+                        sell_price REAL,
+                        sell_amount REAL,
+                        redemption_fee REAL DEFAULT 0,
+                        -- 美股做空
+                        hedge_symbol TEXT,
+                        short_date TEXT,
+                        short_price REAL,
+                        short_volume INTEGER,
+                        short_amount REAL,
+                        -- 美股买平
+                        cover_date TEXT,
+                        cover_price REAL,
+                        cover_amount REAL,
+                        us_commission REAL DEFAULT 0,
+                        -- 汇总
+                        pnl_rmb REAL,
+                        pnl_usd REAL,
+                        status TEXT DEFAULT 'ACTIVE',
+                        buy_notes TEXT,
+                        sell_notes TEXT,
+                        notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
 
             conn.commit()
             conn.close()

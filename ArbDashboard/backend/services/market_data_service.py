@@ -183,6 +183,12 @@ class MarketDataService:
             if symbol.endswith(suffix):
                 symbol = symbol[:-len(suffix)]
                 break
+        # [AI-2026-08-15] 去 SH/SZ 前缀：fund_basket_weights 存的是带前缀代码（如 'SZ159560'），
+        # 而新浪行情池 key 为 'sz159560'、腾讯为去前缀 '159560'，带前缀直查全部 miss
+        # （501225 篮子成分 SZ159560 因此实时估值永远 None、盘后无"冻"）。源头统一去前缀，
+        # 'SZ159560' → '159560' 命中腾讯行情池。
+        if len(symbol) > 2 and symbol[:2] in ('SH', 'SZ') and symbol[2:].isdigit():
+            symbol = symbol[2:]
         
         from arbcore.config.source_routing import get_symbol_source
         source = get_symbol_source(symbol)

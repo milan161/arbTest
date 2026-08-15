@@ -68,13 +68,13 @@ class MarketManager(BaseManager):
             conn.close()
 
     # [AI-2026-07-20] VPS Yahoo 同步用：写入指数收盘价到 index_history
-    def upsert_index_history(self, symbol: str, date: str, close: float):
+    def upsert_index_history(self, symbol: str, date: str, close: float, source: str = 'yahoo_vps'):
         with self.lock:
             conn = self._get_conn()
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT OR REPLACE INTO index_history (symbol, date, close, source) VALUES (?, ?, ?, ?)",
-                (symbol, date, close, 'yahoo_vps')
+                (symbol, date, close, source)
             )
             conn.commit()
             conn.close()

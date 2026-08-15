@@ -4,7 +4,7 @@
 import threading
 import time
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import yaml
 import random
 import os
@@ -36,6 +36,7 @@ try:
     from ibapi.wrapper import EWrapper
     from ibapi.contract import Contract
     from ibapi.order import Order
+    from ibapi.execution import ExecutionFilter, Execution
 except ImportError:
     class EClient:
         def __init__(self, *args, **kwargs): pass
@@ -104,7 +105,17 @@ class IBReader(EWrapper, EClient):
         self.req_events = {} 
         self.req_data = {} 
         self.placed_order_ids = set() # 记录本实例下发的所有订单 ID，用于精准撤单
-        
+        self.on_ib_fill = None        # [AI-2026-08-15] 成交回执回调槽(精确每笔部分成交)：on_ib_fill(orderId, symbol, side, shares, price)
+        self.on_ib_order_done = None   # [AI-2026-08-15] 订单终态回调(全成/已撤)：on_ib_order_done(orderId, status)
+        self.order_status = {}         # orderId -> {status, filled, remaining, avgFillPrice}
+
+        # [AI-2026-08-15] 历史成交查询（reqExecutions）隔离区：与实时成交回执(reqId=-1)严格区分，
+        # 历史回执只进 buffer 收集，绝不喂 on_ib_fill（避免错误触发 monitor 对冲）。
+        self._history_req_ids = set()      # 历史查询使用的 reqId 集合
+        self._history_buffer = []          # 收集的历史成交 dict 列表
+        self._history_event = None         # threading.Event，execDetailsEnd 置位结束等待
+        self._history_commissions = {}     # execId -> commission，commissionReport 回填
+
         # 内存长连接订阅池
         self.mkt_req_ids = {}
         self.symbol_req_ids = {}
@@ -684,7 +695,7 @@ class IBReader(EWrapper, EClient):
     def place_us_order(self, symbol, action, quantity, price):
         """核心恢复：IB 盈透盘前夜盘下单指令发送"""
         if not self.isConnected():
-            return False, "IB 未连接"
+            return False, "IB 未连接", None
             
         if self.next_order_id is None:
             self.reqIds(-1)
@@ -693,7 +704,7 @@ class IBReader(EWrapper, EClient):
                 time.sleep(0.1)
                 
         if self.next_order_id is None:
-            return False, "无法获取有效订单 ID，请检查 TWS 是否开启了 '只读API' 限制"
+            return False, "无法获取有效订单 ID，请检查 TWS 是否开启了 '只读API' 限制", None
             
         contract = Contract()
         contract.symbol = symbol
@@ -736,7 +747,7 @@ class IBReader(EWrapper, EClient):
         self.placed_order_ids.add(order_id)
         self.next_order_id += 1 # 内部自增以便连续下单
         
-        return True, f"指令已发送: {action} {quantity}股 {symbol} @ {price} (路由: {contract.exchange})"
+        return True, f"指令已发送: {action} {quantity}股 {symbol} @ {price} (路由: {contract.exchange})", order_id
 
     def cancel_all_orders(self):
         """精准撤单：只撤销本程序沙盘发出的订单，绝不误伤手机APP挂的单"""
@@ -763,3 +774,120 @@ class IBReader(EWrapper, EClient):
             return True, "沙盘挂单已精准撤销 (您的手机手动MOC单不受影响)"
         except Exception as e:
             return False, f"撤单异常: {str(e)}"
+
+    # ── [AI-2026-08-15] 成交回执回调：精确每笔部分成交，取代持仓 delta 推断 ──
+    def execDetails(self, reqId, contract, execution):
+        """每笔成交回执(symbol/side/shares/price/orderId)。
+        [AI-2026-08-15] 按 reqId 隔离：历史查询(reqId 在 _history_req_ids)只收集进 buffer，
+        绝不喂 on_ib_fill；实时成交(IB 广播 reqId=-1)走原逻辑喂 monitor 对冲。"""
+        try:
+            symbol = getattr(contract, 'symbol', None)
+            order_id = getattr(execution, 'orderId', None)
+            side = getattr(execution, 'side', None)      # 'BOT' / 'SLD'
+            shares = float(getattr(execution, 'shares', 0) or 0)
+            price = float(getattr(execution, 'price', 0) or 0)
+            # [AI-2026-08-15] 历史查询回执：仅收集进流水 buffer，绝不触发 monitor 对冲
+            if reqId in getattr(self, '_history_req_ids', set()):
+                self._history_buffer.append({
+                    'exec_id': getattr(execution, 'execId', None),
+                    'order_id': order_id,
+                    'symbol': symbol,
+                    'side': side,
+                    'shares': shares,
+                    'price': price,
+                    'trade_time': getattr(execution, 'time', None),
+                    'account': getattr(execution, 'acctNumber', None) or getattr(execution, 'acctId', None),
+                    'commission': None,
+                    'currency': None,
+                })
+                logger.info(f"[IBReader] 📜 历史成交收集: {side} {shares} {symbol} @ {price} execId={getattr(execution, 'execId', None)}")
+                return
+            logger.info(f"[IBReader] ⚡ execDetails: {side} {shares} {symbol} @ {price} orderId={order_id}")
+            cb = getattr(self, 'on_ib_fill', None)
+            if callable(cb):
+                cb(order_id, symbol, side, shares, price)
+        except Exception as e:
+            logger.warning(f"[IBReader] execDetails 解析异常: {e}")
+
+    # ── [AI-2026-08-15] 历史成交查询（reqExecutions）：手动触发拉取过去 N 天真实成交 ──
+    def execDetailsEnd(self, reqId):
+        """历史查询结束标记：置位 Event 唤醒 fetch_executions 的等待。"""
+        if reqId in getattr(self, '_history_req_ids', set()):
+            if self._history_event:
+                self._history_event.set()
+            logger.info(f"[IBReader] ✅ 历史成交查询结束 reqId={reqId} (共 {len(self._history_buffer)} 笔)")
+
+    def commissionReport(self, commissionReport):
+        """手续费回执：按 execId 关联回填到历史成交 buffer。"""
+        try:
+            eid = getattr(commissionReport, 'execId', None)
+            comm = float(getattr(commissionReport, 'commission', 0) or 0)
+            if not eid:
+                return
+            for rec in getattr(self, '_history_buffer', []):
+                if rec.get('exec_id') == eid:
+                    rec['commission'] = comm
+                    rec['currency'] = getattr(commissionReport, 'currency', None)
+                    break
+            else:
+                # 回执晚于 execDetailsEnd 到达：暂存，fetch_executions 收尾时合并
+                self._history_commissions[eid] = comm
+            logger.info(f"[IBReader] 💰 commissionReport: execId={eid} commission={comm} {getattr(commissionReport, 'currency', '')}")
+        except Exception as e:
+            logger.warning(f"[IBReader] commissionReport 解析异常: {e}")
+
+    def fetch_executions(self, days: int = 30, account: str = None) -> dict:
+        """拉取过去 days 天的真实成交（需已连接 IB Gateway/TWS）。
+        返回 {ok, count, since, data:[{exec_id,order_id,symbol,side,shares,price,trade_time,account,commission,currency}], error?}
+        注意：本方法走独立 reqId，回执由 execDetails(reqId 在 _history_req_ids)收集，绝不触发 monitor 对冲。"""
+        if not self.isConnected():
+            return {"ok": False, "error": "IB 未连接（请先点页面 IB 按钮连接 Gateway）", "data": []}
+        try:
+            from ibapi.execution import ExecutionFilter
+        except ImportError:
+            return {"ok": False, "error": "ibapi.execution 不可用", "data": []}
+        req_id = self._get_next_req_id()
+        self._history_req_ids.add(req_id)
+        self._history_buffer = []
+        self._history_commissions = {}
+        self._history_event = threading.Event()
+        f = ExecutionFilter()
+        since = datetime.utcnow() - timedelta(days=days)
+        f.time = since.strftime("%Y%m%d-%H:%M:%S")   # IB 时间窗格式(UTC；IB 2174 警告要求 yyyymmdd-hh:mm:ss UTC，减号非空格)
+        if account:
+            f.acctCode = account
+        try:
+            self.reqExecutions(req_id, f)
+        except Exception as e:
+            self._history_req_ids.discard(req_id)
+            return {"ok": False, "error": f"reqExecutions 调用失败: {e}", "data": []}
+        finished = self._history_event.wait(timeout=60)
+        if finished:
+            time.sleep(3)   # 等手续费回执(可能晚于 execDetailsEnd 到达)
+        # 合并晚到的手续费
+        for rec in self._history_buffer:
+            eid = rec.get('exec_id')
+            if eid and eid in self._history_commissions:
+                rec['commission'] = self._history_commissions[eid]
+        self._history_req_ids.discard(req_id)
+        return {
+            "ok": True,
+            "count": len(self._history_buffer),
+            "since": since.strftime("%Y-%m-%d"),
+            "data": self._history_buffer,
+        }
+
+    def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, *args):
+        """订单终态/进度回执。记录到 order_status；全成/已撤时回调 on_ib_order_done。"""
+        try:
+            self.order_status[orderId] = {
+                'status': status, 'filled': filled,
+                'remaining': remaining, 'avgFillPrice': avgFillPrice
+            }
+            logger.info(f"[IBReader] orderStatus: orderId={orderId} status={status} filled={filled} remaining={remaining}")
+            if status in ('Filled', 'Cancelled', 'ApiCancelled'):
+                cb = getattr(self, 'on_ib_order_done', None)
+                if callable(cb):
+                    cb(orderId, status)
+        except Exception as e:
+            logger.warning(f"[IBReader] orderStatus 解析异常: {e}")
