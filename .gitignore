@@ -1,13 +1,21 @@
 # ============================================================
 # arbTest 源码仓库（项目根 = src/，物理隔离）
 # D:\Study\arbTest 下所有 "." 开头的 AI/工具目录
-# (.workbuddy/.opencode/.codegraph/.omo/.open-mem 等) 天然在仓库外，永不上传。
+# (.workbuddy/.opencode/.codegraph/.omo/.open-mem 等) 天然在仓库外，不上传。
 # 本文件只管 src/ 内部的敏感/非源码内容。
 # ============================================================
 
-# --- 实盘数据库（绝不传）---
+# --- 实盘数据库（不传）---
+# 主库 *.db 一律忽略；仅放开供协作的分享库
 *.db
 !/database/arb_master_share_*.db
+# SQLite 运行时 sidecar（实盘库孪生体，绝不传）
+*.db-shm
+*.db-wal
+
+# --- 数据库 / 仓库 备份（不传）---
+**/*.bak*
+**/*.bundle
 
 # --- 密钥 / 私密配置 ---
 account_private.py
@@ -19,6 +27,20 @@ arbcore/scripts/
 # --- 交易策略 / 私密模块 ---
 **/auto_trade/
 
+# --- 日志（不传）---
+*.log
+
+# --- 续传 session / 内部运行态（不传）---
+.omo/
+
+# --- 项目内数据目录（交易记录/同步/验证/woodyAPI，含账户与内部数据，不传）---
+ArbDashboard/data/
+
+# --- 临时 / 运行时 json（不传）---
+**/_ps_tmp.json
+**/rt_cache.json
+**/rt_freeze.json
+
 # --- 构建产物 & 依赖 ---
 __pycache__/
 *.pyc
@@ -26,7 +48,7 @@ node_modules/
 .venv/
 venv/
 
-# --- 项目非源码目录（含敏感/内部文档，不传）---
+# --- 项目非源码目录（含内部文档，不传）---
 deploy/
 docs/
 docs_unfinished/
