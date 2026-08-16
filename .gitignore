@@ -28,6 +28,8 @@ arbcore/scripts/
 **/auto_trade/
 # 根目录项目指引（含内部口径，不传）
 agents.md
+# 本地代理/VPN 启动脚本（仅本机用，不传）
+Proxy.bat
 # 交易执行层（QMT/IB 下单管理、策略信号、前端下单逻辑，不传）
 arbcore/traders/
 **/signal_detector.py

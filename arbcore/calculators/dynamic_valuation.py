@@ -152,10 +152,25 @@ class DynamicValuationCalculator:
                     if sym.startswith('^'):
                         base_row[sym[1:]] = r['price']
                         base_row[sym[1:] + '_mkt'] = mkt
-                    else:
-                        base_row['^' + sym] = r['price']
-                        base_row['^' + sym + '_mkt'] = mkt
+                else:
+                    base_row['^' + sym] = r['price']
+                    base_row['^' + sym + '_mkt'] = mkt
             # [AI-2026-07-21 用户要求] 不兜底静默填充，数据缺失就让其缺失，真实暴露
+
+            # [AI-2026-08-16] 篮子以 fund_basket_weights 表为权威（不读 yaml 篮子）。
+            # 查最新一日的篮子成分+权重注入 base_row['_basket']，供 calculate 覆盖 yaml portfolio。
+            # 与 static_valuation 同逻辑：db 有篮子用 db，无篮子(单ETF/指数/国内LOF)则 fallback yaml。
+            bw_df = pd.read_sql(
+                "SELECT underlying_symbol, weight FROM fund_basket_weights "
+                "WHERE fund_code = ? AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code = ?)",
+                conn, params=(fund_code, fund_code)
+            )
+            if not bw_df.empty:
+                base_row['_basket'] = [
+                    {'symbol': r['underlying_symbol'], 'weight': float(r['weight'])}
+                    for _, r in bw_df.iterrows()
+                    if pd.notna(r['weight']) and float(r['weight']) != 0
+                ]
 
             # [AI-2026-08-04 SUPREME 铁律] position 缺失时回溯最近有 factors 的日期，
             # 禁止用 equity_ratio 填补（误填成 1.0 会导致篮子 H 失真 4%~25%）。
@@ -210,6 +225,13 @@ class DynamicValuationCalculator:
         base_data = self.get_base_data(code)
         if not base_data: return None
 
+        # [AI-2026-08-16] 篮子以 DB 为权威：get_base_data 注入 db 篮子则覆盖 yaml portfolio。
+        db_basket = base_data.get('_basket')
+        if db_basket:
+            fund_config = dict(fund_config)
+            fund_config['valuation_portfolio'] = db_basket
+            fund_config['hedging_portfolio'] = db_basket
+
         assembled = assemble_dynamic_components(fund_config, base_data, current_etfs)
         if not assembled['ok']:
             return None
@@ -254,6 +276,13 @@ class DynamicValuationCalculator:
         base_data = self.get_base_data(code)
         if not base_data:
             return None
+
+        # [AI-2026-08-16] 篮子以 DB 为权威：get_base_data 注入 db 篮子则覆盖 yaml portfolio。
+        db_basket = base_data.get('_basket')
+        if db_basket:
+            fund_config = dict(fund_config)
+            fund_config['valuation_portfolio'] = db_basket
+            fund_config['hedging_portfolio'] = db_basket
 
         # 提取实时价（优先 bid）用于估值核心计算
         current_prices = {

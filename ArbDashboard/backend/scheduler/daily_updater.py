@@ -14,7 +14,7 @@ import time
 import random
 
 # 引入项目基座
-from arbcore.base_app import BaseApp, setup_logging
+from arbcore.base_app import BaseApp, setup_logging, PROJECT_LOGS_DIR
 from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
 from arbcore.fetchers.woody_api_service import WoodyAPIService
@@ -54,7 +54,7 @@ def _save_no_kline_denylist(d):
 class DailyUpdater(BaseApp):
     def __init__(self):
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        logs_dir = os.path.abspath(os.path.join(scripts_dir, "..", "..", "logs"))  # [AI-2026-07-02] 日志统一到 ArbDashboard/logs/
+        logs_dir = PROJECT_LOGS_DIR  # [AI-2026-08-16] 统一到仓库外唯一日志根(本地 D:\Study\arbTest\logs / ARM 同理)
         super().__init__("daily_updater", app_dir=scripts_dir, log_dir=logs_dir)
         # [AI-2026-07-08] 移除：BaseApp 现已在 arbcore/config/ 优先查找，无需重复重定向
         self.woody_crawler = WoodyWebCrawler()
@@ -374,88 +374,68 @@ class DailyUpdater(BaseApp):
         raise RuntimeError("Woody 因子获取失败，流水线安全中止。")
 
     def step2_5_sync_yaml_with_latest_factors(self):
-        """步骤2.5：将数据库中最新的真实仓位和权重同步反写回 lof_config.yaml"""
-        self.logger.info("=== 步骤2.5：同步最新因子到 lof_config.yaml ===")
+        """步骤2.5：[AI-2026-08-16] 废弃反写 lof_config.yaml，仅保留观测日志。
+
+        篮子权重/仓位已以数据库(fund_basket_weights / fund_daily_factors)为唯一权威，
+        估值引擎(static/dynamic)直接读 DB，不再依赖 yaml 篮子镜像。
+        原反写机制每天把 DB 最新篮子写回 yaml，但 yaml 会被 git checkout/commit/迁移
+        反复冲掉，形成双重真相源（如 160216 的 XLE vs XOP 错配 → 误差 +30%）。
+        故本步骤改为只打印 DB 最新因子，不再写任何 yaml 字段。
+        """
+        self.logger.info("=== 步骤2.5：观测 DB 最新因子（篮子权重/仓位，不反写 yaml）===")
         try:
             conn = self.db._get_conn()
-            yaml_updated = False
-            
             for fund in self.config.get('funds', []):
                 code = str(fund.get('code', ''))
-                if not code: continue
-                
-                # 1. 查询最新仓位
-                pos_df = pd.read_sql("SELECT position FROM fund_daily_factors WHERE fund_code=? ORDER BY date DESC LIMIT 1", conn, params=(code,))
+                if not code:
+                    continue
+
+                # 观测最新仓位
+                pos_df = pd.read_sql(
+                    "SELECT position FROM fund_daily_factors WHERE fund_code=? ORDER BY date DESC LIMIT 1",
+                    conn, params=(code,)
+                )
+                db_pos = None
                 if not pos_df.empty and pd.notna(pos_df.iloc[0]['position']):
-                    new_pos = float(pos_df.iloc[0]['position'])
-                    if new_pos <= 1.5: new_pos = new_pos * 100  # 转换为百分比(防呆设计)
-                    
-                    old_pos = fund.get('holdings', {}).get('equity_ratio', 0)
-                    if abs(new_pos - old_pos) > 0.01:
-                        if 'holdings' not in fund: fund['holdings'] = {}
-                        fund['holdings']['equity_ratio'] = round(new_pos, 2)
-                        fund['holdings']['cash_ratio'] = round(100 - new_pos, 2)
-                        fund['position'] = round(new_pos, 2)
-                        yaml_updated = True
-                        self.logger.info(f"🔄 [{code}] YAML仓位已同步: {old_pos}% -> {new_pos:.2f}%")
-                
-                # 2. 查询最新权重
-                weight_df = pd.read_sql("SELECT underlying_symbol, weight FROM fund_basket_weights WHERE fund_code=? AND date=(SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)", conn, params=(code, code))
-                if not weight_df.empty:
-                    db_weights = {row['underlying_symbol'].replace('^', ''): float(row['weight']) for _, row in weight_df.iterrows() if pd.notna(row['weight'])}
-                    
-                    for port_key in ['valuation_portfolio', 'hedging_portfolio']:
-                        if port_key in fund:
-                            current_portfolio = fund[port_key]
-                            current_syms = [item.get('symbol', '').replace('^', '') for item in current_portfolio]
-                            
-                            new_portfolio = []
-                            portfolio_changed = False
-                            
-                            # 保留原有锚点映射
-                            anchor_map = {item.get('symbol', '').replace('^', ''): item.get('anchor', 'US') for item in current_portfolio}
-                            
-                            # 1. 添加或更新数据库里的最新有效成分
-                            for sym, w in db_weights.items():
-                                if w != 0:
-                                    anchor = anchor_map.get(sym, 'US')
-                                    if sym not in current_syms:
-                                        # 智能识别新增的区域 ETF 锚点
-                                        if '-EU' in sym: anchor = 'EU'
-                                        elif '-HK' in sym: anchor = 'HK'
-                                        elif '-JP' in sym: anchor = 'JP'
-                                        portfolio_changed = True
-                                        self.logger.info(f"🔄 [{code}] YAML新增成分股 ({sym}): {round(w, 2)}%")
-                                    else:
-                                        old_item = next((i for i in current_portfolio if i.get('symbol', '').replace('^', '') == sym), None)
-                                        if old_item and abs(old_item.get('weight', 0) - w) > 0.01:
-                                            portfolio_changed = True
-                                            self.logger.info(f"🔄 [{code}] YAML权重已同步 ({sym}): {old_item.get('weight', 0)}% -> {round(w, 2)}%")
-                                    new_portfolio.append({'symbol': sym, 'weight': round(w, 2), 'anchor': anchor})
-                                    
-                            # 2. 检查并移除被踢出的旧成分 (如 USO-JP)
-                            for old_sym in current_syms:
-                                if old_sym not in db_weights or db_weights[old_sym] == 0:
-                                    portfolio_changed = True
-                                    self.logger.info(f"🔄 [{code}] YAML删除成分股 ({old_sym})")
-                                    
-                            if portfolio_changed:
-                                # 将新成分按权重降序排列后直接覆写
-                                new_portfolio = sorted(new_portfolio, key=lambda x: x['weight'], reverse=True)
-                                fund[port_key] = new_portfolio
-                                yaml_updated = True
+                    db_pos = float(pos_df.iloc[0]['position'])
+
+                # 观测最新篮子权重
+                weight_df = pd.read_sql(
+                    "SELECT underlying_symbol, weight FROM fund_basket_weights "
+                    "WHERE fund_code=? AND date=(SELECT MAX(date) FROM fund_basket_weights WHERE fund_code=?)",
+                    conn, params=(code, code)
+                )
+                if weight_df.empty:
+                    continue
+                db_weights = {
+                    row['underlying_symbol'].replace('^', ''): float(row['weight'])
+                    for _, row in weight_df.iterrows() if pd.notna(row['weight'])
+                }
+
+                # 对比 yaml 当前篮子，打印差异（仅观测，不改 yaml）
+                yaml_syms = set()
+                for port_key in ['valuation_portfolio', 'hedging_portfolio']:
+                    if port_key in fund:
+                        yaml_syms.update(
+                            item.get('symbol', '').replace('^', '') for item in fund[port_key]
+                        )
+                added = set(db_weights) - yaml_syms
+                removed = yaml_syms - set(db_weights)
+                if added or removed:
+                    self.logger.info(
+                        f"🔎 [{code}] DB最新篮子(权威): "
+                        + ", ".join(f"{s}={db_weights[s]:.2f}%" for s in sorted(db_weights, key=lambda x: -db_weights[x]))
+                    )
+                    if added:
+                        self.logger.info(f"   ➕ 成分({sorted(added)}) DB有而yaml无")
+                    if removed:
+                        self.logger.info(f"   ➖ 成分({sorted(removed)}) yaml有而DB已无")
+                    if db_pos is not None:
+                        self.logger.info(f"   📌 DB最新仓位: {db_pos}")
             conn.close()
-            
-            if yaml_updated:
-                config_file = self.config_path  # [AI-2026-07-03] 使用已修正的 self.config_path
-                with open(config_file, 'w', encoding='utf-8') as f:
-                    yaml.safe_dump(self.config, f, allow_unicode=True, sort_keys=False)
-                self.logger.info("✅ lof_config.yaml 文件已成功覆写更新！")
-            else:
-                self.logger.info("✅ 经对比，YAML中已是最新仓位权重，无需覆写。")
-                
+            self.logger.info("✅ 步骤2.5 观测完成（已不反写 yaml，篮子/仓位以 DB 为唯一权威）。")
         except Exception as e:
-            self.logger.error(f"❌ 同步YAML配置失败: {e}")
+            self.logger.error(f"❌ 观测 DB 因子失败: {e}")
 
     def step3_fetch_exchange_rate(self):
         """[AI-2026-07-08] 步骤三：抓取汇率（中间价/在岸价/离岸价）存入库，2 级降级：VPS 同步 → 本地直连备用源"""

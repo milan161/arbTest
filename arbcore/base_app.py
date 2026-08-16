@@ -17,6 +17,10 @@ os.environ['NO_PROXY'] = '*'
 CORE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(CORE_DIR)
 
+# [AI-2026-08-16] 项目唯一日志根：仓库外(本地 D:\Study\arbTest\logs / ARM 同理),
+# 与 database 物理隔离同思路，避免 src 下被重建 logs；全项目统一复用此常量，避免各处自算深度。
+PROJECT_LOGS_DIR = os.path.join(os.path.dirname(ROOT_DIR), "logs")
+
 # 将项目根目录添加到 sys.path
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
@@ -65,7 +69,8 @@ class BaseApp:
 
         self.app_dir = app_dir
         if log_dir is None:
-            log_dir = os.path.join(self.app_dir, "logs")
+            # [AI-2026-08-16] 统一到仓库外唯一日志根(本地 D:\Study\arbTest\logs / ARM 同理)
+            log_dir = PROJECT_LOGS_DIR
         self.logger = setup_logging(name, log_dir, log_file_prefix=name)
         
         self.db = DatabaseManager()

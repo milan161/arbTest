@@ -59,7 +59,8 @@ from datetime import datetime
 # Setup logging
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 workspace_root = os.path.abspath(os.path.join(backend_dir, ".."))
-logs_dir = os.path.join(workspace_root, "logs")  # [AI-2026-07-02] 日志集中到 ArbDashboard/logs/
+# [AI-2026-08-16] 日志统一到仓库外唯一根(本地 D:\Study\arbTest\logs / ARM 同理), 与 database 物理隔离同思路
+logs_dir = os.path.abspath(os.path.join(workspace_root, "..", "..", "logs"))
 
 START_TIME = time.time()  # 进程启动时刻，供 /api/status 计算运行时长
 

@@ -43,9 +43,9 @@
    (python main.py)  (npm run dev)
 
 【首次使用前必读】
-  从 GitHub 下载的 `database/arb_master_share.db` 需要重命名为 `arb_master.db`：
-    >> cd <项目目录>\database
-    >> ren arb_master_share.db arb_master.db
+  本程序运行所需的 `database/` 目录（含 `arb_master.db` 主库与 `arb_tran.db` 交易库）
+  位于 Git 仓库（src）之外、由本地维护，**不参与 GitHub 上传**。
+  请将数据库文件放置于仓库根目录同级的 `<项目目录>\database\` 下，程序会自动加载。
 
 【一键启动（推荐）】
   在主目录下，双击运行以下批处理文件：
@@ -87,7 +87,7 @@ ArbDashboard/
 │   │   ├── Dashboard.vue       # 套利看板
 │   │   └── Analysis.vue        # 实时分析
 │   └── src/components/         # 可复用组件
-├── docs/                       # 项目文档
+├── docs/                       # 项目文档（已移至仓库外的 arbTest/docs/，不随 Git 上传）
 └── start_dashboard.bat         # 启动脚本
 
 三层架构：
@@ -272,6 +272,6 @@ ArbDashboard/
    （QUOTE 快照里根本没有 bid/ask 列）。该 bug 已修复，富途（对比）栏现在能显示真实盘口。
 
 更完整的排查决策树（含端口冲突、重连热身、看门狗自愈）见：
-  docs/008_夜盘卖空IB和富途的下单调试.md → 第十二节「确保 IB / 富途有行情的操作手册」。
+  ../docs/008_夜盘卖空IB和富途的下单调试.md → 第十二节「确保 IB / 富途有行情的操作手册」（docs 已移至仓库外）。
 
 ===============================================================================
