@@ -1,104 +1,37 @@
-# =================================================================
-# 核心白名单：只上传跟 "程序3(ArbDashboard)" 与 "基座(arbcore)" 运行必须的代码
-# =================================================================
+# ============================================================
+# arbTest 源码仓库（项目根 = src/，物理隔离）
+# D:\Study\arbTest 下所有 "." 开头的 AI/工具目录
+# (.workbuddy/.opencode/.codegraph/.omo/.open-mem 等) 天然在仓库外，永不上传。
+# 本文件只管 src/ 内部的敏感/非源码内容。
+# ============================================================
 
-# === 所有 private 目录 (禁止上传) ===
-**/private/
-ArbDashboard/backend/core/auto_trade/
-**/Lazy.vue
-**/*lazy*
-# 注意：下面的取反已移除，所有 lazy 相关文件都不上传
+# --- 实盘数据库（绝不传）---
+*.db
+!/database/arb_master_share_*.db
 
-# === 账号与私密配置 (禁止上传) ===
-arbcore/config/account_private.py
+# --- 密钥 / 私密配置 ---
 account_private.py
-arb_config.yaml
-*.local.py
-.env
-
-# === 垃圾与测试数据库 ===
-**/arb_test.db
-ArbDashboard/backend/core/database/
-
-# === 数据库 (只保留表结构/基础表) ===
-/database/*
-!/database/arb_master_share.db
-!/database/readme.txt
-# 各目录下的实盘数据库（禁止上传）
-**/arb_master.db
-**/arb_tran.db
-
-# === 非程序3的项目目录 (全部屏蔽) ===
-/LOFarb/
-/ETFRotate/
-/jsl/
-/ArbCoreProject/
-/ArbDashboard_Next/
-/lofarb_data/
-
-# === 外部数据、废弃目录（放行 backend/scripts，不屏蔽services、新增页面） ===
-/deploy/
-ArbDashboard/data/
-ArbDashboard/scripts/
-ArbDashboard/logs/
 arbcore/scripts/
+**/private/
+**/Lazy*
+**/*lazy*
 
-# === 文档、日志与测试代码 ===
-# 仅屏蔽未完成草稿目录
-/docs_unfinished/
-/logs/
-# 全局屏蔽md，单独放行根目录README（docs/ 整目录不再上传，见下方屏蔽）
-*.md
-!/README.md
+# --- 交易策略 / 私密模块 ---
+**/auto_trade/
 
-# === 文档目录整体屏蔽（东哥 2026-08-05 拍板：docs 不再上传 GitHub） ===
-docs/
-
-# === 数据文件（Excel/CSV 等，禁止上传个人数据） ===
-*.xlsx
-*.xls
-*.csv
-
-# === 误传/临时文件（2026-08-06 AI 误传后补，禁止再传） ===
-AGENTS.md.bak*
-sync_ufh.json
-_sync_ufh.json
-
-# === 杂项文件/脚本（移除全局/*.py，避免误伤根目录代码） ===
-*.zip
-*.bat
-!/ArbDashboard/start_dashboard.bat
-GEMINI.md
-Proxy.bat
-*.txt
-!readme.txt
-!requirements.txt
-
-# === AI 工具目录 ===
-.omo/
-.open-mem/
-.opencode/
-.workbuddy/
-_ai_backup/
-
-# === 编辑器与系统垃圾 ===
-/ArbDashboard/*.png
-.vscode/
-.idea/
-.git.bak/
+# --- 构建产物 & 依赖 ---
 __pycache__/
+*.pyc
 node_modules/
+.venv/
 venv/
+
+# --- 项目非源码目录（含敏感/内部文档，不传）---
+deploy/
+docs/
+docs_unfinished/
+logs/
+
+# --- 前端构建缓存 ---
 dist/
 .vite/
-*.pyc
-*.pyo
-*.pyd
-*.log
-*.lock
-.DS_Store
-Thumbs.db
-
-# open-mem: Auto-generated folder context files.
-# Uncomment to exclude from version control (recommended for large projects):
-# **/AGENTS.md

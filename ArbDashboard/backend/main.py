@@ -119,10 +119,10 @@ DASHBOARD_MODE = os.environ.get('ARB_DASHBOARD_MODE', '0') == '1'
 logger.info("[V10.0] 跳过 TQ 全局初始化（通达信待用户手动连接）")
 
 # Add project root and core/arbcore to path
-# [FIX] 使用 D:\Study\arbTest\arbcore 作为核心模块目录
+# [FIX][AI-2026-08-16] arbcore 为核心模块目录（项目根 src/ 下的 arbcore）
 backend_dir = os.path.dirname(os.path.abspath(__file__))
-# arbcore 在 ArbDashboard 的上级目录 (D:\Study\arbTest\arbcore)
-# 需要添加 D:\Study\arbTest 到 sys.path，这样 Python 才能找到 arbcore 包
+# arbcore 在 ArbDashboard 的上级目录 (项目根 src/arbcore)
+# 需要添加项目根 (ArbDashboard 的上级目录) 到 sys.path，这样 Python 才能找到 arbcore 包
 arbcore_parent = os.path.normpath(os.path.join(backend_dir, "..", ".."))
 arbcore_dir = os.path.join(arbcore_parent, "arbcore")
 if os.path.exists(arbcore_dir):
@@ -179,7 +179,7 @@ except Exception as e:
     raise
 
 # 2. Initialize Database Manager FIRST
-# [V3.11] 使用统一数据库路径 D:\Study\arbTest\database\arb_master.db
+# [V3.11][AI-2026-08-16] 统一数据库路径（相对 workspace_root 推导，项目下移 src/ 后仍有效）
 db = DatabaseManager(db_path=root_db_path, include_trading=False)
 # [AI-2026-08-16] 交易独立库（含 user_trades/broker_redemption_fees/arbitrage_pairs/fund_fees 交易表）
 tran_db = DatabaseManager(db_path=tran_db_path, include_trading=True)
@@ -2296,7 +2296,8 @@ async def confirm_ledger_excel(request: Request):
 
 # --- [AI-2026-08-15] IB 真实成交同步（替代手动 Excel 记录）---
 # 盈透 reqExecutions 无法返回历史成交，改为解析 IB 网页导出的活动账单 CSV。
-_TRANSACTION_DIR = r"D:/Study/arbTest/ArbDashboard/data/TransactionRecord"
+# [AI-2026-08-16] 改为相对 workspace_root 推导，支持项目下移一层到 src/
+_TRANSACTION_DIR = os.path.join(workspace_root, "data", "TransactionRecord")
 
 @app.post("/api/ledger/ib-sync")
 async def sync_ib_executions():

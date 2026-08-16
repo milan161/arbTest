@@ -13,8 +13,14 @@ market_data_router.py - 市场数据路由服务
 import re
 import logging
 from typing import Dict, List, Optional
+import os
 
 logger = logging.getLogger(__name__)
+
+
+# [AI-2026-08-16] 不再硬编码 D:\Study\arbTest，改为 __file__ 相对推导项目根（兼容项目下移 src/）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_MASTER_DB_PATH = os.path.join(_PROJECT_ROOT, "database", "arb_master.db")
 
 
 class MarketDataRouter:
@@ -80,7 +86,7 @@ class MarketDataRouter:
     def get_us_symbols_from_db(self) -> List[str]:
         """从数据库获取所有美股 ETF 标的（去重）"""
         import sqlite3
-        conn = sqlite3.connect(r'D:\Study\arbTest\database\arb_master.db')
+        conn = sqlite3.connect(_MASTER_DB_PATH)
         cursor = conn.cursor()
         cursor.execute('SELECT DISTINCT underlying_symbol FROM fund_basket_weights')
         rows = cursor.fetchall()
@@ -97,7 +103,7 @@ class MarketDataRouter:
     def get_cn_symbols_from_db(self) -> List[str]:
         """从数据库获取所有 A 股标的（去重）"""
         import sqlite3
-        conn = sqlite3.connect(r'D:\Study\arbTest\database\arb_master.db')
+        conn = sqlite3.connect(_MASTER_DB_PATH)
         cursor = conn.cursor()
         cursor.execute('SELECT DISTINCT underlying_symbol FROM fund_basket_weights')
         rows = cursor.fetchall()

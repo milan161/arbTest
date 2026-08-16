@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from arbcore.utils.market_calendar import is_a_share_session  # [AI-2026-08-16] 交易时段门禁
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +37,14 @@ class DashboardSnapshotService:
         market_data_service=None,
         high_interval: float = 3.0,
         normal_interval: float = 30.0,
+        idle_interval: float = 60.0,
     ):
         self.fund_service = fund_service
         self.market_data_service = market_data_service
         self.high_interval = high_interval
         self.normal_interval = normal_interval
+        # [AI-2026-08-16] 非交易时段(盘后/盘前/周末/节假日)轮询休眠间隔：跳过重算、保留缓存。
+        self.idle_interval = idle_interval
         self._lock = threading.RLock()
         self._snapshots: Dict[str, Dict[str, Any]] = {}
         self._last_errors: Dict[str, str] = {}
@@ -114,6 +119,11 @@ class DashboardSnapshotService:
 
     async def _loop(self, key: str, interval: float, use_db_watchlist: bool, category: Optional[str]):
         while self._running:
+            # [AI-2026-08-16] 交易时段门禁：仅 A 股交易时段(9:30-15:00 交易日,含午休)做实时刷新；
+            # 盘后/盘前/周末/节假日跳过重算、保留缓存、长休眠，避免空载实时估值轮询空烧 CPU。
+            if not is_a_share_session():
+                await asyncio.sleep(self.idle_interval)
+                continue
             # [AI-2026-08-05] 不再跳过暂停分类：豁免基金(paused_exempt=1)需要快照循环正常运行。
             # get_unified_dashboard_data 内部会按 paused_exempt 过滤，非豁免基金不会出现在快照中。
             # 无豁免基金的暂停分类（如现金管理）会返回空列表，有缓存备用源开销可忽略。

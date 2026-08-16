@@ -1,0 +1,27 @@
+# ArbDashboard 后端 · ARM(Linux aarch64) 云端看板依赖清单
+# 与 requirements.txt 的唯一差异：剔除 Windows / 券商专属包（看板模式无 QMT/IB 下单，美股走富途 OpenD 内网）
+# ARM 安装命令：~/arbenv/bin/pip install -r requirements-arm.txt
+
+fastapi
+uvicorn
+pandas
+numpy
+sqlalchemy
+pydantic
+python-dotenv
+httpx
+flask  # For compatibility if needed
+requests
+pyyaml
+paramiko
+chinese-calendar
+openpyxl
+python-multipart
+exchange-calendars    # 交易所日历（美股/港股/日股）
+beautifulsoup4         # Woody 网页在岸价回退解析（bs4）
+akshare                # 历史数据回采（A股/美股等）
+futu-api               # 富途行情（代码内 import futu；ARM 看板美股走 OpenD 内网）
+
+# ── 以下为 Windows / 券商专属，ARM 看板不需要，已剔除 ──
+# xtquant   # 国金QMT 实时行情与交易（Windows DLL，ARM 无 QMT 下单）
+# ibapi     # IB 盈透行情（ARM 看板走富途 OpenD，不用 IB）
