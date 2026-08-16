@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     def __init__(self, db_path=None, include_trading=False):
         if db_path is None:
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；3层dirname到项目根父目录(arbTest)
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
             db_path = os.path.join(base_dir, 'database', 'arb_master.db')
             
         os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)

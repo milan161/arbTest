@@ -46,10 +46,20 @@ class StaticValuationCalculator:
                 logger.warning(f"  ⚠️ [{name}] 基础行情数据为空，跳过")
                 return False
 
-            # 获取底层资产价格
-            portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
+            # [AI-2026-08-16] 篮子标的集以 fund_basket_weights 表为权威（根治 160216 等误差+30% bug）
+            # 旧代码用 yaml valuation_portfolio 的标的去 fund_basket_weights 取权重，当 db 篮子随 woody
+            # 更新（如 160216 的 XLE→XOP）而 yaml 滞后时，yaml 标的(XLE)在 db 取不到权重→fallback 旧权重
+            # → 权重和爆到 138% → static_val 高估~39%。现改为：db 有标的则用 db（含各日期权重随 date 对齐），
+            # db 无则兜底 yaml portfolio（兼容单ETF/指数基金）。
+            db_symbols = [r[0] for r in conn.execute(
+                "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code=?", (code,)
+            ).fetchall()]
+            if db_symbols:
+                portfolio = [{'symbol': s} for s in db_symbols]
+            else:
+                portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
             primary_sym = self._identify_primary_symbol(fund_config)
-            
+
             # 批量获取持仓价格
             for item in portfolio:
                 sym = item.get('symbol', '').replace('^', '')
@@ -96,7 +106,11 @@ class StaticValuationCalculator:
         df['static_val'] = None
         df['val_error'] = None
         
-        # 继承因子权重（bfill 向前填充，处理节假日权重缺失）
+        # [AI-2026-08-16] 去掉 bfill 向前填充：合并全部历史篮子标的后，bfill 会把
+        # 旧日期(已清仓标的,如 160216 的 XLE)的权重沿降序 df 向前填到新日期，
+        # 污染当前篮子(权重和爆到 140%+ → static_val 高估~40%)。改为该日期 db 无
+        # 权重则该日不持有(=0)，符合 SUPREME 铁律「缺失不伪装」。woody 每日更新篮子，
+        # 正常每个交易日都有权重；缺失即真实不持有，不应跨期借用旧权重。
         for item in portfolio:
             sym = item.get('symbol', '').replace('^', '')
             # 处理区域后缀 — 和 merge 时保持一致
@@ -104,7 +118,7 @@ class StaticValuationCalculator:
                 sym = f"^{sym}"
             w_col = f"{sym}_weight"
             if w_col in df.columns:
-                df[w_col] = df[w_col].bfill().fillna(item.get('weight', 0))
+                df[w_col] = df[w_col].fillna(0)
         
         # 遍历日期进行推演
         for i in range(len(df)):
@@ -227,7 +241,14 @@ class StaticValuationCalculator:
                 logger.warning(f"  ⚠️ [{code}] 无行情数据，无法静态估值")
                 return None
 
-            portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
+            # [AI-2026-08-16] 与 process_fund 同逻辑：篮子标的集以 fund_basket_weights 表为权威
+            db_symbols = [r[0] for r in conn.execute(
+                "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code=?", (code,)
+            ).fetchall()]
+            if db_symbols:
+                portfolio = [{'symbol': s} for s in db_symbols]
+            else:
+                portfolio = fund_config.get('valuation_portfolio', []) or fund_config.get('hedging_portfolio', [])
             primary_sym = self._identify_primary_symbol(fund_config)
 
             # 批量关联持仓 ETF 价格（与 process_fund 同逻辑）

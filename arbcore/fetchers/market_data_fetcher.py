@@ -11,7 +11,8 @@ import pandas as pd
 # [AI-2026-08-16] 改为 __file__ 相对推导，支持项目整体下移一层到 src/（不再硬编码 D:\Study\arbTest）
 _ARBCORE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../arbcore
 _PROJECT_ROOT = os.path.dirname(_ARBCORE_DIR)                                # 项目根（src）
-_SHARED_DB_PATH = os.environ.get('ARB_MASTER_DB', os.path.join(_PROJECT_ROOT, "database", "arb_master.db"))
+# [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；项目根父目录/database
+_SHARED_DB_PATH = os.environ.get('ARB_MASTER_DB', os.path.join(os.path.dirname(_PROJECT_ROOT), "database", "arb_master.db"))
 
 
 def get_exchange_rate():

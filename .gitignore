@@ -6,9 +6,9 @@
 # ============================================================
 
 # --- 实盘数据库（不传）---
-# 主库 *.db 一律忽略；仅放开供协作的分享库
+# 活库/分享库已整体移出仓库根到 D:\Study\arbTest\database\（物理隔离，src 内零 database）
+# 此处 *.db 等规则仅作纵深防御：万一 src 内误落任何 db 也绝不传。
 *.db
-!/database/arb_master_share_*.db
 # SQLite 运行时 sidecar（实盘库孪生体，绝不传）
 *.db-shm
 *.db-wal
@@ -32,6 +32,10 @@ agents.md
 arbcore/traders/
 **/signal_detector.py
 **/useOrderLogic.js
+# 「我的交易」菜单页 + 其 API 客户端（不传）
+**/AutoTrade.vue
+**/AutoTrade*
+**/autoTrade*
 
 # --- 日志（不传）---
 *.log
@@ -46,6 +50,10 @@ ArbDashboard/data/
 **/_ps_tmp.json
 **/rt_cache.json
 **/rt_freeze.json
+
+# --- AI 临时调试脚本（不传）---
+_ai_backup/
+scratch/
 
 # --- 构建产物 & 依赖 ---
 __pycache__/

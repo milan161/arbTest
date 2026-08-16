@@ -966,7 +966,8 @@ class DailyUpdater(BaseApp):
             if not os.path.exists(tool):
                 self.logger.warning(f"⚠️ 未找到导入工具 {tool}，跳过申赎状态同步")
                 return
-            tmp = os.path.join(root, "database", "_ps_tmp.json")
+            # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；root再上一层到项目根父目录
+            tmp = os.path.join(os.path.dirname(root), "database", "_ps_tmp.json")
             cmd = [sys.executable, tool, "pull",
                    "--host", ap.VPS_HOST, "--port", str(ap.VPS_PORT),
                    "--user", ap.VPS_USER, "--key", ap.VPS_KEY_PATH,
@@ -1500,9 +1501,9 @@ class DailyUpdater(BaseApp):
         import sqlite3
         self.logger.info("=== 步骤十一：跟踪指数公式静态估值 (QDII亚洲/国内LOF/指数LOF) ===")
 
-        # [AI-2026-06-29] 修复路径: 4层dirname才到项目根目录database/
-        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))))), "database", "arb_master.db")
+        # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；5层dirname到项目根父目录(arbTest)
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))))), "database", "arb_master.db")
         conn = sqlite3.connect(db_path, timeout=30)
         conn.execute("PRAGMA busy_timeout = 30000")
         cursor = conn.cursor()

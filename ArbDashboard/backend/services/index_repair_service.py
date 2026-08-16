@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 # 路径配置
 # ============================================================
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；项目根父目录/database
 PROJECT_ROOT = os.path.normpath(os.path.join(BACKEND_DIR, '..', '..', '..'))
-DB_PATH = os.path.join(PROJECT_ROOT, 'database', 'arb_master.db')
+DB_PATH = os.path.join(os.path.dirname(PROJECT_ROOT), 'database', 'arb_master.db')
 
 # 同主码表：和 backfill_tdx_index.py 保持一致
 A_SHARE_SZ_PREFIX = {'399300','399001','399997','399989','399330','399441','399707',

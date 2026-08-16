@@ -155,7 +155,8 @@ def _get_realtime_jpy_spot_fx() -> Optional[float]:
 def _get_db_latest_spot(sym_col: str) -> Optional[float]:
     try:
         import sqlite3, os
-        db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'database', 'arb_master.db')
+        # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；4层dirname到项目根父目录
+        db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'database', 'arb_master.db')
         conn = sqlite3.connect(db_path)
         try:
             row = conn.execute(
@@ -757,7 +758,8 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
             today_str = now.strftime('%Y-%m-%d')
             import sqlite3
             # [AI-2026-07-13] 修复路径少一层的问题：从 services/ 需往上3层到项目根，再到 database/
-            db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'database', 'arb_master.db')
+            # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；4层dirname到项目根父目录
+            db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'database', 'arb_master.db')
             conn_write = sqlite3.connect(db_path)
             for sym, data in api_results.items():
                 if sym in ('.INX', '.NDX') and data.get('price', 0) > 0:

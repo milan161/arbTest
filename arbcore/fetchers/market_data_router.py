@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 # [AI-2026-08-16] 不再硬编码 D:\Study\arbTest，改为 __file__ 相对推导项目根（兼容项目下移 src/）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_MASTER_DB_PATH = os.path.join(_PROJECT_ROOT, "database", "arb_master.db")
+# [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；项目根父目录/database
+_MASTER_DB_PATH = os.path.join(os.path.dirname(_PROJECT_ROOT), "database", "arb_master.db")
 
 
 class MarketDataRouter:

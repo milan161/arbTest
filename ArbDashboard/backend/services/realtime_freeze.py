@@ -33,9 +33,10 @@ logger = logging.getLogger(__name__)
 
 # realtime_freeze.py 位于 ArbDashboard/backend/services/ → 上溯 3 级到项目根 arbTest/
 _HERE = os.path.dirname(os.path.abspath(__file__))
+# [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；项目根父目录/database
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
-FREEZE_PATH = os.path.join(PROJECT_ROOT, 'database', 'rt_freeze.json')
-RT_CACHE_PATH = os.path.join(PROJECT_ROOT, 'database', 'rt_cache.json')
+FREEZE_PATH = os.path.join(os.path.dirname(PROJECT_ROOT), 'database', 'rt_freeze.json')
+RT_CACHE_PATH = os.path.join(os.path.dirname(PROJECT_ROOT), 'database', 'rt_cache.json')
 
 # 进程内串行化：避免同一进程多线程同时替换同一缓存文件（启动期并发调用 update_rt_cache 的根因）
 _write_lock = threading.Lock()

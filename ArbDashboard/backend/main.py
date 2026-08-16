@@ -138,9 +138,10 @@ else:
         raise RuntimeError(f"既找不到 {arbcore_dir}，也找不到 {fallback_dir}")
 
 # 1. [V3.11 统一数据库路径]
-root_db_path = os.path.abspath(os.path.join(workspace_root, "..", "database", "arb_master.db"))
+# [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；workspace_root 上两级到项目根父目录(arbTest)
+root_db_path = os.path.abspath(os.path.join(workspace_root, "..", "..", "database", "arb_master.db"))
 # [AI-2026-08-16] 交易数据独立库：成交/配对/策略规则等敏感交易数据与市场因子分离，隐私保护
-tran_db_path = os.path.abspath(os.path.join(workspace_root, "..", "database", "arb_tran.db"))
+tran_db_path = os.path.abspath(os.path.join(workspace_root, "..", "..", "database", "arb_tran.db"))
 logger.info(f"📂 Using database at {root_db_path}")
 logger.info(f"🔒 交易库 at {tran_db_path}")
 
