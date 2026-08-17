@@ -1928,10 +1928,13 @@ class FundService:
                                         try:
                                             q = self.market_data_service.get_realtime_quote(trade_etf)
                                             etf_price = 0
-                                            if q and q.get('bid') and q['bid'] > 0:
-                                                etf_price = q['bid']
-                                            elif q and q.get('price') and q['price'] > 0:
-                                                etf_price = q['price']
+                                            # [AI-2026-08-17] 同 1847 模式：A股源 bid 为5档list，必须降标量为买一价，否则 q['bid']>0 抛 list>int
+                                            if q:
+                                                _trade_bid = _scalar_level(q.get('bid'))
+                                                if _trade_bid and _trade_bid > 0:
+                                                    etf_price = _trade_bid
+                                                elif q.get('price') and q['price'] > 0:
+                                                    etf_price = q['price']
                                             # ⬇️ 估值计算：bid/price 取到后统一加载 base_data 计算，防止 bid 分支漏算
                                             if etf_price > 0:
                                                 base_data = calculator.get_base_data(code)
