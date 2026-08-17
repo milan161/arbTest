@@ -37,6 +37,16 @@ _YAML_TRADE_FUTURE: Dict[str, str] = {}
 _YAML_VALUATION_PORTFOLIO: Dict[str, list] = {}
 
 
+def _scalar_level(v):
+    """[AI-2026-08-17] A股实时源(tdx/sina/guojin/galaxy/tencent)的 bid/ask 为5档list，
+    IB/FUTU 分支为标量买一/卖一。估值路径只取买一/卖一标量（list[0]），
+    不改动 market_data_service.get_realtime_quote 的出口语义（五档盘口接口依赖5档list）。
+    list 首档为 None/空 → 返回 0（无盘口，由调用方走 price 分支或显'等待数据'）。"""
+    if isinstance(v, (list, tuple)) and v:
+        return float(v[0]) if v[0] is not None else 0
+    return v
+
+
 def _normalize_empty_symbol(val) -> str:
     """DB/配置中常用 '-' / None / 空串 表示"无值"，归一为空串，避免哨兵值被当真实 symbol 路由。
     [2026-07-29] 含中文/全角等非 ASCII 字符的（如 related_index 的 '中小100'/'中证500'）也不是可路由
@@ -1832,10 +1842,14 @@ class FundService:
                                             continue
                                         q = self.market_data_service.get_realtime_quote(sym_base)
                                         # [AI-2026-07-20] 实时估值必须用买一价 bid，禁止用成交价 price（见 AGENTS.md 7.3.4）
-                                        if q and q.get('bid') and q['bid'] > 0:
-                                            current_etfs[sym_base] = q['bid']
-                                        elif q and q.get('price'):
-                                            current_etfs[sym_base] = q['price']
+                                        # [AI-2026-08-17] A股源 bid 为5档list，IB/FUTU 为标量 → 统一取买一价标量（bid[0]）
+                                        if q:
+                                            _q_bid = _scalar_level(q.get('bid'))
+                                            _q_price = q.get('price')
+                                            if _q_bid and _q_bid > 0:
+                                                current_etfs[sym_base] = _q_bid
+                                            elif _q_price:
+                                                current_etfs[sym_base] = _q_price
                                     # [2026-07-30 FIX] 实时估值必须每个"去重基准标的"都有活价：
                                     # 区域后缀(^GLD-EU 等)会折叠到基础代码(GL D)取价，current_etfs 的 key 数恒等于去重基准数，
                                     # 故按"去重基准数"而非组合长度判定；否则含区域后缀的基金会因 key 数永远少于 portfolio 长度
@@ -2724,8 +2738,9 @@ class FundService:
                     if q:
                         return sym, {
                             'price': q.get('price'),
-                            'bid': q.get('bid'),
-                            'ask': q.get('ask'),
+                            # [AI-2026-08-17] realtime_quotes 透传：A股源 bid/ask 为5档list，估值路径统一取买一/卖一标量
+                            'bid': _scalar_level(q.get('bid')),
+                            'ask': _scalar_level(q.get('ask')),
                             'bid_size': q.get('bid_size', 0),
                             'ask_size': q.get('ask_size', 0),
                             'source': q.get('source', '')
@@ -2876,6 +2891,28 @@ class FundService:
             if base_data:
                 import numpy as np
                 for k, v in base_data.items():
+                    # [AI-2026-08-17] 防御: base_data 偶发含 numpy array / pandas Series
+                    # (如 164824 某些字段)，pd.isna(array) 会返回布尔数组，直接 if 判断即抛
+                    # "truth value of an array is ambiguous"。先降维为标量或 list 再格式化，
+                    # 避免整个 valuation_meta 崩溃导致该基金盘口全显示"等待行情"。
+                    # [AI-2026-08-17] 普通 list/tuple（如 _basket 篮子权威注入）直接保留，
+                    # 不进 pd.isna 判真值（这正是 164824 报错根因：`pd.isna(list)` 返回数组）；
+                    # list 本身 JSON 可序列化，原样传给前端即可。
+                    if isinstance(v, (list, tuple)):
+                        formatted_base_data[k] = list(v)
+                        continue
+                    if isinstance(v, (np.ndarray, pd.Series)):
+                        try:
+                            if getattr(v, 'size', 0) == 1:
+                                v = v.item()
+                            else:
+                                formatted_base_data[k] = [
+                                    None if pd.isna(x) else (float(x) if isinstance(x, (np.integer, np.floating, float, int)) else str(x))
+                                    for x in v
+                                ]
+                                continue
+                        except Exception:
+                            v = str(v)
                     if pd.isna(v):
                         formatted_base_data[k] = None
                     elif isinstance(v, (np.integer, int)):

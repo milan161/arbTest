@@ -15,10 +15,6 @@
             <template #icon><n-icon><Plus /></n-icon></template>
             交易记录
           </n-button>
-          <n-button type="info" @click="showImportModal = true">
-            <template #icon><n-icon><Upload /></n-icon></template>
-            导入Excel
-          </n-button>
           <n-button secondary type="warning" @click="showFeeModal = true">
             <template #icon><n-icon><Settings /></n-icon></template>
             赎回费率
@@ -27,133 +23,138 @@
       </div>
     </n-card>
 
-    <!-- [AI-2026-08-15] 总结性信息前置：统计概览 + 主账本列表 -->
+    <!-- [AI-2026-08-16] 赎回提醒横幅：OPEN 笔推算可优惠赎回日 + unfinished 待净值 -->
+    <div v-if="alerts" class="mb-4">
+      <n-alert
+        v-for="(a, i) in alerts.open_alerts"
+        :key="'o' + a.id"
+        :type="a.level === 'critical' ? 'error' : (a.level === 'warning' ? 'warning' : (a.level === 'notice' ? 'warning' : 'info'))"
+        :title="`${a.fund_name}（${a.fund_code}）`"
+        class="mb-2 alert-item"
+        :show-icon="true"
+      >
+        <div class="alert-body">
+          <span class="alert-msg">{{ a.message }}</span>
+          <span class="alert-meta">赎回 LOF {{ a.buy_volume }} 份 ｜ 买平 ETF {{ a.short_volume }} 股</span>
+        </div>
+      </n-alert>
+      <n-alert
+        v-for="(a, i) in alerts.unfinished_alerts"
+        :key="'u' + a.id"
+        type="warning"
+        :title="`${a.fund_name}（${a.fund_code}）`"
+        class="mb-2 alert-item"
+        :show-icon="true"
+      >
+        <div class="alert-body">
+          <span class="alert-msg">{{ a.message }}</span>
+          <span class="alert-meta">买入 {{ a.buy_date }} ｜ 赎回 {{ a.sell_date }}</span>
+        </div>
+      </n-alert>
+      <n-alert
+        v-if="alerts.open_count === 0 && alerts.unfinished_count === 0"
+        type="success"
+        title="暂无待处理项"
+        :show-icon="true"
+      >
+        当前没有未赎回（OPEN）或已赎回待净值的配对。
+      </n-alert>
+    </div>
+
+    <!-- 统计概览 -->
     <n-card class="shadow-soft mb-4">
       <n-grid :cols="24" :x-gap="12">
-        <n-gi :span="6">
-          <div class="stat-card">
-            <div class="stat-label">活跃套利</div>
-            <div class="stat-value">{{ activePairs.length }}</div>
-          </div>
-        </n-gi>
-        <n-gi :span="6">
-          <div class="stat-card">
-            <div class="stat-label">已结项</div>
-            <div class="stat-value">{{ closedPairs.length }}</div>
-          </div>
-        </n-gi>
-        <n-gi :span="6">
+        <n-gi :span="4">
           <div class="stat-card">
             <div class="stat-label">总盈亏(RMB)</div>
             <div class="stat-value" :class="totalPnl >= 0 ? 'text-green' : 'text-red'">{{ totalPnl.toFixed(2) }}</div>
           </div>
         </n-gi>
-        <n-gi :span="6">
+        <n-gi :span="4">
           <div class="stat-card">
-            <div class="stat-label">总盈亏(USD)</div>
+            <div class="stat-label">A股总盈亏</div>
+            <div class="stat-value" :class="totalASharePnl >= 0 ? 'text-green' : 'text-red'">{{ Math.round(totalASharePnl).toLocaleString() }}</div>
+          </div>
+        </n-gi>
+        <n-gi :span="4">
+          <div class="stat-card">
+            <div class="stat-label">美股总盈亏(USD)</div>
             <div class="stat-value" :class="totalUsd >= 0 ? 'text-green' : 'text-red'">{{ totalUsd.toFixed(2) }}</div>
+          </div>
+        </n-gi>
+        <n-gi :span="4">
+          <div class="stat-card">
+            <div class="stat-label">未赎回 (OPEN)</div>
+            <div class="stat-value" :class="openPairs.length ? 'text-red' : ''">{{ openPairs.length }}</div>
+          </div>
+        </n-gi>
+        <n-gi :span="4">
+          <div class="stat-card">
+            <div class="stat-label">已赎回待净值</div>
+            <div class="stat-value" :class="unfinishedPairs.length ? 'text-orange' : ''">{{ unfinishedPairs.length }}</div>
+          </div>
+        </n-gi>
+        <n-gi :span="4">
+          <div class="stat-card">
+            <div class="stat-label">已结项</div>
+            <div class="stat-value text-green">{{ settledCount }}</div>
           </div>
         </n-gi>
       </n-grid>
     </n-card>
 
+    <!-- 套利账本（按状态分页签） -->
     <n-card :bordered="false" class="shadow-soft mb-4">
       <n-tabs type="line" animated>
-        <n-tab-pane name="active" tab="活跃持仓">
-          <n-data-table
-            :columns="pairColumns"
-            :data="activePairs"
-            size="small"
-            bordered
-            :row-class-name="pnlRowClass"
-            :max-height="600"
-            :scroll-x="1400"
-          />
+        <n-tab-pane name="open" :tab="`持仓未赎回 (${openPairs.length})`">
+          <n-data-table :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1500" />
         </n-tab-pane>
-        <n-tab-pane name="closed" tab="已结项">
-          <n-data-table
-            :columns="pairColumns"
-            :data="closedPairs"
-            size="small"
-            bordered
-            :max-height="600"
-            :scroll-x="1400"
-          />
+        <n-tab-pane name="unfinished" :tab="`已赎回待净值 (${unfinishedPairs.length})`">
+          <n-data-table :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1500" />
+        </n-tab-pane>
+        <n-tab-pane name="settled" :tab="`已结项 (${settledPairs.length})`">
+          <n-data-table :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1500" />
         </n-tab-pane>
       </n-tabs>
     </n-card>
 
-    <!-- [AI-2026-08-15] 套利配对对账（手动勾选4腿配对） -->
-    <n-card class="shadow-soft mb-4" title="套利配对对账">
-      <n-space justify="space-between" class="mb-2">
-        <n-text depth="3" style="font-size:12px;">勾选「LOF买 + LOF赎 + ETF空 + ETF平」4条腿（可缺腿），点「配对」程序自动算收益</n-text>
-        <n-input v-model:value="filterCode" placeholder="代码/标的(自动联动对冲 ETF): 162411 / XOP / 164701 / GLD" clearable size="small" style="width:260px;" />
+    <!-- [AI-2026-08-16] 导入 V7 账本：从 Excel 一键导入（upsert，不影响程序内手动录入） -->
+    <n-card class="shadow-soft mb-4">
+      <n-space justify="space-between" align="center">
+        <n-space align="center">
+          <n-button type="primary" :loading="importing" @click="triggerImport">
+            <template #icon><n-icon><Upload /></n-icon></template>
+            导入 V7 账本
+          </n-button>
+          <n-text depth="3">从 Excel 套利账本导入（新增/更新，不删除已有记录）</n-text>
+        </n-space>
+        <n-tag v-if="importResult" :type="importResult.ok ? 'success' : 'error'">
+          新增 {{ importResult.inserted }} · 更新 {{ importResult.updated }} · 跳过 {{ importResult.skipped }}
+        </n-tag>
       </n-space>
+      <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="onFileChange" />
+    </n-card>
+
+    <!-- [AI-2026-08-16] 套利配对对账：直接展示 v7 干净账本数据（按状态着色，可编辑） -->
+    <n-card class="shadow-soft mb-4" title="套利配对对账（全部）">
+      <div class="flex-between mb-3 ledger-filter">
+        <n-space>
+          <n-input v-model:value="searchCode" placeholder="基金代码筛选，如 164701" clearable style="width: 220px" />
+          <n-select v-model:value="searchMonth" :options="monthOptions" placeholder="开仓月份" clearable style="width: 160px" />
+        </n-space>
+        <n-text depth="3">共 {{ filteredAllPairs.length }} 条</n-text>
+      </div>
       <n-data-table
-        :columns="unpairedColumns"
-        :data="filteredUnpaired"
-        :row-key="(r:any)=>r.key"
+        class="ledger-table"
+        :columns="pairColumns"
+        :data="filteredAllPairs"
         size="small"
-        :bordered="false"
-        :max-height="360"
+        bordered
+        :row-class-name="pnlRowClass"
+        :max-height="700"
+        :scroll-x="1500"
         :pagination="{ pageSize: 20 }"
-        v-model:checked-row-keys="selectedLegKeys"
       />
-      <n-space class="mt-2">
-        <n-button type="primary" @click="handleMatchPair" :loading="matching" :disabled="selectedLegKeys.length === 0">
-          配对这一轮（已选 {{ selectedLegKeys.length }} 条腿）
-        </n-button>
-      </n-space>
-      <n-divider>已配对</n-divider>
-      <n-space justify="space-between" class="mb-2">
-        <n-text depth="3" style="font-size:12px;">共 {{ matchedPairs.length }} 条</n-text>
-        <n-button size="tiny" quaternary @click="loadMatchedPairs" :loading="loadingMatched">
-          <template #icon><n-icon><RefreshCw /></n-icon></template>
-          刷新
-        </n-button>
-      </n-space>
-      <n-data-table :columns="matchedColumns" :data="matchedPairs" size="small" :bordered="false" :pagination="{ pageSize: 20 }" />
-    </n-card>
-
-    <!-- [AI-2026-08-15] IB 真实成交流水（解析网页导出CSV，替代手动 Excel） -->
-    <n-card class="shadow-soft mb-4" title="IB 真实成交流水（解析网页导出CSV，替代手动 Excel）">
-      <template #header-extra>
-        <n-button secondary type="primary" size="small" @click="handleSyncIb" :loading="syncingIb">
-          <template #icon><n-icon><Download /></n-icon></template>
-          从IB同步成交
-        </n-button>
-      </template>
-      <n-text depth="3" style="font-size:12px; display:block; margin-bottom:8px;">盈透API无法查历史，请把 IB 网页导出的「活动账单 CSV」放入 D:/Study/arbTest/ArbDashboard/data/TransactionRecord 后点右上角按钮同步</n-text>
-      <n-data-table :columns="ibColumns" :data="ibExecutions" :loading="syncingIb" :bordered="false" size="small" :pagination="{ pageSize: 20 }" />
-    </n-card>
-
-    <!-- [AI-2026-08-15] 华宝(通达信)成交流水（解析导出的txt，替代手动Excel） -->
-    <n-card class="shadow-soft mb-4" title="华宝(通达信)成交流水（解析导出txt，替代手动Excel）">
-      <n-space justify="space-between" class="mb-2">
-        <n-space>
-          <n-input v-model:value="tdxCodeFilter" placeholder="基金代码(默认162411)" style="width:170px;" />
-          <n-button secondary type="primary" @click="handleSyncTdx" :loading="syncingTdx">
-            <template #icon><n-icon><Download /></n-icon></template>
-            从华宝导出同步
-          </n-button>
-          <n-text depth="3" style="font-size:12px;">输入基金代码后同步，只导入该代码的成交（防无关交易入库）；txt 放 D:/Study/arbTest/ArbDashboard/data/TransactionRecord</n-text>
-        </n-space>
-      </n-space>
-      <n-data-table :columns="tdxColumns" :data="tdxExecutions" :loading="syncingTdx" :bordered="false" size="small" :pagination="{ pageSize: 20 }" />
-    </n-card>
-
-    <!-- [AI-2026-08-15] 银河QMT历史成交流水（通达信导出txt解析，与华宝同套路） -->
-    <n-card class="shadow-soft mb-4" title="银河(通达信)成交流水（解析导出txt，替代手动Excel）">
-      <n-space justify="space-between" class="mb-2">
-        <n-space>
-          <n-button secondary type="primary" @click="handleSyncQmt" :loading="syncingQmt">
-            <template #icon><n-icon><Download /></n-icon></template>
-            从银河导出同步
-          </n-button>
-          <n-text depth="3" style="font-size:12px;">在通达信导出银河账户历史成交（文件名含'银河'）放入 D:/Study/arbTest/ArbDashboard/data/TransactionRecord 后点此同步</n-text>
-        </n-space>
-      </n-space>
-      <n-data-table :columns="qmtColumns" :data="qmtExecutions" :loading="syncingQmt" :bordered="false" size="small" :pagination="{ pageSize: 20 }" />
     </n-card>
 
     <!-- 录入/编辑 弹窗 -->
@@ -173,7 +174,7 @@
           </n-gi>
           <n-gi>
             <n-form-item label="状态">
-              <n-select v-model:value="form.status" :options="[{label:'持仓中',value:'ACTIVE'},{label:'已结项',value:'CLOSED'}]" />
+              <n-select v-model:value="form.status" :options="statusOptions" />
             </n-form-item>
           </n-gi>
         </n-grid>
@@ -352,178 +353,98 @@
         <n-data-table :columns="feeColumns" :data="fees" :loading="loadingFees" :bordered="false" size="small" />
       </div>
     </n-modal>
-
-    <!-- Excel导入弹窗 -->
-    <n-modal v-model:show="showImportModal" preset="card" title="导入Excel账本" style="width: 800px; max-width: 98vw;">
-      <div class="flex flex-col gap-4">
-        <div v-if="!importPreview">
-          <n-upload
-            accept=".xlsx,.xls"
-            :max="1"
-            @change="handleFileUpload"
-            :file-list="importFileList"
-          >
-            <n-button type="info">选择Excel文件</n-button>
-          </n-upload>
-          <div style="margin-top: 12px; font-size: 12px; color: #666;">
-            支持格式: 交易日期 | 金额 | 单价 | 数量 | 赎回日期 | 备注 | 对冲数量 | 对冲价格 | 盈亏
-          </div>
-        </div>
-        
-        <div v-else>
-          <n-alert type="info" style="margin-bottom: 12px;">
-            解析到 <strong>{{ importPreview.length }}</strong> 笔交易记录，请确认后导入
-          </n-alert>
-          <n-data-table
-            :columns="importColumns"
-            :data="importPreview"
-            size="small"
-            bordered
-            :max-height="400"
-          />
-        </div>
-      </div>
-      <template #action>
-        <n-space>
-          <n-button @click="cancelImport">取消</n-button>
-          <n-button v-if="importPreview" type="warning" @click="importPreview = null">重新选择</n-button>
-          <n-button v-if="importPreview" type="primary" @click="confirmImport" :loading="importing">
-            确认导入 ({{ importPreview.length }}笔)
-          </n-button>
-        </n-space>
-      </template>
-    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, h } from 'vue'
+import { ref, onMounted, computed, h, watch } from 'vue'
 import {
   NCard, NGrid, NGi, NTag, NButton, NDataTable, NIcon,
   useMessage, NSpace, NText, NTabs, NTabPane, NModal, NForm, NFormItem,
-  NInput, NInputNumber, NDatePicker, NDivider, NSelect
+  NInput, NInputNumber, NDatePicker, NDivider, NSelect, NAlert
 } from 'naive-ui'
-import { BookOpen, Plus, RefreshCw, Settings, Edit3, DollarSign, TrendingUp, TrendingDown, Upload, Download } from 'lucide-vue-next'
+import { BookOpen, Plus, Settings, Edit3, TrendingUp, TrendingDown, Upload } from 'lucide-vue-next'
 import {
-  getPairs, addPair, updatePair, deletePair, syncIbExecutions, getIbExecutions,
-  syncTdxExecutions, getTdxExecutions,
-  getBrokerFees, addBrokerFee, deleteBrokerFee,
-  importExcelPreview, confirmExcelImport
+  getPairs, addPair, updatePair, deletePair,
+  getBrokerFees, addBrokerFee, deleteBrokerFee
 } from '../api'
-import { getFeeRate, syncQmtExecutions, getQmtExecutions, getUnpairedTrades, matchPair, getMatchedPairs, unmatchPair } from '../api/ledgerApi'
+import { getFeeRate, getLedgerAlerts, importV7Ledger } from '../api/ledgerApi'
 import client from '../api/client'
 
 const message = useMessage()
 const allPairs = ref<any[]>([])
 const showAddModal = ref(false)
 const showFeeModal = ref(false)
-const showImportModal = ref(false)
 const isEditing = ref(false)
 const editingId = ref<number | null>(null)
 const loading = ref(false)
 
-// [AI-2026-08-15] IB 真实成交流水（解析网页导出CSV，替代手动 Excel）
-const ibExecutions = ref<any[]>([])
-const syncingIb = ref(false)
-
-// [AI-2026-08-15] 华宝(通达信)成交流水（解析导出的txt，替代手动Excel）
-const tdxCodeFilter = ref('162411')
-const tdxExecutions = ref<any[]>([])
-
-// [AI-2026-08-15] 银河QMT历史成交流水（通达信导出txt解析，与华宝同套路）
-const qmtExecutions = ref<any[]>([])
-const syncingQmt = ref(false)
-const syncingTdx = ref(false)
-
-// [AI-2026-08-15] 套利配对对账
-const unpairedTrades = ref<any[]>([])
-const matchedPairs = ref<any[]>([])
-const selectedLegKeys = ref<string[]>([])
-const matching = ref(false)
-const loadingMatched = ref(false)
-const filterCode = ref('')
-const filteredUnpaired = computed(() => {
-  if (!filterCode.value.trim()) return unpairedTrades.value
-  const kws = expandRelated(filterCode.value.trim())
-  return unpairedTrades.value.filter(t => kws.some(kw => String(t.code || '').toUpperCase().includes(kw)))
+// [AI-2026-08-16] 全部对账卡筛选：基金代码 + 开仓月份
+const searchCode = ref('')
+const searchMonth = ref<string | null>(null)
+const monthOptions = computed(() => {
+  const set = new Set<string>()
+  for (const p of allPairs.value) {
+    if (p.buy_date && typeof p.buy_date === 'string' && p.buy_date.length >= 7) {
+      set.add(p.buy_date.slice(0, 7))
+    }
+  }
+  return Array.from(set).sort().reverse().map(m => ({ label: m, value: m }))
+})
+const filteredAllPairs = computed(() => {
+  const code = searchCode.value.trim().toLowerCase()
+  const month = searchMonth.value
+  return allPairs.value.filter(p => {
+    if (code && !(p.fund_code || '').toLowerCase().includes(code)) return false
+    if (month && !(p.buy_date || '').startsWith(month)) return false
+    return true
+  })
 })
 
-// Excel Import state
-const importPreview = ref<any[] | null>(null)
-const importFileList = ref<any[]>([])
+// [AI-2026-08-16] 导入 V7 账本：上传 Excel → 后端解析 upsert
 const importing = ref(false)
-
-const importColumns = [
-  { title: '买入日期', key: 'buy_date', width: 100 },
-  { title: '买入价', key: 'buy_price', width: 80, render: (r: any) => r.buy_price?.toFixed(4) || '-' },
-  { title: '数量', key: 'buy_volume', width: 80 },
-  { title: '赎回日期', key: 'sell_date', width: 100 },
-  { title: '赎回价', key: 'sell_price', width: 80, render: (r: any) => r.sell_price?.toFixed(4) || '-' },
-  { title: '对冲', key: 'hedge_symbol', width: 60 },
-  { title: '空头数量', key: 'short_qty', width: 80 },
-  { title: '空头价', key: 'short_price', width: 80, render: (r: any) => r.short_price?.toFixed(2) || '-' },
-  { title: '盈亏(RMB)', key: 'pnl_rmb', width: 100, render: (r: any) => h(NText, { type: r.pnl_rmb >= 0 ? 'success' : 'error', strong: true }, { default: () => r.pnl_rmb?.toFixed(2) || '-' }) },
-  { title: '状态', key: 'status', width: 80, render: (r: any) => h(NTag, { type: r.status === 'CLOSED' ? 'success' : 'warning', size: 'small' }, { default: () => r.status }) },
-]
-
-const handleFileUpload = async (options: any) => {
-  const file = options.file?.file
+const importResult = ref<{ ok: boolean; inserted: number; updated: number; skipped: number } | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
+const triggerImport = () => fileInput.value?.click()
+const onFileChange = async (e: Event) => {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
   if (!file) return
-  
-  // For now, use a hardcoded path - in production, upload to server first
-  // This is a simplified version that reads from local path
-  message.info('正在解析Excel文件...')
-  
-  try {
-    // In a real app, we'd upload the file first
-    // For now, we'll use the file name and let the backend handle it
-    const res = await importExcelPreview(file.name)
-    if (res.data.status === 'ok') {
-      importPreview.value = res.data.data
-      message.success(`解析完成，共 ${res.data.total} 笔交易`)
-    } else {
-      message.error('解析失败: ' + (res.data.message || '未知错误'))
-    }
-  } catch (e: any) {
-    message.error('解析异常: ' + (e.message || e))
-  }
-}
-
-const cancelImport = () => {
-  showImportModal.value = false
-  importPreview.value = null
-  importFileList.value = []
-}
-
-const confirmImport = async () => {
-  if (!importPreview.value) return
   importing.value = true
+  importResult.value = null
   try {
-    const res = await confirmExcelImport(importPreview.value)
-    if (res.data.status === 'ok') {
-      message.success(`成功导入 ${res.data.imported} 笔交易`)
-      cancelImport()
-      fetchPairs()
+    const res = await importV7Ledger(file)
+    const data = res.data
+    if (data?.status === 'ok') {
+      const r = data.data || {}
+      importResult.value = { ok: true, inserted: r.inserted || 0, updated: r.updated || 0, skipped: r.skipped || 0 }
+      await fetchPairs()
+      message.success(`导入完成：新增 ${r.inserted} · 更新 ${r.updated} · 跳过 ${r.skipped}`)
     } else {
-      message.error('导入失败')
+      importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
+      message.error('导入失败：' + (data?.message || '未知错误'))
     }
-  } catch (e: any) {
-    message.error('导入异常: ' + (e.message || e))
+  } catch (err: any) {
+    importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
+    message.error('导入异常：' + (err?.message || err))
   } finally {
     importing.value = false
+    if (target) target.value = ''
   }
 }
 
-// ===== Computed =====
-const activePairs = computed(() => allPairs.value.filter(p => p.status === 'ACTIVE'))
-const closedPairs = computed(() => allPairs.value.filter(p => p.status === 'CLOSED'))
+// [AI-2026-08-16] 赎回提醒
+const alerts = ref<any>(null)
 
-const totalPnl = computed(() => {
-  return allPairs.value.reduce((s, p) => s + (p.pnl_rmb || 0), 0)
-})
-const totalUsd = computed(() => {
-  return allPairs.value.reduce((s, p) => s + (p.pnl_usd || 0), 0)
-})
+// ===== Computed（按新状态分类：OPEN / unfinished / Closed / Final）=====
+const openPairs = computed(() => allPairs.value.filter(p => p.status === 'OPEN'))
+const unfinishedPairs = computed(() => allPairs.value.filter(p => p.status === 'unfinished'))
+const settledPairs = computed(() => allPairs.value.filter(p => p.status === 'Closed'))
+const settledCount = computed(() => settledPairs.value.length)
+
+const totalPnl = computed(() => settledPairs.value.reduce((s, p) => s + (p.pnl_rmb || 0), 0))
+const totalUsd = computed(() => settledPairs.value.reduce((s, p) => s + (p.pnl_usd || 0), 0))
+const totalASharePnl = computed(() => settledPairs.value.reduce((s, p) => s + (p.a_share_pnl || 0), 0))
 
 // ===== Fund options for select =====
 const fundList = [
@@ -540,13 +461,20 @@ const fundSelectOptions = computed(() =>
   fundList.map(f => ({ label: `${f.code} ${f.name}`, value: f.code }))
 )
 
+// 状态选项（与 v7 口径一致）
+const statusOptions = [
+  { label: '未赎回 (OPEN)', value: 'OPEN' },
+  { label: '已赎回待净值 (unfinished)', value: 'unfinished' },
+  { label: '结项 (已结项)', value: 'Closed' },
+]
+
 // ===== Form =====
 const defaultForm = () => ({
   fund_code: '162411',
   fund_name: '华宝油气',
   broker_name: '银河',
   close_type: 'REDEEM',
-  status: 'ACTIVE',
+  status: 'OPEN',
   buy_ts: Date.now(),
   buy_price: 0,
   buy_volume: 0,
@@ -574,14 +502,14 @@ const form = ref(defaultForm())
 const onFundChange = async (val: string) => {
   const found = fundList.find(f => f.code === val)
   if (found) form.value.fund_name = found.name
-  // 自动填入昨日收盘价
+  // 券商自动填充：162411 华宝油气走华宝，其余默认银河
+  form.value.broker_name = val === '162411' ? '华宝' : '银河'
   try {
     const res = await client.get(`/api/market/prev-close/${val}`)
     if (res.data?.status === 'ok' && res.data.price > 0) {
       form.value.buy_price = res.data.price
     }
   } catch {}
-  // 自动关联赎回费率
   refreshFeeRate()
 }
 
@@ -603,6 +531,7 @@ const refreshFeeRate = async () => {
 }
 
 const autoFeeRate = ref(0)
+const usdRate = ref(0)  // 实时 USD/CNY 汇率，从后端获取
 
 const computedAPnl = computed(() => {
   const buyAmt = form.value.buy_amount || 0
@@ -620,17 +549,15 @@ const computedUPnl = computed(() => {
 })
 const computedPnlRmb = computed(() => {
   if (!computedAPnl.value && !computedUPnl.value) return null
-  return computedAPnl.value + computedUPnl.value * 7.2
+  // 汇率从后端实时获取，不再硬编码（旧值 7.2 偏高 ~6%）
+  return computedAPnl.value + computedUPnl.value * (usdRate.value || 6.79)
 })
 
-// 自动计算买入/卖出金额
+// 自动计算金额（当价格或数量变化时）
 const safeComputed = (a: number, b: number) => {
   if (a > 0 && b > 0) return +(a * b).toFixed(2)
   return 0
 }
-
-// 自动计算金额（当价格或数量变化时）
-import { watch } from 'vue'
 
 watch(() => [form.value.buy_price, form.value.buy_volume], () => {
   if (form.value.buy_price > 0 && form.value.buy_volume > 0) {
@@ -652,7 +579,6 @@ watch(() => [form.value.cover_price, form.value.short_volume], () => {
     form.value.cover_amount = +(form.value.cover_price * form.value.short_volume).toFixed(2)
   }
 })
-// 当卖出金额变化时自动计算赎回费
 watch(() => [form.value.sell_amount, form.value.close_type, autoFeeRate.value], () => {
   if (form.value.close_type === 'REDEEM' && form.value.sell_amount > 0 && autoFeeRate.value > 0) {
     form.value.redemption_fee = +(form.value.sell_amount * autoFeeRate.value / 100).toFixed(2)
@@ -669,6 +595,20 @@ const fetchPairs = async () => {
   finally { loading.value = false }
 }
 
+const loadAlerts = async () => {
+  try {
+    const res = await getLedgerAlerts()
+    if (res.data?.status === 'ok') alerts.value = res.data.data
+  } catch (e) { /* ignore */ }
+}
+
+const fetchUsdRate = async () => {
+  try {
+    const res = await client.get('/api/exchange-rate')
+    if (res.data?.status === 'ok' && res.data.rate > 0) usdRate.value = res.data.rate
+  } catch (e) { /* keep fallback */ }
+}
+
 const openAddModal = (pair?: any) => {
   if (pair) {
     isEditing.value = true
@@ -678,7 +618,7 @@ const openAddModal = (pair?: any) => {
       fund_name: pair.fund_name || '',
       broker_name: pair.broker_name || '',
       close_type: pair.close_type || 'REDEEM',
-      status: pair.status || 'ACTIVE',
+      status: pair.status || 'OPEN',
       buy_ts: pair.buy_date ? new Date(pair.buy_date).getTime() : Date.now(),
       buy_price: pair.buy_price || 0,
       buy_volume: pair.buy_volume || 0,
@@ -751,6 +691,7 @@ const handleSubmit = async () => {
     }
     showAddModal.value = false
     fetchPairs()
+    loadAlerts()
   } catch (e) {
     message.error('保存失败')
   }
@@ -761,82 +702,17 @@ const handleDelete = async (id: number) => {
     await deletePair(id)
     message.success('已删除')
     fetchPairs()
+    loadAlerts()
   } catch (e) { message.error('删除失败') }
 }
 
 const handleClose = async (id: number) => {
   try {
-    await updatePair(id, { status: 'CLOSED' })
+    await updatePair(id, { status: 'Closed' })
     message.success('已标记结项')
     fetchPairs()
+    loadAlerts()
   } catch (e) { message.error('操作失败') }
-}
-
-// [AI-2026-08-15] IB 真实成交同步（解析网页导出CSV，替代手动 Excel 记录）
-const handleSyncIb = async () => {
-  syncingIb.value = true
-  try {
-    const res = await syncIbExecutions()
-    if (res.data?.ok) {
-      message.success(`已从 IB 账单 CSV 同步 ${res.data.count} 笔成交（文件 ${res.data.file}）`)
-      await loadIbExecutions()
-    } else {
-      message.error(res.data?.error || '同步失败')
-    }
-  } catch (e) { message.error('IB 同步失败: ' + (e?.response?.data?.error || e?.message || '')) }
-  finally { syncingIb.value = false }
-}
-
-const loadIbExecutions = async () => {
-  try {
-    const res = await getIbExecutions(0)   // 0 = 不过滤，展示全部
-    if (res.data?.ok) ibExecutions.value = res.data.data || []
-  } catch (e) { /* ignore */ }
-}
-
-// [AI-2026-08-15] 银河QMT历史成交同步（解析通达信导出的银河txt，与华宝同套路）
-const handleSyncQmt = async () => {
-  syncingQmt.value = true
-  try {
-    const res = await syncQmtExecutions()
-    if (res.data?.ok) {
-      message.success(`已从银河导出同步 ${res.data.count} 笔成交（文件 ${res.data.file}）`)
-      await loadQmtExecutions()
-    } else {
-      message.error(res.data?.error || '同步失败')
-    }
-  } catch (e) { message.error('银河同步失败: ' + (e?.response?.data?.error || e?.message || '')) }
-  finally { syncingQmt.value = false }
-}
-
-const loadQmtExecutions = async () => {
-  try {
-    const res = await getQmtExecutions()
-    if (res.data?.ok) qmtExecutions.value = res.data.data || []
-  } catch (e) { /* ignore */ }
-}
-
-const handleSyncTdx = async () => {
-  syncingTdx.value = true
-  try {
-    const code = (tdxCodeFilter.value || '').trim()
-    const res = await syncTdxExecutions(code || undefined)
-    if (res.data?.ok) {
-      message.success(`华宝成交已同步：${res.data.count} 笔（文件 ${res.data.file}，过滤 ${res.data.filter}）`)
-      await loadTdxExecutions()
-    } else {
-      message.error(res.data?.error || '同步失败')
-    }
-  } catch (e) { message.error('华宝同步失败: ' + (e?.response?.data?.error || e?.message || '')) }
-  finally { syncingTdx.value = false }
-}
-
-const loadTdxExecutions = async () => {
-  try {
-    // 源头导入已过滤（默认只入 162411），展示即全部已导入数据
-    const res = await getTdxExecutions()
-    if (res.data?.ok) tdxExecutions.value = res.data.data || []
-  } catch (e) { /* ignore */ }
 }
 
 // ===== Table columns =====
@@ -848,252 +724,93 @@ const pnlRowClass = (row: any) => {
 const fmt = (v: any, d: number = 2) => v !== null && v !== undefined && v !== 0 ? Number(v).toFixed(d) : '-'
 const shortDate = (d: string) => d ? d.substring(5) : '-'
 
-const ibColumns = [
-  { title: '日期', key: 'local_date', width: 100,
-    render: (r: any) => r.local_date || (r.trade_time ? shortDate(r.trade_time) : '-') },
-  { title: '标的', key: 'symbol', width: 80 },
-  { title: '方向', key: 'side', width: 60, align: 'center' as const,
-    render: (r: any) => {
-      const s = (r.side || '').toUpperCase()
-      if (s === 'BUY' || s === 'BOT') return '买'
-      if (s === 'SELL' || s === 'SLD') return '卖'
-      return r.side || '-'
-    } },
-  { title: '数量', key: 'shares', width: 90, align: 'right' as const,
-    render: (r: any) => r.shares ? Number(r.shares).toLocaleString() : '-' },
-  { title: '价格', key: 'price', width: 90, align: 'right' as const,
-    render: (r: any) => fmt(r.price, 2) },
-  { title: '手续费', key: 'commission', width: 90, align: 'right' as const,
-    render: (r: any) => fmt(r.commission, 2) },
-  { title: '账户', key: 'account', width: 120 },
-  { title: '成交时间', key: 'trade_time', width: 160 },
-]
-
-const tdxColumns = [
-  { title: '日期', key: 'trade_date', width: 100, render: (r: any) => r.trade_date || '-' },
-  { title: '时间', key: 'trade_time', width: 80 },
-  { title: '代码', key: 'code', width: 80 },
-  { title: '名称', key: 'name', width: 120 },
-  { title: '类别', key: 'category', width: 90,
-    render: (r: any) => {
-      const map: any = { BUY: '买', SELL: '卖', REDEEM: '赎回', SHORT: '融券', SHORT_COVER: '融券购回', ALLOT: '配号', OTHER: '其他' }
-      return map[r.side] || r.category || '-'
-    } },
-  { title: '数量', key: 'qty', width: 90, align: 'right' as const,
-    render: (r: any) => r.qty ? Number(r.qty).toLocaleString() : '-' },
-  { title: '价格', key: 'price', width: 90, align: 'right' as const, render: (r: any) => fmt(r.price, 4) },
-  { title: '金额', key: 'amount', width: 110, align: 'right' as const, render: (r: any) => fmt(r.amount, 2) },
-  { title: '总费', key: 'total_fee', width: 90, align: 'right' as const, render: (r: any) => fmt(r.total_fee, 2) },
-  { title: '股东代码', key: 'account', width: 110 },
-  { title: '成交编号', key: 'deal_no', width: 160, render: (r: any) => r.deal_no || '-' },
-]
-
-const qmtColumns = [
-  { title: '日期', key: 'trade_date', width: 100, render: (r: any) => r.trade_date || '-' },
-  { title: '时间', key: 'trade_time', width: 90 },
-  { title: '代码', key: 'code', width: 90 },
-  { title: '名称', key: 'name', width: 120 },
-  { title: '方向', key: 'side', width: 60, align: 'center' as const,
-    render: (r: any) => {
-      const s = (r.side || '').toUpperCase()
-      if (s === 'BUY') return '买'
-      if (s === 'SELL') return '卖'
-      return r.side || '-'
-    } },
-  { title: '数量', key: 'volume', width: 90, align: 'right' as const,
-    render: (r: any) => r.volume ? Number(r.volume).toLocaleString() : '-' },
-  { title: '价格', key: 'price', width: 90, align: 'right' as const, render: (r: any) => fmt(r.price, 3) },
-  { title: '金额', key: 'amount', width: 110, align: 'right' as const, render: (r: any) => fmt(r.amount, 2) },
-  { title: '费用', key: 'fee', width: 90, align: 'right' as const, render: (r: any) => fmt(r.fee, 2) },
-  { title: '账户', key: 'account', width: 120 },
-]
-
-// [AI-2026-08-15] 套利配对对账
-const sideLabel = (s: string) => ({ BUY: '买入', REDEEM: '赎回', SHORT: '做空', COVER: '平仓' } as any)[s] || s
-// 买入/做空=红(看涨/开仓)，赎回/平仓=绿(了结)
-const sideColor = (s: string) => ({ BUY: '#dc2626', REDEEM: '#16a34a', SHORT: '#dc2626', COVER: '#16a34a' } as any)[s] || ''
-const sideTag = (s: string) => h(NText, { strong: true, style: sideColor(s) ? { color: sideColor(s) } : {} }, { default: () => sideLabel(s) })
-const sourceLabel = (s: string) => ({ tdx: '华宝', qmt: '银河', ib: 'IB' } as any)[s] || s
-
-// [AI-2026-08-15] LOF↔ETF 对冲映射（输入 162411 自动展开 XOP 等）
-const LOF_ETF_MAP: Record<string, string[]> = { '162411': ['XOP'], '164701': ['GLD'], '164824': ['INDA'] }
-const expandRelated = (kw: string): string[] => {
-  const k = kw.toUpperCase()
-  if (LOF_ETF_MAP[k]) return [k, ...LOF_ETF_MAP[k]]
-  const lof = Object.keys(LOF_ETF_MAP).find(l => LOF_ETF_MAP[l].includes(k))
-  if (lof) return [lof, k]
-  return [k]
-}
-
-const unpairedColumns = [
-  { type: 'selection', width: 40 },
-  { title: '日期', key: 'trade_date', width: 68, render: (r: any) => shortDate(r.trade_date) },
-  { title: '来源', key: 'source', width: 54, render: (r: any) => sourceLabel(r.source) },
-  { title: '标的', key: 'code', width: 82 },
-  { title: '方向', key: 'side', width: 60, render: (r: any) => sideTag(r.side) },
-  { title: '数量', key: 'qty', width: 88, align: 'right' as const, render: (r: any) => r.qty ? Number(r.qty).toLocaleString() : '-' },
-  { title: '价格', key: 'price', width: 80, align: 'right' as const, render: (r: any) => fmt(r.price, 3) },
-  { title: '金额', key: 'amount', width: 100, align: 'right' as const, render: (r: any) => fmt(r.amount, 2) },
-  { title: '费用', key: 'fee', width: 76, align: 'right' as const, render: (r: any) => fmt(r.fee, 2) },
-]
-
 const statusTag = (s: string) => {
-  const map: any = { '已结': 'success', '未赎回': 'warning', '未对冲': 'error', '单边': 'default' }
-  return h(NTag, { type: map[s] || 'default', size: 'small' }, { default: () => s || '-' })
-}
-
-const legDetail = (date: any, price: any, qty: any, amount: any) => {
-  if (!date) return '-'
-  const q = qty ? Number(qty).toLocaleString() : '-'
-  const a = amount ? Number(amount).toFixed(2) : '-'
-  return h('div', { style: 'font-size:13px; line-height:1.5; white-space:nowrap; font-weight:600;' }, [
-    h('div', {}, `${shortDate(date)} @${price}`),
-    h('div', { style: 'color:#64748b; font-weight:500; font-size:12px;' }, `×${q} =${a}`),
-  ])
-}
-
-const matchedColumns = [
-  { title: '基金', key: 'fund_code', width: 78 },
-  { title: '买入', key: 'buy', width: 132,
-    render: (r: any) => legDetail(r.buy_date, r.buy_price, r.buy_volume, r.buy_amount) },
-  { title: '赎回', key: 'sell', width: 132,
-    render: (r: any) => legDetail(r.sell_date, r.sell_price, r.sell_volume, r.sell_amount) },
-  { title: '对冲', key: 'hedge_symbol', width: 62 },
-  { title: '做空', key: 'short', width: 132,
-    render: (r: any) => legDetail(r.short_date, r.short_price, r.short_volume, r.short_amount) },
-  { title: '平仓', key: 'cover', width: 132,
-    render: (r: any) => legDetail(r.cover_date, r.cover_price, r.cover_volume, r.cover_amount) },
-  { title: '总收益', key: 'pnl_rmb', width: 92, align: 'right' as const,
-    render: (r: any) => r.pnl_rmb != null ? h(NText, { strong: true, style: { color: r.pnl_rmb >= 0 ? '#16a34a' : '#dc2626' } }, { default: () => Number(r.pnl_rmb).toFixed(0) }) : '-' },
-  { title: '状态', key: 'status', width: 72, render: (r: any) => statusTag(r.status) },
-  { title: '', key: 'op', width: 56, render: (r: any) => h(NButton, { size: 'tiny', quaternary: true, onClick: () => handleUnmatch(r.id) }, { default: () => '撤销' }) },
-]
-
-const loadUnpairedTrades = async () => {
-  try {
-    const res = await getUnpairedTrades()
-    if (res.data?.ok) unpairedTrades.value = res.data.data || []
-    else console.error('getUnpairedTrades error', res.data)
-  } catch (e: any) {
-    console.error('loadUnpairedTrades failed:', e?.message || e, e?.response)
-    message.error('加载未配对失败: ' + (e?.response?.status || e?.message))
-  }
-}
-const loadMatchedPairs = async () => {
-  loadingMatched.value = true
-  try {
-    const res = await getMatchedPairs()
-    if (res.data?.ok) matchedPairs.value = res.data.data || []
-    else console.error('getMatchedPairs error', res.data)
-  } catch (e: any) {
-    console.error('loadMatchedPairs failed:', e?.message || e, e?.response)
-    message.error('加载已配对失败: ' + (e?.response?.status || e?.message))
-  }
-  finally { loadingMatched.value = false }
-}
-const handleMatchPair = async () => {
-  if (selectedLegKeys.value.length === 0) { message.warning('请先勾选腿'); return }
-  matching.value = true
-  try {
-    const res = await matchPair(selectedLegKeys.value, false)
-    if (res.data?.ok) {
-      message.success(`配对成功：收益 ${res.data.pnl_rmb} 元`)
-      selectedLegKeys.value = []
-      await loadUnpairedTrades(); await loadMatchedPairs()
-    } else if (res.data?.warning) {
-      if (window.confirm(res.data.warning + '\n\n仍然配对？')) {
-        const r2 = await matchPair(selectedLegKeys.value, true)
-        if (r2.data?.ok) {
-          message.success(`配对成功：收益 ${r2.data.pnl_rmb} 元`)
-          selectedLegKeys.value = []
-          await loadUnpairedTrades(); await loadMatchedPairs()
-        } else message.error(r2.data?.error || '配对失败')
-      }
-    } else {
-      message.error(res.data?.error || '配对失败')
-    }
-  } catch (e) { message.error('配对失败: ' + (e?.response?.data?.error || e?.message || '')) }
-  finally { matching.value = false }
-}
-const handleUnmatch = async (id: number) => {
-  try { const res = await unmatchPair(id); if (res.data?.ok) { message.success('已撤销'); await loadUnpairedTrades(); await loadMatchedPairs() } else message.error(res.data?.error) } catch (e) { /* ignore */ }
+  const map: any = { 'OPEN': 'error', 'unfinished': 'warning', 'Closed': 'success' }
+  const label: any = { 'OPEN': '未赎回', 'unfinished': '待净值', 'Closed': '结项' }
+  return h(NTag, { type: map[s] || 'default', size: 'small' }, { default: () => label[s] || s || '-' })
 }
 
 const pairColumns = [
-  { title: '基金', key: 'fund', width: 130, fixed: 'left' as const,
+  { title: '基金', key: 'fund', width: 72, fixed: 'left' as const,
     render: (r: any) => {
       const found = fundList.find(f => f.code === r.fund_code)
-      const label = found ? `${found.code} ${found.name}` : r.fund_code
-      return h(NText, { strong: true }, { default: () => label })
+      const code = found ? found.code : r.fund_code
+      const name = found ? found.name : ''
+      const children = [
+        h(NText, { strong: true, style: 'font-size:13px;' }, { default: () => code })
+      ]
+      if (name) children.push(h('div', { style: 'font-size:12px; color:#666; margin-top:2px; line-height:1.25;' }, name))
+      return h('div', { style: 'line-height:1.25; text-align:left; white-space:normal; word-break:break-all;' }, children)
     }
   },
-  // A股买入
-  { title: '买入日', key: 'buy_date', width: 70, align: 'center' as const,
+  { title: '状态', key: 'status', width: 48, align: 'center' as const,
+    render: (r: any) => statusTag(r.status) },
+  // A股开仓
+  { title: '开仓日', key: 'buy_date', width: 46, align: 'center' as const,
     render: (r: any) => r.buy_date ? shortDate(r.buy_date) : '-' },
-  { title: '买入价', key: 'buy_price', width: 70, align: 'center' as const,
+  { title: '开仓价', key: 'buy_price', width: 50, align: 'center' as const,
     render: (r: any) => fmt(r.buy_price, 3) },
-  { title: '数量', key: 'buy_volume', width: 70, align: 'center' as const,
+  { title: '数量', key: 'buy_volume', width: 52, align: 'center' as const,
     render: (r: any) => r.buy_volume ? Number(r.buy_volume).toLocaleString() : '-' },
-  { title: '金额(RMB)', key: 'buy_amount', width: 100, align: 'right' as const,
-    render: (r: any) => h(NText, { style: r.buy_amount ? 'color:#e53e3e' : '' }, { default: () => fmt(r.buy_amount) }) },
-  // A股卖出
-  { title: '卖出日', key: 'sell_date', width: 70, align: 'center' as const,
+  { title: '金额(RMB)', key: 'buy_amount', width: 62, align: 'right' as const,
+    render: (r: any) => h(NText, { style: r.buy_amount ? 'color:#e53e3e' : '' }, { default: () => fmt(r.buy_amount, 0) }) },
+  // A股平仓
+  { title: '平仓日', key: 'sell_date', width: 46, align: 'center' as const,
     render: (r: any) => r.sell_date ? shortDate(r.sell_date) : '-' },
-  { title: '卖出价', key: 'sell_price', width: 70, align: 'center' as const,
+  { title: '平仓价', key: 'sell_price', width: 50, align: 'center' as const,
     render: (r: any) => fmt(r.sell_price, 3) },
-  { title: '金额(RMB)', key: 'sell_amount', width: 100, align: 'right' as const,
-    render: (r: any) => h(NText, { style: r.sell_amount ? 'color:#16a34a' : '' }, { default: () => fmt(r.sell_amount) }) },
+  { title: '金额(RMB)', key: 'sell_amount', width: 62, align: 'right' as const,
+    render: (r: any) => h(NText, { style: r.sell_amount ? 'color:#16a34a' : '' }, { default: () => fmt(r.sell_amount, 0) }) },
   // 美股做空
-  { title: '对冲', key: 'hedge', width: 60, align: 'center' as const,
+  { title: '对冲', key: 'hedge', width: 40, align: 'center' as const,
     render: (r: any) => r.hedge_symbol || '-' },
-  { title: '空单价', key: 'short_price', width: 70, align: 'center' as const,
+  { title: '空单价', key: 'short_price', width: 68, align: 'center' as const,
     render: (r: any) => r.short_price ? `$${fmt(r.short_price)}` : '-' },
-  { title: '空单量', key: 'short_volume', width: 70, align: 'center' as const,
+  { title: '空单量', key: 'short_volume', width: 46, align: 'center' as const,
     render: (r: any) => r.short_volume || '-' },
-  { title: '空金额(USD)', key: 'short_amount', width: 100, align: 'right' as const,
+  { title: '空金额(USD)', key: 'short_amount', width: 62, align: 'right' as const,
     render: (r: any) => fmt(r.short_amount) },
   // 美股买平
-  { title: '买平日', key: 'cover_date', width: 70, align: 'center' as const,
+  { title: '买平日', key: 'cover_date', width: 46, align: 'center' as const,
     render: (r: any) => r.cover_date ? shortDate(r.cover_date) : '-' },
-  { title: '买平价', key: 'cover_price', width: 70, align: 'center' as const,
+  { title: '买平价', key: 'cover_price', width: 68, align: 'center' as const,
     render: (r: any) => r.cover_price ? `$${fmt(r.cover_price)}` : '-' },
-  { title: '金额(USD)', key: 'cover_amount', width: 100, align: 'right' as const,
+  { title: '金额(USD)', key: 'cover_amount', width: 62, align: 'right' as const,
     render: (r: any) => fmt(r.cover_amount) },
-  // 盈亏汇总
-  { title: 'A股盈亏', key: 'a_share_pnl', width: 100, align: 'right' as const,
+  // 盈亏汇总：未结项(OPEN/unfinished)显示空白，已结项(Closed)才显示数值
+  { title: 'A股盈亏', key: 'a_share_pnl', width: 64, align: 'right' as const,
     render: (r: any) => {
+      if (r.status !== 'Closed') return '-'
       if (r.a_share_pnl === null || r.a_share_pnl === undefined) return '-'
       return h(NText, { type: r.a_share_pnl >= 0 ? 'success' : 'error', strong: true },
-        { default: () => fmt(r.a_share_pnl) })
+        { default: () => fmt(r.a_share_pnl, 0) })
     }
   },
-  { title: 'USD盈亏', key: 'pnl_usd', width: 100, align: 'right' as const,
+  { title: 'USD盈亏', key: 'pnl_usd', width: 64, align: 'right' as const,
     render: (r: any) => {
+      if (r.status !== 'Closed') return '-'
       if (r.pnl_usd === null || r.pnl_usd === undefined) return '-'
       return h(NText, { type: r.pnl_usd >= 0 ? 'success' : 'error', strong: true },
-        { default: () => fmt(r.pnl_usd) })
+        { default: () => fmt(r.pnl_usd, 0) })
     }
   },
-  { title: '总盈亏(RMB)', key: 'pnl_rmb', width: 120, align: 'right' as const, fixed: 'right' as const,
+  { title: '总盈亏(RMB)', key: 'pnl_rmb', width: 78, align: 'right' as const, fixed: 'right' as const,
     render: (r: any) => {
+      if (r.status !== 'Closed') return '-'
       if (r.pnl_rmb === null || r.pnl_rmb === undefined) return '-'
       const color = r.pnl_rmb >= 0 ? '#16a34a' : '#e53e3e'
       return h('div', { style: `font-weight:700;color:${color}` }, [
         r.pnl_rmb >= 0 ? '+' : '',
-        Number(r.pnl_rmb).toFixed(2)
+        Number(r.pnl_rmb).toFixed(0)
       ])
     }
   },
   {
-    title: '操作', key: 'ops', width: 140, align: 'center' as const, fixed: 'right' as const,
-    render: (r: any) => h(NSpace, { size: 'small', justify: 'center' }, {
+    title: '操作', key: 'ops', width: 80, align: 'center' as const, fixed: 'right' as const,
+    render: (r: any) => h(NSpace, { size: 6, align: 'center' }, {
       default: () => [
         h(NButton, { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openAddModal(r) },
-          { default: () => '编辑', icon: () => h(NIcon, null, { default: () => h(Edit3) }) }),
-        r.status === 'ACTIVE'
-          ? h(NButton, { size: 'tiny', secondary: true, type: 'success', onClick: () => handleClose(r.id) },
-            { default: () => '结项' })
-          : null,
+          { default: () => '编辑' }),
         h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => handleDelete(r.id) },
           { default: () => '删除' })
       ]
@@ -1165,11 +882,8 @@ const feeColumns = [
 onMounted(() => {
   fetchPairs()
   fetchFees()
-  loadIbExecutions()
-  loadTdxExecutions()
-  loadQmtExecutions()
-  loadUnpairedTrades()
-  loadMatchedPairs()
+  loadAlerts()
+  fetchUsdRate()
 })
 </script>
 
@@ -1183,15 +897,34 @@ onMounted(() => {
 .flex-center { display: flex; align-items: center; }
 .gap-4 { gap: 16px; }
 .mb-4 { margin-bottom: 16px; }
+.mb-2 { margin-bottom: 8px; }
 .mt-4 { margin-top: 16px; }
 .mt-8 { margin-top: 32px; }
 
 .stat-card { text-align: center; padding: 8px 0; }
-.stat-label { font-size: 12px; color: #64748b; }
+.stat-label { font-size: 14px; font-weight: 700; color: #475569; letter-spacing: 0.3px; }
 .stat-value { font-size: 22px; font-weight: 800; }
+/* 分页签文字加大加粗（黑体） */
+:deep(.n-tabs-tab__label) { font-size: 15px; font-weight: 700; color: #1e293b; }
 .text-green { color: #16a34a; }
 .text-red { color: #e53e3e; }
+.text-orange { color: #ea580c; }
+
+.alert-item :deep(.n-alert__content) { width: 100%; }
+.alert-item :deep(.n-alert__title) { font-weight: 800; font-size: 15px; }
+.alert-body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; font-size: 15px; font-weight: 700; }
+.alert-msg { font-weight: 800; }
+.alert-meta { color: #334155; font-weight: 700; }
 
 :deep(.row-profit) td { background-color: #f0fdf4 !important; }
 :deep(.row-loss) td { background-color: #fef2f2 !important; }
+
+/* 套利配对对账表：数据行紧凑，列头保持默认可读性 */
+.ledger-table :deep(.n-data-table-td) { padding: 3px 5px !important; }
+/* 前两列（基金+状态）进一步收紧水平间距 */
+.ledger-table :deep(tr > td:nth-child(1)),
+.ledger-table :deep(tr > th:nth-child(1)) { padding-right: 2px !important; }
+.ledger-table :deep(tr > td:nth-child(2)),
+.ledger-table :deep(tr > th:nth-child(2)) { padding-left: 2px !important; }
+.ledger-table :deep(.n-data-table-wrapper) { border-collapse: separate; border-spacing: 0; }
 </style>

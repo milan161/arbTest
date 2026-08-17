@@ -2187,214 +2187,6 @@ async def clear_bp_override(request: Request):
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-# --- Ledger Excel Import API ---
-@app.post("/api/ledger/import-excel")
-async def import_ledger_excel(request: Request):
-    """Parse uploaded Excel file and return preview data"""
-    try:
-        import io
-        import openpyxl
-        from fastapi import UploadFile
-        
-        body = await request.json()
-        file_path = body.get("file_path", "")
-        
-        if not file_path or not os.path.exists(file_path):
-            return JSONResponse(status_code=400, content={"status": "error", "message": "File not found"})
-        
-        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-        ws = wb.active
-        
-        pairs = []
-        current_pair = None
-        
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            desc = str(row[0] or "").strip()
-            
-            if not desc:
-                continue
-            
-            # Buy row: contains "买入" or account info
-            if "买入" in desc or ("账户" in desc and "5379" in desc or "4020" in desc or "4801" in desc):
-                if current_pair and current_pair.get("buy_date"):
-                    pairs.append(current_pair)
-                current_pair = {
-                    "buy_date": desc.split("  ")[0] if "  " in desc else desc[:10],
-                    "buy_price": float(row[4] or 0),
-                    "buy_volume": abs(int(row[5] or 0)),
-                    "hedge_symbol": "XOP" if "GLD" in desc or "黄金" in desc else "XOP",
-                    "notes": str(row[7] or ""),
-                    "short_qty": int(row[9] or 0) if row[9] else 0,
-                    "short_price": float(row[10] or 0) if row[10] else 0,
-                }
-            
-            # Redeem row: contains "可赎回"
-            elif "可赎回" in desc or "赎回" in desc:
-                if current_pair:
-                    current_pair["sell_date"] = desc.split("  ")[0] if "  " in desc else desc[:10]
-                    current_pair["sell_price"] = float(row[4] or 0)
-                    current_pair["sell_volume"] = abs(int(row[5] or 0)) if row[5] else 0
-                    current_pair["redemption_fee"] = float(row[3] or 0) if row[3] else 0
-            
-            # Closed row: contains "closed Final"
-            elif "closed" in desc.lower() or "final" in desc.lower():
-                if current_pair:
-                    current_pair["pnl_rmb"] = float(row[14] or 0) if row[14] else 0
-                    current_pair["status"] = "CLOSED"
-                    pairs.append(current_pair)
-                    current_pair = None
-        
-        # Add last pair if not closed
-        if current_pair and current_pair.get("buy_date"):
-            current_pair["status"] = "ACTIVE"
-            pairs.append(current_pair)
-        
-        wb.close()
-        return {"status": "ok", "data": pairs, "total": len(pairs)}
-        
-    except Exception as e:
-        logger.error("[ExcelImport] Parse error: %s", e)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
-
-@app.post("/api/ledger/import-excel/confirm")
-async def confirm_ledger_excel(request: Request):
-    """Confirm and import parsed Excel data into ledger"""
-    try:
-        body = await request.json()
-        pairs = body.get("pairs", [])
-        
-        success_count = 0
-        for pair in pairs:
-            try:
-                # Map to existing addPair format
-                trade_data = {
-                    "fund_code": "162411",  # Default, will be overridden by notes
-                    "fund_name": "华宝油气",
-                    "buy_date": pair.get("buy_date", ""),
-                    "buy_price": pair.get("buy_price", 0),
-                    "buy_volume": pair.get("buy_volume", 0),
-                    "sell_date": pair.get("sell_date", ""),
-                    "sell_price": pair.get("sell_price", 0),
-                    "sell_volume": pair.get("sell_volume", 0),
-                    "redemption_fee": pair.get("redemption_fee", 0),
-                    "hedge_symbol": pair.get("hedge_symbol", "XOP"),
-                    "short_qty": pair.get("short_qty", 0),
-                    "short_price": pair.get("short_price", 0),
-                    "pnl_rmb": pair.get("pnl_rmb", 0),
-                    "status": pair.get("status", "ACTIVE"),
-                    "notes": pair.get("notes", ""),
-                }
-                # Use ledger_service to add pair
-                # For now, just count successes
-                success_count += 1
-            except Exception as e:
-                logger.error("[ExcelImport] Pair import error: %s", e)
-        
-        return {"status": "ok", "imported": success_count, "total": len(pairs)}
-        
-    except Exception as e:
-        logger.error("[ExcelImport] Confirm error: %s", e)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
-
-# --- [AI-2026-08-15] IB 真实成交同步（替代手动 Excel 记录）---
-# 盈透 reqExecutions 无法返回历史成交，改为解析 IB 网页导出的活动账单 CSV。
-# [AI-2026-08-16] 改为相对 workspace_root 推导，支持项目下移一层到 src/
-_TRANSACTION_DIR = os.path.join(workspace_root, "data", "TransactionRecord")
-
-@app.post("/api/ledger/ib-sync")
-async def sync_ib_executions():
-    try:
-        res = ledger_service.import_ib_csv_dir(_TRANSACTION_DIR)
-    except Exception as e:
-        logger.error(f"[IBSync] CSV 导入异常: {e}")
-        return {"ok": False, "error": f"IB 账单导入异常: {e}"}
-    if not res.get("file"):
-        return {"ok": False, "error": f"目录 {_TRANSACTION_DIR} 无CSV文件（请先从IB网页导出活动账单CSV放入该目录）"}
-    return {"ok": True, "file": res.get("file"), "count": res.get("count", 0)}
-
-@app.get("/api/ledger/ib-executions")
-async def get_ib_executions_api(days: int = 0):
-    data = ledger_service.get_ib_executions(days=days)
-    return {"ok": True, "data": data}
-
-# --- [AI-2026-08-15] 华宝(通达信)历史成交导入（解析导出的txt，替代手动Excel）---
-_TDX_IMPORT_DIR = _TRANSACTION_DIR   # 与 IB csv 同目录：ArbDashboard/data/TransactionRecord
-
-@app.post("/api/ledger/tdx-sync")
-async def sync_tdx_executions(request: Request = None):
-    # [AI-2026-08-15] code_filter：源头过滤，只导入指定基金代码（默认华宝油气 162411），避免无关交易泄密
-    code = None
-    if request is not None:
-        try:
-            body = await request.json()
-            code = (body.get("code") or "").strip() or None
-        except Exception:
-            code = None
-    try:
-        res = ledger_service.import_tdx_dir(_TDX_IMPORT_DIR, pattern="*华宝*.txt", code_filter=code)
-    except Exception as e:
-        logger.error(f"[TDXSync] 导入异常: {e}")
-        return {"ok": False, "error": f"华宝成交导入异常: {e}"}
-    if not res.get("file"):
-        return {"ok": False, "error": f"目录 {_TDX_IMPORT_DIR} 无txt文件（请先导出华宝历史成交txt放入该目录）"}
-    return {"ok": True, "file": res.get("file"), "count": res.get("count", 0), "filter": code or "全部"}
-
-@app.get("/api/ledger/tdx-executions")
-async def get_tdx_executions_api(code: str = None, category: str = None, days: int = 0):
-    data = ledger_service.get_tdx_executions(code=code, category=category, days=days)
-    return {"ok": True, "data": data}
-
-# --- [AI-2026-08-15] 银河QMT历史成交（经桥接策略 QUERY_DEALS 实时查询） ---
-@app.post("/api/ledger/qmt-sync")
-async def sync_qmt_executions():
-    # [AI-2026-08-15] 银河历史成交改为解析"通达信导出的银河账户txt"（文件名含'银河'）。
-    # 原桥接 QUERY_DEALS（策略 ContextInfo 查历史成交）已确认此 QMT 版本无历史接口，弃用。
-    try:
-        res = ledger_service.import_galaxy_dir(_TDX_IMPORT_DIR)
-    except Exception as e:
-        logger.error(f"[QMTSync] 导入异常: {e}")
-        return {"ok": False, "error": f"银河成交导入异常: {e}"}
-    if not res.get("file"):
-        return {"ok": False, "error": "目录无银河成交txt（请先在通达信导出银河账户历史成交，文件名含'银河'，放入 TransactionRecord 目录）"}
-    return {"ok": True, "file": res.get("file"), "count": res.get("count", 0)}
-
-@app.get("/api/ledger/qmt-executions")
-async def get_qmt_executions_api(code: str = None, days: int = 0):
-    data = ledger_service.get_qmt_executions(code=code, days=days)
-    return {"ok": True, "data": data}
-
-# --- [AI-2026-08-15] 手动配对对账（扶正假对账）---
-@app.get("/api/ledger/unpaired-trades")
-async def get_unpaired_trades_api():
-    data = ledger_service.get_unpaired_trades()
-    return {"ok": True, "data": data}
-
-@app.post("/api/ledger/pair-match")
-async def pair_match_api(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    leg_keys = body.get("leg_keys") or []
-    force = bool(body.get("force", False))
-    result = ledger_service.match_pair(leg_keys, force=force)
-    return result
-
-@app.get("/api/ledger/matched-pairs")
-async def get_matched_pairs_api():
-    data = ledger_service.get_matched_pairs()
-    return {"ok": True, "data": data}
-
-@app.post("/api/ledger/unmatch-pair")
-async def unmatch_pair_api(request: Request):
-    try:
-        body = await request.json()
-        pair_id = int(body.get("pair_id", 0))
-    except Exception:
-        pair_id = 0
-    if not pair_id:
-        return {"ok": False, "error": "缺少 pair_id"}
-    return ledger_service.unmatch_pair(pair_id)
 
 # --- Ledger / Bookkeeping APIs ---
 @app.get("/api/ledger/trades")
@@ -2439,6 +2231,12 @@ async def delete_ledger_pair(pair_id: int):
     success = ledger_service.delete_pair(pair_id)
     return {"status": "ok" if success else "error"}
 
+# --- 赎回提醒（OPEN 笔推算可优惠赎回日 / unfinished 待净值）---
+@app.get("/api/ledger/alerts")
+async def get_ledger_alerts_api():
+    data = ledger_service.get_ledger_alerts()
+    return {"status": "ok", "data": data}
+
 # --- 自动记录交易（QMT执行回调） ---
 @app.post("/api/ledger/auto-record")
 async def auto_record_trade(request: Request):
@@ -2479,6 +2277,35 @@ async def add_broker_fee(request: Request):
 async def delete_broker_fee(fee_id: int):
     success = ledger_service.delete_broker_redemption_fee(fee_id)
     return {"status": "ok" if success else "error"}
+
+@app.get("/api/exchange-rate")
+async def get_exchange_rate():
+    """返回最新 USD/CNY 中间价（供前端账本等使用）"""
+    rate = ledger_service._get_usd_rate()
+    return {"status": "ok", "rate": round(rate, 4)}
+
+# [AI-2026-08-16] 导入 v7 套利账本 Excel -> arbitrage_pairs（upsert）
+@app.post("/api/ledger/import-v7")
+async def import_v7_ledger(file: UploadFile = File(...)):
+    """上传 v7 Excel 套利账本，解析并 upsert 到数据库。返回导入统计。"""
+    try:
+        import tempfile
+        content = await file.read()
+        suffix = os.path.splitext(file.filename or 'v7.xlsx')[1] or '.xlsx'
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.write(content)
+        tmp.close()
+        try:
+            result = ledger_service.import_v7(tmp.name)
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+        return {"status": "ok", "data": result}
+    except Exception as e:
+        logger.error(f"导入 v7 失败: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/api/config/fees/upsert")
 async def upsert_fund_fee(request: Request):

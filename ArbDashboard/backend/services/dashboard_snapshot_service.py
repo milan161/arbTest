@@ -214,6 +214,8 @@ class DashboardSnapshotService:
                 if snapshot:
                     return dict(snapshot)
             elif watchlist:
+                # [AI-2026-08-16] 优先取专用 watchlist 快照；若不存在(周末/重启后门禁未生成)，
+                # fallback 到从各分类缓存快照中按 fund_code 过滤，避免"我的自选"在非交易日显示空白。
                 snapshot = self._snapshots.get("watchlist")
                 if snapshot:
                     result = dict(snapshot)
@@ -221,6 +223,28 @@ class DashboardSnapshotService:
                     result["data"] = [item for item in result.get("data", []) if item.get("fund_code") in allowed]
                     result["key"] = "watchlist_request"
                     return result
+                # fallback: 从分类快照聚合 + 按 watchlist 过滤
+                allowed = set(watchlist)
+                combined = []
+                latest_updated = None
+                for cat in ALL_CATEGORIES:
+                    snap = self._snapshots.get(cat)
+                    if snap and snap.get("data"):
+                        for item in snap["data"]:
+                            if item.get("fund_code") in allowed:
+                                combined.append(item)
+                        if snap.get("updated_at") and (not latest_updated or snap["updated_at"] > latest_updated):
+                            latest_updated = snap["updated_at"]
+                if combined:
+                    return {
+                        "data": combined,
+                        "updated_at": latest_updated,
+                        "stale": False,
+                        "source_status": self._source_status(),
+                        "compute_ms": None,
+                        "error": None,
+                        "key": "watchlist_fallback",
+                    }
             else:
                 # 无分类/无 watchlist → 合并所有非暂停分类的快照数据
                 combined_data = []

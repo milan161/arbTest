@@ -19,10 +19,15 @@ from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
 from arbcore.fetchers.woody_api_service import WoodyAPIService
 from arbcore.calculators.static_valuation import StaticValuationCalculator
-from arbcore.config.account_private import WOODY_USERNAME, WOODY_PASSWORD
+# [AI-2026-08-16] 修复: account_private 为本地密钥文件(被 gitignore, 可能不存在),
+# WOODY/VPS 凭据缺失时必须容错(与项目其他模块一致), 否则后端 import 阶段直接崩溃起不来
 try:
-    from arbcore.config.account_private import VPS_HOST, VPS_PORT, VPS_USER, VPS_PASSWORD, VPS_DATA_DIR, VPS_KEY_PATH, VPS_KEY_PASSWORD
+    from arbcore.config.account_private import (
+        WOODY_USERNAME, WOODY_PASSWORD,
+        VPS_HOST, VPS_PORT, VPS_USER, VPS_PASSWORD, VPS_DATA_DIR, VPS_KEY_PATH, VPS_KEY_PASSWORD,
+    )
 except ImportError:
+    WOODY_USERNAME = WOODY_PASSWORD = None
     VPS_HOST, VPS_PORT, VPS_USER, VPS_PASSWORD, VPS_DATA_DIR, VPS_KEY_PATH, VPS_KEY_PASSWORD = None, 22, None, None, None, None, None
 
 # [AI-2026-08-02] 展示副本模式（ARM）：只自采「A股行情 + 富途美股夜盘」，
