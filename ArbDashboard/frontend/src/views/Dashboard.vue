@@ -375,6 +375,8 @@ const allColumns: DataTableColumns<any> = [
     key: 'rt_val_display', width: 80, align: 'center',
     className: 'col-rt-val',
     render(row: any) {
+      if (row.rt_val && row.rt_val > 0) return h('span', { class: 'num-cell' }, row.rt_val.toFixed(4))
+      if (row.rt_unavailable === 'FUTU') return h('span', { style: 'color:#f59e0b;font-size:11px;' }, '缺FUTU')
       const val = row.rt_val && row.rt_val > 0 ? row.rt_val.toFixed(4) : '-'
       const onClick = () => router.push({ path: '/analysis', query: { code: row.fund_code, name: row.fund_name } })
       if (row.rt_frozen) {

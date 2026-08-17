@@ -575,48 +575,56 @@ class LedgerService:
         groups = []
         cur = None
         for r in range(2, ws.max_row + 1):
-            A = ws.cell(r, 1).value
-            D = ws.cell(r, 4).value
-            E = ws.cell(r, 5).value
-            N = ws.cell(r, 14).value
-            O = ws.cell(r, 15).value
-            R = ws.cell(r, 18).value
-            if A is None and D is None and E is None and N is None:
+            A = ws.cell(r, 1).value    # 序号
+            B = ws.cell(r, 2).value    # 日期/状态词
+            E = ws.cell(r, 5).value    # 基金
+            F = ws.cell(r, 6).value    # 动作
+            N = ws.cell(r, 14).value  # 收益RMB
+            O = ws.cell(r, 15).value  # 对冲量
+            P = ws.cell(r, 16).value  # 对冲价
+            S = ws.cell(r, 19).value  # IB小计USD
+            # 空行: 序号/日期/基金/动作/收益 全空
+            if A is None and B is None and E is None and F is None and N is None:
                 if cur:
                     groups.append(cur)
                     cur = None
                 continue
             E = str(E).strip() if E else ''
-            D = str(D).strip() if D else ''
+            F = str(F).strip() if F else ''
             A_str = str(A).strip() if A else ''
-            if E == '汇总':
+            B_str = str(B).strip() if B else ''
+            if F == '汇总':
                 if cur is None:
-                    cur = {'details': [], 'fund': D}
-                cur['fund'] = D or cur.get('fund')
-                a_is_date = hasattr(A, 'year') or (A_str and A_str.lower() not in STATUS_WORDS)
+                    cur = {'details': [], 'fund': E}
+                cur['fund'] = E or cur.get('fund')
+                # 汇总行 B 列是状态词(Closed/OPEN/unfinished)，非日期
+                b_is_date = hasattr(B, 'year') or (B_str and B_str.lower() not in STATUS_WORDS)
+                status = self._STATUS_MAP.get(B_str.lower(), 'Final' if b_is_date else B_str)
                 summary = {
-                    'status': self._STATUS_MAP.get(A_str.lower(), 'Final' if a_is_date else A_str),
-                    'fund': D,
-                    'pnl_rmb': _num(ws.cell(r, 13).value),
-                    'pnl_usd': _num(R),
-                    'buy_date': _date(A) if a_is_date else None,
-                    'sell_date': _date(A) if a_is_date else None,
+                    'serial': A_str,
+                    'status': status,
+                    'fund': E,
+                    'pnl_rmb': _num(N),
+                    'pnl_usd': _num(S),
+                    'buy_date': None,
+                    'sell_date': None,
                 }
                 cur['summary'] = summary
                 groups.append(cur)
                 cur = None
                 continue
-            has_us = (N is not None) or (O is not None) or (R is not None)
-            if D or has_us:
+            has_us = (N is not None) or (O is not None) or (S is not None)
+            if E or has_us:
                 if cur is None:
-                    cur = {'details': [], 'fund': D}
-                if D:
-                    cur['fund'] = D
+                    cur = {'details': [], 'fund': E}
+                if E:
+                    cur['fund'] = E
                 cur['details'].append({
-                    'action': E or '美股明细',
-                    'date': _date(A),
-                    'volume': _num(ws.cell(r, 9).value),
-                    'short_vol': _num(N),
+                    'action': F or '美股明细',
+                    'date': _date(B),
+                    'volume': _num(ws.cell(r, 10).value),
+                    'short_vol': _num(O),
+                    'short_price': _num(P),
                 })
         if cur:
             groups.append(cur)
@@ -672,20 +680,20 @@ class LedgerService:
                             buy_date=COALESCE(?, buy_date), sell_date=COALESCE(?, sell_date),
                             buy_volume=COALESCE(?, buy_volume), sell_volume=COALESCE(?, sell_volume),
                             short_volume=COALESCE(?, short_volume), pnl_rmb=?, pnl_usd=?,
-                            status=?, hedge_symbol=?, broker_name=?
+                            status=?, hedge_symbol=?, broker_name=?, serial_no=COALESCE(?, serial_no)
                             WHERE id=?""",
                         (buy_date, sell_date, buy_volume, sell_volume, short_volume,
-                         pnl_rmb, pnl_usd, status, hedge, broker, pid)
+                         pnl_rmb, pnl_usd, status, hedge, broker, s.get('serial'), pid)
                     )
                     updated += 1
                 else:
                     conn.execute(
                         """INSERT INTO arbitrage_pairs
                             (fund_code, buy_date, sell_date, buy_volume, sell_volume, short_volume,
-                             pnl_rmb, pnl_usd, status, hedge_symbol, broker_name)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                             pnl_rmb, pnl_usd, status, hedge_symbol, broker_name, serial_no)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume,
-                         pnl_rmb, pnl_usd, status, hedge, broker)
+                         pnl_rmb, pnl_usd, status, hedge, broker, s.get('serial'))
                     )
                     inserted += 1
             conn.commit()

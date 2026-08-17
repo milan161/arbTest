@@ -731,6 +731,8 @@ const statusTag = (s: string) => {
 }
 
 const pairColumns = [
+  { title: '序号', key: 'serial_no', width: 56, align: 'center' as const, fixed: 'left' as const,
+    render: (r: any) => r.serial_no || '-' },
   { title: '基金', key: 'fund', width: 72, fixed: 'left' as const,
     render: (r: any) => {
       const found = fundList.find(f => f.code === r.fund_code)
@@ -752,15 +754,15 @@ const pairColumns = [
     render: (r: any) => fmt(r.buy_price, 3) },
   { title: '数量', key: 'buy_volume', width: 52, align: 'center' as const,
     render: (r: any) => r.buy_volume ? Number(r.buy_volume).toLocaleString() : '-' },
-  { title: '金额(RMB)', key: 'buy_amount', width: 62, align: 'right' as const,
-    render: (r: any) => h(NText, { style: r.buy_amount ? 'color:#e53e3e' : '' }, { default: () => fmt(r.buy_amount, 0) }) },
+  { title: '金额(RMB)', key: 'buy_amount', width: 82, align: 'right' as const,
+    render: (r: any) => h(NText, { style: (r.buy_amount ? 'color:#e53e3e;' : '') + 'white-space:nowrap' }, { default: () => fmt(r.buy_amount, 0) }) },
   // A股平仓
   { title: '平仓日', key: 'sell_date', width: 46, align: 'center' as const,
     render: (r: any) => r.sell_date ? shortDate(r.sell_date) : '-' },
   { title: '平仓价', key: 'sell_price', width: 50, align: 'center' as const,
     render: (r: any) => fmt(r.sell_price, 3) },
-  { title: '金额(RMB)', key: 'sell_amount', width: 62, align: 'right' as const,
-    render: (r: any) => h(NText, { style: r.sell_amount ? 'color:#16a34a' : '' }, { default: () => fmt(r.sell_amount, 0) }) },
+  { title: '金额(RMB)', key: 'sell_amount', width: 82, align: 'right' as const,
+    render: (r: any) => h(NText, { style: (r.sell_amount ? 'color:#16a34a;' : '') + 'white-space:nowrap' }, { default: () => fmt(r.sell_amount, 0) }) },
   // 美股做空
   { title: '对冲', key: 'hedge', width: 40, align: 'center' as const,
     render: (r: any) => r.hedge_symbol || '-' },
@@ -768,15 +770,15 @@ const pairColumns = [
     render: (r: any) => r.short_price ? `$${fmt(r.short_price)}` : '-' },
   { title: '空单量', key: 'short_volume', width: 46, align: 'center' as const,
     render: (r: any) => r.short_volume || '-' },
-  { title: '空金额(USD)', key: 'short_amount', width: 62, align: 'right' as const,
-    render: (r: any) => fmt(r.short_amount) },
+  { title: '空金额(USD)', key: 'short_amount', width: 82, align: 'right' as const,
+    render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.short_amount)) },
   // 美股买平
   { title: '买平日', key: 'cover_date', width: 46, align: 'center' as const,
     render: (r: any) => r.cover_date ? shortDate(r.cover_date) : '-' },
   { title: '买平价', key: 'cover_price', width: 68, align: 'center' as const,
     render: (r: any) => r.cover_price ? `$${fmt(r.cover_price)}` : '-' },
-  { title: '金额(USD)', key: 'cover_amount', width: 62, align: 'right' as const,
-    render: (r: any) => fmt(r.cover_amount) },
+  { title: '金额(USD)', key: 'cover_amount', width: 82, align: 'right' as const,
+    render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.cover_amount)) },
   // 盈亏汇总：未结项(OPEN/unfinished)显示空白，已结项(Closed)才显示数值
   { title: 'A股盈亏', key: 'a_share_pnl', width: 64, align: 'right' as const,
     render: (r: any) => {

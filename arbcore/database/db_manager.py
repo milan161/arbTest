@@ -12,12 +12,40 @@ from .managers.system_manager import SystemManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# [AI-2026-08-17] 定位 arb_master.db：优先显式参数 / ARB_MASTER_DB 环境变量；
+# 否则从本文件向上遍历祖先目录，找第一个含 database/ 子目录者作为项目根
+# （兼容本地 src/arbcore 与 ARM 直接 arbtest/arbcore 两种部署结构），
+# 避免硬数 '../..' 层数在 ARM 上算错项目根、连到 /home/ubuntu/database 空库的 bug。
+def _resolve_db_path(explicit=None):
+    if explicit:
+        return explicit
+    env = os.environ.get('ARB_MASTER_DB')
+    if env:
+        return env
+    here = os.path.abspath(os.path.dirname(__file__))
+    cur = here
+    while True:
+        candidate = os.path.join(cur, 'database')
+        # 数据目录特征：database/ 存在，且不是 arbcore 自身代码目录（含 db_manager.py 即代码目录，跳过）
+        if os.path.isdir(candidate) and not os.path.exists(os.path.join(candidate, 'db_manager.py')):
+            return os.path.join(candidate, 'arb_master.db')
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    # 兜底：退回原三层上溯逻辑（极不可能走到）
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    return os.path.join(base_dir, 'database', 'arb_master.db')
+
+
 class DatabaseManager:
     def __init__(self, db_path=None, include_trading=False):
         if db_path is None:
-            # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；3层dirname到项目根父目录(arbTest)
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-            db_path = os.path.join(base_dir, 'database', 'arb_master.db')
+            # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）
+            # [AI-2026-08-17] 改用 _resolve_db_path：向上找含 database/ 的祖先目录定位项目根，
+            #   根治 ARM 部署无 src/ 层导致 '..','..','..' 算错项目根、连到 /home/ubuntu/database 空库的 bug
+            db_path = _resolve_db_path()
             
         os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
         self.db_path = db_path

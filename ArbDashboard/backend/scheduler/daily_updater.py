@@ -493,44 +493,108 @@ class DailyUpdater(BaseApp):
                 except Exception as e:
                     self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 汇率时出错: {e}")
 
-        # [AI-2026-08-02] 展示副本（ARM）汇率只读东京 VPS：Level 0 之后直接收工，
-        # 不跑下面 Level 1 的任何本地直连抓取（中间价/在岸价/离岸价/日元）。
-        # 理由：ARM 是暴露在公网的纯展示副本，静态数据统一以东京为唯一真源，
-        #       在此再爬一遍既是重复造轮子，也会造成东京/ARM 两套数值不一致。
+        # [AI-2026-08-17] 治本修复：东京 VPS 的 fx 文件只带中间价(usd_cny_mid/hkd_cny_mid)，
+        #   不含在岸价(usd_cny_spot/jpy_cny_spot)。原 DASHBOARD_MODE 在此整体 return，
+        #   导致 ARM 在岸价永远停在 8-07、维护报告误报"H5滞后"。
+        #   修正：DASHBOARD_MODE 下仍本地直连补抓在岸价(USD/JPY spot)，
+        #   仅跳过中间价/离岸价/日元中间价（由 VPS 提供，避免双源不一致）。
+        #   不碰"VPS 不采集在岸价"铁律——ARM 侧 spot 本就由 ARM 自抓新浪，与设计一致。
         if DASHBOARD_MODE:
-            self.logger.info("🖥️ [DASHBOARD_MODE] 汇率只读东京 VPS，跳过全部本地直连抓取（Level 1 整段）")
+            self.logger.info("🖥️ [DASHBOARD_MODE] 跳过中间价/离岸价/日元中间价直连（VPS 提供），仅补抓在岸价(USD/JPY spot)")
+            self._fetch_spot_rates(today_str)
             return
 
-        # 检查今天是否已经同步到最新的汇率
-        if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
-            self.logger.info("✅ 今日已同步过人民币中间价，跳过实时抓取。")
-            return
+        # [AI-2026-08-17] DASHBOARD_MODE 下跳过中间价直连（由 VPS 提供），只在岸价走本地
+        if not DASHBOARD_MODE:
+            # 检查今天是否已经同步到最新的汇率
+            if self.db.is_access_synced_today(today_str, source='official_exchange_rate'):
+                self.logger.info("✅ 今日已同步过人民币中间价，跳过实时抓取。")
+                return
 
-        # Level 1: 实时抓取作为备用源（[AI-2026-07-08] 单级备用源补全：中间价 + 在岸价 + 离岸价 一次抓全）
-        self.logger.info("📡 [Level 1] 尝试实时抓取人民币中间价/在岸价/离岸价...")
-        from arbcore.fetchers.data_fetcher import data_fetcher
-        exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
-        if exchange_rate_data:
-            date_info = exchange_rate_data.get('日期')
-            if date_info:
-                try:
-                    date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
-                    usd_val = exchange_rate_data.get('usd_cny_mid')
-                    hkd_val = exchange_rate_data.get('hkd_cny_mid')
-                    self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
-                    self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
+            # Level 1: 实时抓取作为备用源（[AI-2026-07-08] 单级备用源补全：中间价 + 在岸价 + 离岸价 一次抓全）
+            self.logger.info("📡 [Level 1] 尝试实时抓取人民币中间价/在岸价/离岸价...")
+            from arbcore.fetchers.data_fetcher import data_fetcher
+            exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
+            if exchange_rate_data:
+                date_info = exchange_rate_data.get('日期')
+                if date_info:
+                    try:
+                        date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
+                        usd_val = exchange_rate_data.get('usd_cny_mid')
+                        hkd_val = exchange_rate_data.get('hkd_cny_mid')
+                        self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
+                        self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
 
-                    # 关键修复：只有当抓取到的汇率实际生效日期是今天（或更晚）时，才标记今日已同步
-                    # 如果抓到的是昨天的日期，说明今天最新的还没更新，我们绝不标记今日同步，以便稍后重试
-                    if date_info_str >= today_str:
-                        self.db.mark_access_synced(today_str, source='official_exchange_rate')
-                        self.logger.info(f"✅ 成功获取到今日 ({today_str}) 最新汇率，已打标。")
+                        # 关键修复：只有当抓取到的汇率实际生效日期是今天（或更晚）时，才标记今日已同步
+                        # 如果抓到的是昨天的日期，说明今天最新的还没更新，我们绝不标记今日同步，以便稍后重试
+                        if date_info_str >= today_str:
+                            self.db.mark_access_synced(today_str, source='official_exchange_rate')
+                            self.logger.info(f"✅ 成功获取到今日 ({today_str}) 最新汇率，已打标。")
+                        else:
+                            self.logger.warning(f"⚠️ 抓取到的汇率日期为过去日期 ({date_info_str})，未更新到今天，因此不标记今日已同步。")
+                    except Exception as e:
+                        self.logger.error(f"❌ 本地汇率解析异常: {e}")
+
+        # [AI-2026-08-17] 在岸价(USD/JPY spot)——抽成 _fetch_spot_rates，DASHBOARD_MODE 与非 DASHBOARD_MODE 共用
+        self._fetch_spot_rates(today_str)
+        # [AI-2026-08-17] DASHBOARD_MODE 下跳过离岸价直连（VPS 提供），只在岸价走本地
+        if not DASHBOARD_MODE:
+            # 离岸价 CNH
+            try:
+                conn_cnh = self.db._get_conn()
+                has_cnh = conn_cnh.execute(
+                    "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cnh IS NOT NULL", (today_str,)
+                ).fetchone()[0] > 0
+                conn_cnh.close()
+                if not has_cnh:
+                    cnh_data = data_fetcher.fetch_cnh_offshore_rate()
+                    if cnh_data:
+                        cnh_date = pd.to_datetime(str(cnh_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                        cnh_rate = cnh_data.get('离岸价')
+                        if cnh_rate is not None:
+                            self.db.upsert_exchange_rate(cnh_date, usd_cnh=cnh_rate)
+                            self.logger.info(f"✅ [Level 1] 离岸价 CNH 入库: {cnh_date} -> {cnh_rate}")
+            except Exception as e:
+                self.logger.error(f"❌ [Level 1] 离岸价直连备用源失败: {e}")
+
+        # [AI-2026-08-17] DASHBOARD_MODE 下跳过日元中间价直连（VPS 提供），只在岸价走本地
+        if not DASHBOARD_MODE:
+            # [AI-2026-07-23] JPY/CNY 日元汇率——优先使用国家外汇管理局中间价
+            # [AI-2026-07-10] 原新浪在岸价仅作备用源
+            try:
+                conn_jpy = self.db._get_conn()
+                has_jpy = conn_jpy.execute(
+                    "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND jpy_cny_mid IS NOT NULL", (today_str,)
+                ).fetchone()[0] > 0
+                conn_jpy.close()
+                if not has_jpy:
+                    # 优先从国家外汇管理局中间价获取（与 USD/HKD 同源）
+                    official_rates = data_fetcher.fetch_official_exchange_rate()
+                    jpy_rate = official_rates.get('jpy_cny_mid') if official_rates else None
+                    jpy_date = official_rates.get('日期', today_str) if official_rates else today_str
+                    if jpy_rate is not None:
+                        jpy_date_str = pd.to_datetime(str(jpy_date)).strftime('%Y-%m-%d')
+                        self.db.upsert_exchange_rate(jpy_date_str, jpy_cny_mid=jpy_rate)
+                        self.logger.info(f"✅ [Level 1] JPY/CNY 中间价入库: {jpy_date_str} -> {jpy_rate}")
                     else:
-                        self.logger.warning(f"⚠️ 抓取到的汇率日期为过去日期 ({date_info_str})，未更新到今天，因此不标记今日已同步。")
-                except Exception as e:
-                    self.logger.error(f"❌ 本地汇率解析异常: {e}")
+                        # 备用源：新浪在岸价
+                        jpy_data = data_fetcher.fetch_jpy_cny_rate()
+                        if jpy_data:
+                            jpy_date = pd.to_datetime(str(jpy_data.get('日期', today_str))).strftime('%Y-%m-%d')
+                            jpy_rate = jpy_data.get('jpy_cny_rate')
+                            if jpy_rate is not None:
+                                self.db.upsert_exchange_rate(jpy_date, jpy_cny_mid=jpy_rate)
+                                self.logger.info(f"✅ [Level 1] JPY/CNY 备用源入库(新浪): {jpy_date} -> {jpy_rate}")
+            except Exception as e:
+                self.logger.error(f"❌ [Level 1] JPY/CNY 直连备用源失败: {e}")
 
-        # [AI-2026-07-08] Level 1 备用源补全：在岸价 + 离岸价 直连新浪（VPS 未提供时单级也能补齐）
+        self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价/日元）采集结束。")
+
+    def _fetch_spot_rates(self, today_str):
+        """[AI-2026-08-17] 在岸价(USD/JPY spot)抓取——DASHBOARD_MODE 与非 DASHBOARD_MODE 共用。
+        东京 VPS 的 fx 文件不含在岸价，故展示副本(ARM)也需本地直连新浪补抓，避免维护报告误报滞后。
+        其余汇率(中间价/离岸价/日元中间价)由 VPS 提供，不在本方法内。"""
+        from arbcore.fetchers.data_fetcher import data_fetcher
         # 在岸价 USDCNY
         try:
             conn_spot = self.db._get_conn()
@@ -566,54 +630,6 @@ class DailyUpdater(BaseApp):
                         self.logger.info(f"✅ [Level 1] JPY/CNY 在岸价入库: {jpy_spot_date} -> {jpy_spot_rate}")
         except Exception as e:
             self.logger.error(f"❌ [Level 1] JPY/CNY 在岸价直连失败: {e}")
-        # 离岸价 CNH
-        try:
-            conn_cnh = self.db._get_conn()
-            has_cnh = conn_cnh.execute(
-                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND usd_cnh IS NOT NULL", (today_str,)
-            ).fetchone()[0] > 0
-            conn_cnh.close()
-            if not has_cnh:
-                cnh_data = data_fetcher.fetch_cnh_offshore_rate()
-                if cnh_data:
-                    cnh_date = pd.to_datetime(str(cnh_data.get('日期', today_str))).strftime('%Y-%m-%d')
-                    cnh_rate = cnh_data.get('离岸价')
-                    if cnh_rate is not None:
-                        self.db.upsert_exchange_rate(cnh_date, usd_cnh=cnh_rate)
-                        self.logger.info(f"✅ [Level 1] 离岸价 CNH 入库: {cnh_date} -> {cnh_rate}")
-        except Exception as e:
-            self.logger.error(f"❌ [Level 1] 离岸价直连备用源失败: {e}")
-
-        # [AI-2026-07-23] JPY/CNY 日元汇率——优先使用国家外汇管理局中间价
-        # [AI-2026-07-10] 原新浪在岸价仅作备用源
-        try:
-            conn_jpy = self.db._get_conn()
-            has_jpy = conn_jpy.execute(
-                "SELECT COUNT(*) FROM exchange_rate WHERE date = ? AND jpy_cny_mid IS NOT NULL", (today_str,)
-            ).fetchone()[0] > 0
-            conn_jpy.close()
-            if not has_jpy:
-                # 优先从国家外汇管理局中间价获取（与 USD/HKD 同源）
-                official_rates = data_fetcher.fetch_official_exchange_rate()
-                jpy_rate = official_rates.get('jpy_cny_mid') if official_rates else None
-                jpy_date = official_rates.get('日期', today_str) if official_rates else today_str
-                if jpy_rate is not None:
-                    jpy_date_str = pd.to_datetime(str(jpy_date)).strftime('%Y-%m-%d')
-                    self.db.upsert_exchange_rate(jpy_date_str, jpy_cny_mid=jpy_rate)
-                    self.logger.info(f"✅ [Level 1] JPY/CNY 中间价入库: {jpy_date_str} -> {jpy_rate}")
-                else:
-                    # 备用源：新浪在岸价
-                    jpy_data = data_fetcher.fetch_jpy_cny_rate()
-                    if jpy_data:
-                        jpy_date = pd.to_datetime(str(jpy_data.get('日期', today_str))).strftime('%Y-%m-%d')
-                        jpy_rate = jpy_data.get('jpy_cny_rate')
-                        if jpy_rate is not None:
-                            self.db.upsert_exchange_rate(jpy_date, jpy_cny_mid=jpy_rate)
-                            self.logger.info(f"✅ [Level 1] JPY/CNY 备用源入库(新浪): {jpy_date} -> {jpy_rate}")
-        except Exception as e:
-            self.logger.error(f"❌ [Level 1] JPY/CNY 直连备用源失败: {e}")
-
-        self.logger.info(f"✅ 步骤三完成：今日({today_str})汇率（中间价/在岸价/离岸价/日元）采集结束。")
 
     def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None, trade_volume=None):
         """

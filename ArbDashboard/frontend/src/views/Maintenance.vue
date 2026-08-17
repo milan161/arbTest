@@ -177,8 +177,8 @@ const rows = computed(() => {
     else if (lb === null) diff = { label: '仅H5有', type: 'warning' }
     else if (hb === null) diff = { label: '仅本地有', type: 'warning' }
     else if (Math.abs(lb - hb) <= 1) diff = { label: '基本一致', type: 'success' }
-    else if (lb > hb) diff = { label: `本地新${lb - hb}天`, type: 'warning' }
-    else diff = { label: `H5新${hb - lb}天`, type: 'warning' }
+    else if (lb > hb) diff = { label: `H5新${lb - hb}天`, type: 'warning' }
+    else diff = { label: `本地新${hb - lb}天`, type: 'warning' }
     return { key: s.key, label: s.label, local, h5, diff }
   })
 })

@@ -139,10 +139,12 @@ else:
         raise RuntimeError(f"既找不到 {arbcore_dir}，也找不到 {fallback_dir}")
 
 # 1. [V3.11 统一数据库路径]
-# [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；workspace_root 上两级到项目根父目录(arbTest)
-root_db_path = os.path.abspath(os.path.join(workspace_root, "..", "..", "database", "arb_master.db"))
+# [AI-2026-08-17] 用与 DatabaseManager 一致的 _resolve_db_path 定位项目根，
+#   根治 ARM 部署无 src/ 层导致 '../..' 算错、连到 /home/ubuntu/database 空库的 bug
+from arbcore.database.db_manager import _resolve_db_path
+root_db_path = _resolve_db_path()
 # [AI-2026-08-16] 交易数据独立库：成交/配对/策略规则等敏感交易数据与市场因子分离，隐私保护
-tran_db_path = os.path.abspath(os.path.join(workspace_root, "..", "..", "database", "arb_tran.db"))
+tran_db_path = os.path.join(os.path.dirname(root_db_path), "arb_tran.db")
 logger.info(f"📂 Using database at {root_db_path}")
 logger.info(f"🔒 交易库 at {tran_db_path}")
 

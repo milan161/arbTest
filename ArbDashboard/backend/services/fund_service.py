@@ -47,6 +47,50 @@ def _scalar_level(v):
     return v
 
 
+# [AI-2026-08-17] 判断某基金实时估值是否依赖 FUTU 行情源：其估值依赖的全部 symbol
+#   （篮子权重 fund_basket_weights + YAML trade_etf + related_index + valuation_portfolio）中，
+#   任一在 source_routing 里被路由到 'FUTU'（即非 IB 核心标的）。
+# 用于 rt_val 为空时区分「源未连(缺FUTU)」与「盘后无行情/正常缺失」，前端据此显示「缺FUTU」提示。
+def _fund_requires_futu(code: str, basket_symbols_by_fund: Dict[str, set], fund: dict = None) -> bool:
+    syms: set = set(basket_symbols_by_fund.get(code, set()))
+    if fund is not None:
+        # [AI-2026-08-17] 补齐非 fund_basket_weights 路径的依赖 symbol
+        #   （161126→RSPH、159561→DAX 等走 trade_etf；501300 等走 valuation_portfolio）
+        te = _YAML_TRADE_ETF.get(code)
+        if te:
+            syms.add(te)
+        ri_raw = fund.get('related_index', '') if hasattr(fund, 'get') else ''
+        ri = _normalize_empty_symbol(ri_raw)
+        if ri:
+            syms.add(ri)
+        vp = _YAML_VALUATION_PORTFOLIO.get(code)
+        if vp:
+            for item in vp:
+                if not isinstance(item, dict):
+                    continue
+                s = item.get('symbol') or item.get('underlying_symbol')
+                if s:
+                    syms.add(s)
+    if not syms:
+        return False
+    try:
+        from arbcore.config.source_routing import get_symbol_source
+    except Exception:
+        return False
+    for raw in syms:
+        base = str(raw).replace('^', '')
+        for suf in ('-EU', '-JP', '-HK'):
+            if base.endswith(suf):
+                base = base[:-len(suf)]
+                break
+        try:
+            if get_symbol_source(base) == 'FUTU':
+                return True
+        except Exception:
+            continue  # 未在 YAML 声明的 symbol 不计入 FUTU 依赖
+    return False
+
+
 def _normalize_empty_symbol(val) -> str:
     """DB/配置中常用 '-' / None / 空串 表示"无值"，归一为空串，避免哨兵值被当真实 symbol 路由。
     [2026-07-29] 含中文/全角等非 ASCII 字符的（如 related_index 的 '中小100'/'中证500'）也不是可路由
@@ -1397,9 +1441,12 @@ class FundService:
 
             # 预查哪些基金有完整权重篮子（跳过简化指数估值，直接用计算器）
             funds_with_basket = set()
+            basket_symbols_by_fund = {}  # [AI-2026-08-17] code -> set(underlying_symbol)，供「缺FUTU」源依赖判断
             try:
-                basket_codes_df = pd.read_sql("SELECT DISTINCT fund_code FROM fund_basket_weights", conn)
+                basket_codes_df = pd.read_sql("SELECT fund_code, underlying_symbol FROM fund_basket_weights", conn)
                 funds_with_basket = set(basket_codes_df['fund_code'].tolist())
+                for _, r in basket_codes_df.iterrows():
+                    basket_symbols_by_fund.setdefault(r['fund_code'], set()).add(r['underlying_symbol'])
             except:
                 pass
 
@@ -2025,7 +2072,15 @@ class FundService:
                 # 先创建 fund_dict 用于存储基金数据
                 fund_dict = fund.to_dict()
                 fund_dict.update(metrics)
-                
+
+                # [AI-2026-08-17] rt_val 为空且基金实时估值依赖 FUTU 行情源、而本地 FUTU 未连接 →
+                #   标记 rt_unavailable='FUTU'，前端主看板据此显示「缺FUTU」(而非笼统 '-')，明确是源未连而非无数据。
+                #   仅 futu_reader.disabled 才标记：若 FUTU 已连(如接 OpenD)但盘后无行情，rt_val=None 属正常，仍显示 '-'。
+                if metrics.get('rt_val') is None and _fund_requires_futu(code, basket_symbols_by_fund, fund):
+                    _fr = getattr(self.market_data_service, 'futu_reader', None)
+                    if _fr is not None and getattr(_fr, 'disabled', False):
+                        fund_dict['rt_unavailable'] = 'FUTU'
+
                 # 精度处理
                 for k in ['price', 'nav', 'static_val', 'rt_val']:
                     if k in fund_dict and fund_dict[k]:
