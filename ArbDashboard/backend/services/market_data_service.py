@@ -432,6 +432,9 @@ class MarketDataService:
                         'ask': ask,
                         'bid_size': d.get('bid_size', 0) or 0,
                         'ask_size': d.get('ask_size', 0) or 0,
+                        # [AI-2026-08-17] 富途多档盘口（最多10档）穿透到前端，供红框区展示对比
+                        'bid_levels': d.get('bid_levels', []) or [],
+                        'ask_levels': d.get('ask_levels', []) or [],
                     }
             except Exception as e:
                 logger.debug(f"[dual] 富途获取{symbol}异常: {e}")

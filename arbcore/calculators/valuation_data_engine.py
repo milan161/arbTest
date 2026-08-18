@@ -229,7 +229,9 @@ def assemble_static_components(
                 'symbol': sym,
                 'current_price': float(row[sym]),
                 'base_price': float(base_row[sym]),
-                'weight': float(row.get(f"{sym}_weight", p.get('weight', 0))) / 100.0,
+                # [AI-2026-08-18] 权重须与 base_price 同源取 base_row（基准日权重）：当日行（如 8-17）非任何基准日，
+                # fund_basket_weights 当日无行 → weight 列 NaN→fillna(0) → w_change==0 → 多篮子静态估值返回 None。
+                'weight': float(base_row.get(f"{sym}_weight", p.get('weight', 0))) / 100.0,
             })
     # 2) 若无 portfolio 组件（指数/亚洲/国内LOF），用 related_index 作为单组件
     if not components and related_index and related_index in row and related_index in base_row:

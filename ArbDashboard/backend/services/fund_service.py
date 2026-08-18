@@ -37,6 +37,22 @@ _YAML_TRADE_FUTURE: Dict[str, str] = {}
 _YAML_VALUATION_PORTFOLIO: Dict[str, list] = {}
 
 
+def _sanitize_json_floats(obj):
+    """[AI-2026-08-17] 递归把 NaN/Inf 洗成 None，避免 FastAPI 序列化
+    'Out of range float values are not JSON compliant' 崩溃（如 164906 的 KWEB
+    netvalue 缺失导致 components[].base_price=NaN）。洗成 None = 前端显 '--'，
+    符合 SUPREME 铁律「缺失显 --，绝不兜底」——仅做 JSON 安全清洗，不填默认值。"""
+    if isinstance(obj, float):
+        if obj != obj or obj in (float('inf'), float('-inf')):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_json_floats(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_json_floats(v) for v in obj]
+    return obj
+
+
 def _scalar_level(v):
     """[AI-2026-08-17] A股实时源(tdx/sina/guojin/galaxy/tencent)的 bid/ask 为5档list，
     IB/FUTU 分支为标量买一/卖一。估值路径只取买一/卖一标量（list[0]），
@@ -1183,7 +1199,7 @@ class FundService:
             fx_current = None
             hedge = None
             base_date = None
-            basket_categories = {'黄金原油', 'QDII欧美', '白银', '混合跨境'}
+            basket_categories = {'黄金原油', 'QDII欧美', '白银', '混合跨境'}  # [AI-2026-08-17] QDII日本不走此篮子分支：详情页应复用主看板 NK 期货路径(get_unified_dashboard_data L1628)，而非 NKY ETF 篮子(usa_etf_daily_prices 无 NKY 数据)
             if category in basket_categories:
                 yaml_trade_etf = _YAML_TRADE_ETF.get(code, '')
                 resolved_trade_etf = yaml_trade_etf or _normalize_empty_symbol(fund.get('related_index', ''))
@@ -1305,7 +1321,8 @@ class FundService:
                 except Exception as e:
                     logger.debug(f"[{code}] 取主面板实时估值失败: {e}")
 
-            return {
+            # [AI-2026-08-17] NaN/Inf 安全清洗：防 FastAPI 序列化崩溃(164906 KWEB netvalue 缺失 → base_price=NaN → HTTP 500)
+            return _sanitize_json_floats({
                 'fund_code': code,
                 'fund_name': name,
                 'category': category,
@@ -1331,7 +1348,7 @@ class FundService:
                     'price': lof_quote.get('price') if lof_quote else None,
                     'source': lof_quote.get('source') if lof_quote else None,
                 } if lof_quote else None,
-            }
+            })
         except Exception as e:
             logger.error(f"[{code}] get_realtime_valuation_detail 异常: {e}")
             return None

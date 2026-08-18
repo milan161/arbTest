@@ -6,7 +6,6 @@ futu_reader.py - 富途行情读取器模块
 功能：通过富途 OpenD 获取美股/港股实时行情
 """
 
-import os
 import time
 import threading
 import pandas as pd
@@ -187,6 +186,12 @@ class FutuReader:
                 self._order_book_subscribed = set()  # [AI-2026-08-06] 重建 ctx 必须同步清空 ORDER_BOOK 订阅集合（同 _try_connect_silent），否则新连接盘口订阅丢失、bid/ask 永久 None
                 self.disabled = False
                 self.connected = True  # [AI-2026-07-15] 与 IB 一致
+                # [AI-2026-08-17] reconnect 只建连接不拉价，会导致后端状态为"富途(无数据)"、前端按钮不变绿。
+                # 连接成功后立即拉一次常见标的，把 prices 填充上，状态立刻变成 Ready。
+                try:
+                    self.get_prices(['GLD', 'XOP', 'QQQ', 'SPY', 'USO'])
+                except Exception as fetch_err:
+                    logger.debug(f"[富途] 重连后首次拉价失败: {fetch_err}")
                 logger.info(f"[富途] 手动重连成功 (第 {attempt} 次)")
                 return True, f"富途连接成功 (第 {attempt} 次尝试)"
             except Exception as e:
@@ -222,10 +227,8 @@ class FutuReader:
         # [AI-2026-08-04] 美股/港股盘口展示窗口门禁（东哥拍板）：套利 9:30-15:00，但港股 16:00 收盘、
         # IB/Futu 夜盘也 16:00 结束，故盘口展示放宽到 16:00；16:00 后一律不显示（连冻结值不留）。
         # 窗口外：不建连、不订阅、不请求 OpenD，返回空盘口（前端显示"—"），从源头不产生错价/冻结值。
-        # 注意：本门禁只管富途（美股/港股估值源）。IB 夜盘链路走 ib_reader，在 market_data_service
-        # 的 IB 分支另有 is_quote_window 门禁，互不影响。需要盘后调试时用 ARB_FUTU_ALL_DAY=1 临时放行。
         self.session_closed = False
-        if not is_quote_window() and os.environ.get('ARB_FUTU_ALL_DAY', '0') != '1':
+        if not is_quote_window():
             self.session_closed = True
             return False, "非行情展示时段(16:00后)，富途盘口不显示", {}
 
@@ -336,7 +339,7 @@ class FutuReader:
                     # [AI-2026-08-03] 富途 QUOTE 快照不含 bid/ask 列，必须 ORDER_BOOK + get_order_book 取真实买一卖一。
                     # _fetch_order_book 返回 (bid, ask, bid_size, ask_size)；取不到则全 0（前端走"等待数据"）。
                     last_0 = safe_float(row.get('last_price'))
-                    ob_bid, ob_ask, ob_bid_sz, ob_ask_sz = self._fetch_order_book(futu_code)
+                    ob_bid, ob_ask, ob_bid_sz, ob_ask_sz, ob_bids, ob_asks = self._fetch_order_book(futu_code)
 
                     bid = ob_bid if ob_bid and ob_bid > 0 else 0.0
                     ask = ob_ask if ob_ask and ob_ask > 0 else 0.0
@@ -347,7 +350,7 @@ class FutuReader:
                     # [AI-2026-08-04] INFO→DEBUG：此行每标的每轮各打一次，盘中每秒数十行，
                     # 是 ARM syslog 膨胀主因（单机 314M / 磁盘 +5pp 每天）。逐笔盘口属排障细节，
                     # 非运行必需；需要时用 LOG_LEVEL=DEBUG 打开。30 秒一次的价格心跳仍保留 INFO。
-                    logger.debug(f"【富途盘口】 {code}: bid={bid}(×{bid_size}) ask={ask}(×{ask_size}) last={last}")
+                    logger.debug(f"【富途盘口】 {code}: bid={bid}(×{bid_size}) ask={ask}(×{ask_size}) last={last} levels={len(ob_bids)}/{len(ob_asks)}")
 
                     # 只要有真实盘口或 last 就存，上游决定显示/估值（全 0 视为无数据由门禁处理）
                     if last > 0 or bid > 0 or ask > 0:
@@ -357,6 +360,9 @@ class FutuReader:
                             'last': last,
                             'bid_size': bid_size,
                             'ask_size': ask_size,
+                            # [AI-2026-08-17] 富途多档盘口（最多10档），供前端展示对比用，不参与估值计算
+                            'bid_levels': ob_bids,
+                            'ask_levels': ob_asks,
                         }
                         self.last_data_time = time.time()  # [AI-2026-07-15] 记录成功获取数据的时间戳
                 
@@ -396,36 +402,52 @@ class FutuReader:
             return False, f"富途接口异常: {err_msg}", self.prices
     
     # [AI-2026-08-03] 富途 QUOTE 快照不含买一卖一，必须 ORDER_BOOK 订阅 + get_order_book 取真实盘口。
-    # 返回 (bid, ask, bid_size, ask_size)，取不到返回 (None, None, 0, 0)。
-    def _fetch_order_book(self, futu_code):
+    # [AI-2026-08-17] 扩展为多档：返回 (bid, ask, bid_size, ask_size, bid_levels, ask_levels)。
+    #   - 前四项 = 第一档（兼容旧调用 _get_prices_impl 取买一卖一）；
+    #   - bid_levels / ask_levels = [[price, vol], ...] 最多 max_levels 档（富途免费 LV3 给 10 档）。
+    #   取不到返回 (None, None, 0, 0, [], [])。
+    def _fetch_order_book(self, futu_code, max_levels: int = 10):
         if self.ctx is None:
-            return (None, None, 0, 0)
+            return (None, None, 0, 0, [], [])
         try:
             if futu_code not in self._order_book_subscribed:
                 ret, _ = self.ctx.subscribe([futu_code], [SubType.ORDER_BOOK], session=Session.ALL)
                 if ret == 0:
                     self._order_book_subscribed.add(futu_code)
                 else:
-                    return (None, None, 0, 0)
+                    return (None, None, 0, 0, [], [])
             ret, ob = self.ctx.get_order_book(futu_code)
             if ret != 0 or not isinstance(ob, dict):
-                return (None, None, 0, 0)
+                return (None, None, 0, 0, [], [])
             bid_list = ob.get('Bid') or []
             ask_list = ob.get('Ask') or []
             if not bid_list or not ask_list:
-                return (None, None, 0, 0)
-            b0 = bid_list[0]
-            a0 = ask_list[0]
-            b_price = float(b0[0]) if b0 and len(b0) > 0 else 0.0
-            b_vol = float(b0[1]) if b0 and len(b0) > 1 else 0.0
-            a_price = float(a0[0]) if a0 and len(a0) > 0 else 0.0
-            a_vol = float(a0[1]) if a0 and len(a0) > 1 else 0.0
-            if b_price <= 0 or a_price <= 0:
-                return (None, None, 0, 0)
-            return (b_price, a_price, b_vol, a_vol)
+                return (None, None, 0, 0, [], [])
+            # [AI-2026-08-17] 多档解析：每档 [price, vol]，过滤无效价，截断到 max_levels
+            bid_levels = []
+            for row in bid_list[:max_levels]:
+                if not row:
+                    continue
+                p = float(row[0]) if len(row) > 0 else 0.0
+                v = float(row[1]) if len(row) > 1 else 0.0
+                if p > 0:
+                    bid_levels.append([p, v])
+            ask_levels = []
+            for row in ask_list[:max_levels]:
+                if not row:
+                    continue
+                p = float(row[0]) if len(row) > 0 else 0.0
+                v = float(row[1]) if len(row) > 1 else 0.0
+                if p > 0:
+                    ask_levels.append([p, v])
+            if not bid_levels or not ask_levels:
+                return (None, None, 0, 0, [], [])
+            b0 = bid_levels[0]
+            a0 = ask_levels[0]
+            return (b0[0], a0[0], b0[1], a0[1], bid_levels, ask_levels)
         except Exception as e:
             logger.debug(f"[富途] get_order_book {futu_code} 失败: {e}")
-            return (None, None, 0, 0)
+            return (None, None, 0, 0, [], [])
 
     def get_price(self, symbol):
         """

@@ -517,13 +517,20 @@ async def lifespan(app: FastAPI):
             # [AI-2026-06-28] daily_updater.py 在 scheduler/ 下
             return os.path.normpath(os.path.join(backend_dir, "scheduler"))
         def _find_python():
-            for candidate in [
-                os.path.normpath(os.path.join(backend_dir, "..", ".venv", "Scripts", "python.exe")),  # ArbDashboard/.venv (正确)
-                r"C:\Users\milan\AppData\Local\Programs\Python\Python311\python.exe",  # 系统 Python311
-                "python",
-            ]:
-                if os.path.exists(candidate):
-                    return candidate
+            # [AI-2026-08-17] 跨平台稳健版：优先复用当前进程解释器（main.py 已被 .venv 护栏锁定，
+            # sys.executable 必为装齐 apscheduler/ibapi/xtquant 依赖的 venv python），Windows/Linux/macOS 通用，零路径猜测。
+            if getattr(sys, 'executable', None) and os.path.exists(sys.executable):
+                return sys.executable
+            # 兜底（极少触发）：跨平台查找 venv / 系统 python
+            import shutil
+            for sub in ("Scripts", "bin"):
+                cand = os.path.normpath(os.path.join(backend_dir, "..", ".venv", sub, "python.exe" if os.name == 'nt' else "python"))
+                if os.path.exists(cand):
+                    return cand
+            for cmd in ("python3", "python"):
+                found = shutil.which(cmd)
+                if found:
+                    return found
             return None
         def _run_daily_updater(args_list):
             sd = _get_scripts_dir()
@@ -2306,8 +2313,10 @@ async def import_v7_ledger(file: UploadFile = File(...)):
                 pass
         return {"status": "ok", "data": result}
     except Exception as e:
-        logger.error(f"导入 v7 失败: {e}")
-        return {"status": "error", "message": str(e)}
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"导入 v7 失败: {e}\n{tb}")
+        return {"status": "error", "message": str(e), "detail": tb}
 
 @app.post("/api/config/fees/upsert")
 async def upsert_fund_fee(request: Request):

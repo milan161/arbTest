@@ -11,6 +11,10 @@ set "PY=%VENV%\python.exe"
 set "BACKEND=%SCRIPT_DIR%\backend"
 set "FRONTEND=%SCRIPT_DIR%\frontend"
 
+:: [AI-2026-08-17] 清空 PYTHONPATH：防止继承外层终端（如国金 QMT）注入的 GJQMT 路径，
+:: 否则其老版本 defusedxml 会因 PYTHONPATH 在 sys.path 中先于 venv 而覆盖 venv 包，导致导入 V7 报 XMLParser 错误。
+set "PYTHONPATH="
+
 :: Kill leftover backend (8000) and frontend (5173) ports
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1

@@ -375,10 +375,15 @@ const allColumns: DataTableColumns<any> = [
     key: 'rt_val_display', width: 80, align: 'center',
     className: 'col-rt-val',
     render(row: any) {
-      if (row.rt_val && row.rt_val > 0) return h('span', { class: 'num-cell' }, row.rt_val.toFixed(4))
-      if (row.rt_unavailable === 'FUTU') return h('span', { style: 'color:#f59e0b;font-size:11px;' }, '缺FUTU')
-      const val = row.rt_val && row.rt_val > 0 ? row.rt_val.toFixed(4) : '-'
+      // [AI-2026-08-18] 修复：原第一个分支(rt_val>0)直接 return 未绑 onClick，导致有数据时点击不跳转；现统一提前 onClick
       const onClick = () => router.push({ path: '/analysis', query: { code: row.fund_code, name: row.fund_name } })
+      if (row.rt_val && row.rt_val > 0) {
+        return h('span', { class: 'num-cell strong clickable-cell', onClick }, row.rt_val.toFixed(4))
+      }
+      if (row.rt_unavailable === 'FUTU') {
+        return h('span', { class: 'num-cell strong clickable-cell', style: 'color:#f59e0b;font-size:11px;', onClick }, '缺FUTU')
+      }
+      const val = '-'
       if (row.rt_frozen) {
         return h('span', { class: 'num-cell strong clickable-cell frozen-cell', onClick }, [
           val,

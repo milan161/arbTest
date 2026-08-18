@@ -11,10 +11,6 @@
           </div>
         </div>
         <n-space>
-          <n-button type="primary" @click="openAddModal">
-            <template #icon><n-icon><Plus /></n-icon></template>
-            交易记录
-          </n-button>
           <n-button secondary type="warning" @click="showFeeModal = true">
             <template #icon><n-icon><Settings /></n-icon></template>
             赎回费率
@@ -23,42 +19,46 @@
       </div>
     </n-card>
 
-    <!-- [AI-2026-08-16] 赎回提醒横幅：OPEN 笔推算可优惠赎回日 + unfinished 待净值 -->
-    <div v-if="alerts" class="mb-4">
-      <n-alert
-        v-for="(a, i) in alerts.open_alerts"
-        :key="'o' + a.id"
-        :type="a.level === 'critical' ? 'error' : (a.level === 'warning' ? 'warning' : (a.level === 'notice' ? 'warning' : 'info'))"
-        :title="`${a.fund_name}（${a.fund_code}）`"
-        class="mb-2 alert-item"
-        :show-icon="true"
-      >
-        <div class="alert-body">
-          <span class="alert-msg">{{ a.message }}</span>
-          <span class="alert-meta">赎回 LOF {{ a.buy_volume }} 份 ｜ 买平 ETF {{ a.short_volume }} 股</span>
+    <!-- [AI-2026-08-17] 赎回提醒：左=即将赎回(OPEN)  右=已赎回待净值(unfinished) -->
+    <div v-if="alerts && (alerts.open_count > 0 || alerts.unfinished_count > 0)" class="mb-4">
+      <div class="alert-grid">
+        <!-- 左栏：即将赎回 -->
+        <div class="alert-col">
+          <div class="alert-col-header">即将赎回 ({{ alerts.open_count }})</div>
+          <n-alert
+            v-for="a in alerts.open_alerts"
+            :key="'o' + a.id"
+            type="info"
+            :title="`${a.fund_name}（${a.fund_code}）`"
+            class="mb-2 alert-item"
+            :show-icon="true"
+          >
+            <div class="alert-body">
+              <span class="alert-msg">{{ a.message }}</span>
+              <span class="alert-meta">赎回 LOF {{ a.buy_volume }} 份 ｜ 买平 ETF {{ a.short_volume }} 股</span>
+            </div>
+          </n-alert>
+          <div v-if="alerts.open_count === 0" class="alert-empty">暂无即将赎回</div>
         </div>
-      </n-alert>
-      <n-alert
-        v-for="(a, i) in alerts.unfinished_alerts"
-        :key="'u' + a.id"
-        type="warning"
-        :title="`${a.fund_name}（${a.fund_code}）`"
-        class="mb-2 alert-item"
-        :show-icon="true"
-      >
-        <div class="alert-body">
-          <span class="alert-msg">{{ a.message }}</span>
-          <span class="alert-meta">买入 {{ a.buy_date }} ｜ 赎回 {{ a.sell_date }}</span>
+        <!-- 右栏：已赎回待净值 -->
+        <div class="alert-col">
+          <div class="alert-col-header">已退出待结算 ({{ alerts.unfinished_count }})</div>
+          <n-alert
+            v-for="a in alerts.unfinished_alerts"
+            :key="'u' + a.id"
+            type="warning"
+            :title="`${a.fund_name}（${a.fund_code}）`"
+            class="mb-2 alert-item"
+            :show-icon="true"
+          >
+            <div class="alert-body">
+              <span class="alert-msg">{{ a.message }}</span>
+              <span class="alert-meta">买入 {{ a.buy_date }} ｜ 赎回 {{ a.sell_date }}</span>
+            </div>
+          </n-alert>
+          <div v-if="alerts.unfinished_count === 0" class="alert-empty">暂无已赎回待净值</div>
         </div>
-      </n-alert>
-      <n-alert
-        v-if="alerts.open_count === 0 && alerts.unfinished_count === 0"
-        type="success"
-        title="暂无待处理项"
-        :show-icon="true"
-      >
-        当前没有未赎回（OPEN）或已赎回待净值的配对。
-      </n-alert>
+      </div>
     </div>
 
     <!-- 统计概览 -->
@@ -85,35 +85,48 @@
         <n-gi :span="4">
           <div class="stat-card">
             <div class="stat-label">未赎回 (OPEN)</div>
-            <div class="stat-value" :class="openPairs.length ? 'text-red' : ''">{{ openPairs.length }}</div>
+            <div class="stat-value" :class="openPairs.length ? 'text-orange' : ''">{{ openPairs.length }}</div>
           </div>
         </n-gi>
         <n-gi :span="4">
           <div class="stat-card">
-            <div class="stat-label">已赎回待净值</div>
+            <div class="stat-label">已退出待结算</div>
             <div class="stat-value" :class="unfinishedPairs.length ? 'text-orange' : ''">{{ unfinishedPairs.length }}</div>
           </div>
         </n-gi>
         <n-gi :span="4">
           <div class="stat-card">
             <div class="stat-label">已结项</div>
-            <div class="stat-value text-green">{{ settledCount }}</div>
+            <div class="stat-value">{{ settledCount }}</div>
           </div>
         </n-gi>
       </n-grid>
+    </n-card>
+
+    <!-- 按月盈亏 -->
+    <n-card :bordered="false" class="shadow-soft mb-4">
+      <template #header><span class="text-base font-semibold">月度盈亏（按平仓日归集）</span></template>
+      <n-data-table
+        :columns="monthlyColumns"
+        :data="monthlyPnl"
+        size="small"
+        bordered
+        :row-class-name="pnlRowClass"
+        :max-height="280"
+      />
     </n-card>
 
     <!-- 套利账本（按状态分页签） -->
     <n-card :bordered="false" class="shadow-soft mb-4">
       <n-tabs type="line" animated>
         <n-tab-pane name="open" :tab="`持仓未赎回 (${openPairs.length})`">
-          <n-data-table :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1500" />
+          <n-data-table :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1130" />
         </n-tab-pane>
-        <n-tab-pane name="unfinished" :tab="`已赎回待净值 (${unfinishedPairs.length})`">
-          <n-data-table :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1500" />
+        <n-tab-pane name="unfinished" :tab="`已退出待结算 (${unfinishedPairs.length})`">
+          <n-data-table :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1130" />
         </n-tab-pane>
         <n-tab-pane name="settled" :tab="`已结项 (${settledPairs.length})`">
-          <n-data-table :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1500" />
+          <n-data-table :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1130" />
         </n-tab-pane>
       </n-tabs>
     </n-card>
@@ -152,7 +165,7 @@
         bordered
         :row-class-name="pnlRowClass"
         :max-height="700"
-        :scroll-x="1500"
+        :scroll-x="1130"
         :pagination="{ pageSize: 20 }"
       />
     </n-card>
@@ -363,9 +376,9 @@ import {
   useMessage, NSpace, NText, NTabs, NTabPane, NModal, NForm, NFormItem,
   NInput, NInputNumber, NDatePicker, NDivider, NSelect, NAlert
 } from 'naive-ui'
-import { BookOpen, Plus, Settings, Edit3, TrendingUp, TrendingDown, Upload } from 'lucide-vue-next'
+import { BookOpen, Settings, Upload } from 'lucide-vue-next'
 import {
-  getPairs, addPair, updatePair, deletePair,
+  getPairs, addPair, updatePair,
   getBrokerFees, addBrokerFee, deleteBrokerFee
 } from '../api'
 import { getFeeRate, getLedgerAlerts, importV7Ledger } from '../api/ledgerApi'
@@ -445,6 +458,44 @@ const settledCount = computed(() => settledPairs.value.length)
 const totalPnl = computed(() => settledPairs.value.reduce((s, p) => s + (p.pnl_rmb || 0), 0))
 const totalUsd = computed(() => settledPairs.value.reduce((s, p) => s + (p.pnl_usd || 0), 0))
 const totalASharePnl = computed(() => settledPairs.value.reduce((s, p) => s + (p.a_share_pnl || 0), 0))
+
+// ===== 按月盈亏（按平仓日 sell_date 归集）=====
+const monthlyPnl = computed(() => {
+  const map: Record<string, { count: number; pnl_rmb: number; pnl_usd: number; a_share_pnl: number }> = {}
+  for (const p of settledPairs.value) {
+    const d = (p as any).sell_date || (p as any).buy_date
+    if (!d) continue
+    const m = String(d).substring(0, 7) // '2026-07'
+    if (!map[m]) map[m] = { count: 0, pnl_rmb: 0, pnl_usd: 0, a_share_pnl: 0 }
+    map[m].count++
+    map[m].pnl_rmb += (p.pnl_rmb || 0)
+    map[m].pnl_usd += (p.pnl_usd || 0)
+    map[m].a_share_pnl += (p.a_share_pnl || 0)
+  }
+  return Object.entries(map)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, v]) => ({ month, ...v }))
+})
+
+const monthlyColumns = [
+  { title: '月份', key: 'month', width: 80, fixed: 'left' as const },
+  { title: '笔数', key: 'count', width: 50, align: 'center' as const },
+  {
+    title: '盈亏(RMB)', key: 'pnl_rmb', width: 110, align: 'right' as const,
+    render: (r: any) => h(NText, { style: r.pnl_rmb >= 0 ? 'color:#e53e3e' : 'color:#16a34a', fontWeight: 600 },
+      { default: () => (r.pnl_rmb >= 0 ? '+' : '') + r.pnl_rmb.toFixed(2) })
+  },
+  {
+    title: 'A股盈亏', key: 'a_share_pnl', width: 100, align: 'right' as const,
+    render: (r: any) => h(NText, { style: r.a_share_pnl >= 0 ? 'color:#e53e3e' : 'color:#16a34a' },
+      { default: () => Math.round(r.a_share_pnl).toLocaleString() })
+  },
+  {
+    title: '美股盈亏(USD)', key: 'pnl_usd', width: 120, align: 'right' as const,
+    render: (r: any) => h(NText, { style: r.pnl_usd >= 0 ? 'color:#e53e3e' : 'color:#16a34a' },
+      { default: () => (r.pnl_usd >= 0 ? '+' : '') + r.pnl_usd.toFixed(2) })
+  },
+]
 
 // ===== Fund options for select =====
 const fundList = [
@@ -609,45 +660,7 @@ const fetchUsdRate = async () => {
   } catch (e) { /* keep fallback */ }
 }
 
-const openAddModal = (pair?: any) => {
-  if (pair) {
-    isEditing.value = true
-    editingId.value = pair.id
-    form.value = {
-      fund_code: pair.fund_code || '162411',
-      fund_name: pair.fund_name || '',
-      broker_name: pair.broker_name || '',
-      close_type: pair.close_type || 'REDEEM',
-      status: pair.status || 'OPEN',
-      buy_ts: pair.buy_date ? new Date(pair.buy_date).getTime() : Date.now(),
-      buy_price: pair.buy_price || 0,
-      buy_volume: pair.buy_volume || 0,
-      buy_amount: pair.buy_amount || 0,
-      buy_account: pair.buy_account || '',
-      sell_ts: pair.sell_date ? new Date(pair.sell_date).getTime() : null,
-      sell_price: pair.sell_price || 0,
-      sell_amount: pair.sell_amount || 0,
-      redemption_fee: pair.redemption_fee || 0,
-      hedge_symbol: pair.hedge_symbol || 'XOP',
-      short_ts: pair.short_date ? new Date(pair.short_date).getTime() : null,
-      short_price: pair.short_price || 0,
-      short_volume: pair.short_volume || 0,
-      short_amount: pair.short_amount || 0,
-      cover_ts: pair.cover_date ? new Date(pair.cover_date).getTime() : null,
-      cover_price: pair.cover_price || 0,
-      cover_amount: pair.cover_amount || 0,
-      us_commission: pair.us_commission || 0,
-      buy_notes: pair.buy_notes || '',
-      sell_notes: pair.sell_notes || '',
-      notes: pair.notes || ''
-    }
-  } else {
-    isEditing.value = false
-    editingId.value = null
-    form.value = defaultForm()
-  }
-  showAddModal.value = true
-}
+// [2026-08-18] 新增/编辑弹窗已移除：程序数据仅经 V7 导入维护（openAddModal 不再需要）
 
 const handleSubmit = async () => {
   const f = form.value
@@ -697,23 +710,7 @@ const handleSubmit = async () => {
   }
 }
 
-const handleDelete = async (id: number) => {
-  try {
-    await deletePair(id)
-    message.success('已删除')
-    fetchPairs()
-    loadAlerts()
-  } catch (e) { message.error('删除失败') }
-}
-
-const handleClose = async (id: number) => {
-  try {
-    await updatePair(id, { status: 'Closed' })
-    message.success('已标记结项')
-    fetchPairs()
-    loadAlerts()
-  } catch (e) { message.error('操作失败') }
-}
+// [2026-08-18] 删除 / 标记结项 按钮均已移除：程序数据仅经 V7 导入维护（handleDelete / handleClose 不再需要，结项状态由 V7 导入 upsert 同步）
 
 // ===== Table columns =====
 const pnlRowClass = (row: any) => {
@@ -723,10 +720,12 @@ const pnlRowClass = (row: any) => {
 
 const fmt = (v: any, d: number = 2) => v !== null && v !== undefined && v !== 0 ? Number(v).toFixed(d) : '-'
 const shortDate = (d: string) => d ? d.substring(5) : '-'
+// [2026-08-18] 表头两行：'金额(RMB)' -> '金额' / '(RMB)'，收窄列宽
+const twoLineTitle = (a: string, b: string) => () => h('div', { style: 'line-height:1.25; text-align:center; white-space:nowrap;' }, [a, h('br'), b])
 
 const statusTag = (s: string) => {
   const map: any = { 'OPEN': 'error', 'unfinished': 'warning', 'Closed': 'success' }
-  const label: any = { 'OPEN': '未赎回', 'unfinished': '待净值', 'Closed': '结项' }
+  const label: any = { 'OPEN': '未赎回', 'unfinished': '已退出', 'Closed': '结项' }
   return h(NTag, { type: map[s] || 'default', size: 'small' }, { default: () => label[s] || s || '-' })
 }
 
@@ -750,37 +749,37 @@ const pairColumns = [
   // A股开仓
   { title: '开仓日', key: 'buy_date', width: 46, align: 'center' as const,
     render: (r: any) => r.buy_date ? shortDate(r.buy_date) : '-' },
-  { title: '开仓价', key: 'buy_price', width: 50, align: 'center' as const,
+  { title: '开仓价', key: 'buy_price', width: 48, align: 'center' as const,
     render: (r: any) => fmt(r.buy_price, 3) },
-  { title: '数量', key: 'buy_volume', width: 52, align: 'center' as const,
-    render: (r: any) => r.buy_volume ? Number(r.buy_volume).toLocaleString() : '-' },
-  { title: '金额(RMB)', key: 'buy_amount', width: 82, align: 'right' as const,
+  { title: '数量', key: 'buy_volume', width: 48, align: 'center' as const,
+    render: (r: any) => r.buy_volume ? Number(r.buy_volume) : '-' },
+  { title: twoLineTitle('金额', '(RMB)'), key: 'buy_amount', width: 68, align: 'right' as const,
     render: (r: any) => h(NText, { style: (r.buy_amount ? 'color:#e53e3e;' : '') + 'white-space:nowrap' }, { default: () => fmt(r.buy_amount, 0) }) },
   // A股平仓
-  { title: '平仓日', key: 'sell_date', width: 46, align: 'center' as const,
+  { title: '平仓日', key: 'sell_date', width: 44, align: 'center' as const,
     render: (r: any) => r.sell_date ? shortDate(r.sell_date) : '-' },
-  { title: '平仓价', key: 'sell_price', width: 50, align: 'center' as const,
+  { title: '平仓价', key: 'sell_price', width: 46, align: 'center' as const,
     render: (r: any) => fmt(r.sell_price, 3) },
-  { title: '金额(RMB)', key: 'sell_amount', width: 82, align: 'right' as const,
+  { title: twoLineTitle('金额', '(RMB)'), key: 'sell_amount', width: 66, align: 'right' as const,
     render: (r: any) => h(NText, { style: (r.sell_amount ? 'color:#16a34a;' : '') + 'white-space:nowrap' }, { default: () => fmt(r.sell_amount, 0) }) },
   // 美股做空
-  { title: '对冲', key: 'hedge', width: 40, align: 'center' as const,
+  { title: '对冲', key: 'hedge', width: 36, align: 'center' as const,
     render: (r: any) => r.hedge_symbol || '-' },
-  { title: '空单价', key: 'short_price', width: 68, align: 'center' as const,
+  { title: '空单价', key: 'short_price', width: 58, align: 'center' as const,
     render: (r: any) => r.short_price ? `$${fmt(r.short_price)}` : '-' },
-  { title: '空单量', key: 'short_volume', width: 46, align: 'center' as const,
+  { title: '空单量', key: 'short_volume', width: 44, align: 'center' as const,
     render: (r: any) => r.short_volume || '-' },
-  { title: '空金额(USD)', key: 'short_amount', width: 82, align: 'right' as const,
+  { title: twoLineTitle('空金额', '(USD)'), key: 'short_amount', width: 66, align: 'right' as const,
     render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.short_amount)) },
   // 美股买平
-  { title: '买平日', key: 'cover_date', width: 46, align: 'center' as const,
+  { title: '买平日', key: 'cover_date', width: 44, align: 'center' as const,
     render: (r: any) => r.cover_date ? shortDate(r.cover_date) : '-' },
-  { title: '买平价', key: 'cover_price', width: 68, align: 'center' as const,
+  { title: '买平价', key: 'cover_price', width: 58, align: 'center' as const,
     render: (r: any) => r.cover_price ? `$${fmt(r.cover_price)}` : '-' },
-  { title: '金额(USD)', key: 'cover_amount', width: 82, align: 'right' as const,
+  { title: twoLineTitle('金额', '(USD)'), key: 'cover_amount', width: 64, align: 'right' as const,
     render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.cover_amount)) },
   // 盈亏汇总：未结项(OPEN/unfinished)显示空白，已结项(Closed)才显示数值
-  { title: 'A股盈亏', key: 'a_share_pnl', width: 64, align: 'right' as const,
+  { title: 'A股盈亏', key: 'a_share_pnl', width: 56, align: 'right' as const,
     render: (r: any) => {
       if (r.status !== 'Closed') return '-'
       if (r.a_share_pnl === null || r.a_share_pnl === undefined) return '-'
@@ -788,7 +787,7 @@ const pairColumns = [
         { default: () => fmt(r.a_share_pnl, 0) })
     }
   },
-  { title: 'USD盈亏', key: 'pnl_usd', width: 64, align: 'right' as const,
+  { title: 'USD盈亏', key: 'pnl_usd', width: 56, align: 'right' as const,
     render: (r: any) => {
       if (r.status !== 'Closed') return '-'
       if (r.pnl_usd === null || r.pnl_usd === undefined) return '-'
@@ -796,28 +795,17 @@ const pairColumns = [
         { default: () => fmt(r.pnl_usd, 0) })
     }
   },
-  { title: '总盈亏(RMB)', key: 'pnl_rmb', width: 78, align: 'right' as const, fixed: 'right' as const,
+  { title: twoLineTitle('总盈亏', '(RMB)'), key: 'pnl_rmb', width: 68, align: 'right' as const, fixed: 'right' as const,
     render: (r: any) => {
       if (r.status !== 'Closed') return '-'
       if (r.pnl_rmb === null || r.pnl_rmb === undefined) return '-'
-      const color = r.pnl_rmb >= 0 ? '#16a34a' : '#e53e3e'
+      const color = r.pnl_rmb >= 0 ? '#e53e3e' : '#16a34a'
       return h('div', { style: `font-weight:700;color:${color}` }, [
         r.pnl_rmb >= 0 ? '+' : '',
         Number(r.pnl_rmb).toFixed(0)
       ])
     }
   },
-  {
-    title: '操作', key: 'ops', width: 80, align: 'center' as const, fixed: 'right' as const,
-    render: (r: any) => h(NSpace, { size: 6, align: 'center' }, {
-      default: () => [
-        h(NButton, { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openAddModal(r) },
-          { default: () => '编辑' }),
-        h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => handleDelete(r.id) },
-          { default: () => '删除' })
-      ]
-    })
-  }
 ]
 
 // ===== Fee management =====
@@ -908,18 +896,22 @@ onMounted(() => {
 .stat-value { font-size: 22px; font-weight: 800; }
 /* 分页签文字加大加粗（黑体） */
 :deep(.n-tabs-tab__label) { font-size: 15px; font-weight: 700; color: #1e293b; }
-.text-green { color: #16a34a; }
-.text-red { color: #e53e3e; }
+.text-green { color: #e53e3e; } /* A股惯例：盈利红 */
+.text-red { color: #16a34a; } /* 亏损绿 */
 .text-orange { color: #ea580c; }
 
+.alert-grid { display: flex; gap: 16px; }
+.alert-col { flex: 1; min-width: 0; }
+.alert-col-header { font-weight: 800; font-size: 14px; margin-bottom: 8px; color: #475569; }
+.alert-empty { color: #94a3b8; font-size: 14px; padding: 12px 0; }
 .alert-item :deep(.n-alert__content) { width: 100%; }
 .alert-item :deep(.n-alert__title) { font-weight: 800; font-size: 15px; }
 .alert-body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; font-size: 15px; font-weight: 700; }
 .alert-msg { font-weight: 800; }
 .alert-meta { color: #334155; font-weight: 700; }
 
-:deep(.row-profit) td { background-color: #f0fdf4 !important; }
-:deep(.row-loss) td { background-color: #fef2f2 !important; }
+:deep(.row-profit) td { background-color: #fef2f2 !important; } /* 盈利淡红底 */
+:deep(.row-loss) td { background-color: #f0fdf4 !important; } /* 亏损淡绿底 */
 
 /* 套利配对对账表：数据行紧凑，列头保持默认可读性 */
 .ledger-table :deep(.n-data-table-td) { padding: 3px 5px !important; }

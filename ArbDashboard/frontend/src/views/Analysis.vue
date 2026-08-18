@@ -201,36 +201,54 @@
                <template v-if="!vcRef?.isQDIIJapan">
                <div v-for="item in (vcRef?.uniqueValuationSymbols ?? [])" :key="item.symbol" 
                     style="background: #f0f7ff; padding: 6px 10px; border-radius: 6px; border: 1px solid #bae6fd; display: flex; flex-direction: column; gap: 4px;">
-                  <div style="font-weight: bold; color: #0369a1; font-size: 12px; display: flex; justify-content: space-between; align-items: center;">
-                     <span>📊 {{ item.symbol }} 实时盘口</span>
-                     <span style="font-size: 10px; color: #64748b; font-weight: normal;">({{ item.currency }})</span>
-                  </div>
-                  <!-- IB 主源（用于实时估值计算，点击可填入）。标签独占一行，买一/卖一另起一行，避免挤换行 -->
+                 <div style="font-weight: bold; color: #0369a1; font-size: 12px; display: flex; justify-content: space-between; align-items: center;">
+                    <span>📊 {{ item.symbol }} 实时盘口</span>
+                    <span style="font-size: 10px; color: #64748b; font-weight: normal;">({{ item.currency }})</span>
+                 </div>
+                 <!-- [AI-2026-08-17] 盘口价分时曲线（最新价/买一/卖一 纯折线，无影线无成交量） -->
+                 <div style="height: 92px;">
+                    <v-chart v-if="(dualHistory[item.symbol]?.length ?? 0) >= 2" class="chart" :option="depthChartOption(item.symbol)" autoresize />
+                    <div v-else style="height:100%; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:12px;">等待数据...</div>
+                 </div>
+                 <!-- IB 主源（用于实时估值计算，点击可填入）。标签独占一行，买一/卖一另起一行，避免挤换行 -->
                   <div style="display: flex; flex-direction: column; gap: 3px;">
                     <div style="color:#0369a1; font-weight:bold; font-size:11px; white-space:nowrap;">IB（主力）</div>
-                    <div style="display: flex; justify-content: space-between; align-items:center; font-size: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items:center; font-size: 14px;">
                        <span style="color:#2e7d32; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) ?? hedgePrice" title="点击填入买一价(IB)">
                           买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.bid ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid) }}</span>
-                          <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.bid_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid_size) }}</span>
+                          <span style="color:#334155; font-weight:bold;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.bid_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.bid_size) }}</span>
                        </span>
                        <span style="color:#d32f2f; font-weight:bold; cursor:pointer;" @click="hedgePrice = (dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) ?? hedgePrice" title="点击填入卖一价(IB)">
                           卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.ib?.ask ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask) }}</span>
-                          <span style="color:#64748b; font-weight:normal;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.ask_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask_size) }}</span>
+                          <span style="color:#334155; font-weight:bold;"> × {{ fmtSz(dualMap[item.symbol]?.ib?.ask_size ?? (vcRef?.meta?.realtime_quotes as any)?.[item.symbol]?.ask_size) }}</span>
                        </span>
                     </div>
                   </div>
-                  <!-- 富途对比（只读，不参与计算）。同样标签独占一行 -->
-                  <div style="display: flex; flex-direction: column; gap: 3px;">
-                    <div style="color:#0891b2; font-weight:bold; font-size:11px; white-space:nowrap;">富途（对比）</div>
-                    <div style="display: flex; justify-content: space-between; align-items:center; font-size: 11px; color:#64748b;">
-                       <span>买一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.bid) }}</span>
-                          <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.bid_size) }}</span>
-                       </span>
-                       <span>卖一 <span style="font-family: monospace;">{{ fmtQ(dualMap[item.symbol]?.futu?.ask) }}</span>
-                          <span> × {{ fmtSz(dualMap[item.symbol]?.futu?.ask_size) }}</span>
-                       </span>
-                    </div>
-                  </div>
+                 <!-- 富途对比（只读多档展示，不参与计算） -->
+                 <div style="display: flex; flex-direction: column; gap: 3px;">
+                   <div style="color:#0891b2; font-weight:bold; font-size:11px; white-space:nowrap;">富途（对比 · 多档）</div>
+                   <!-- [AI-2026-08-18] 老花眼优化：富途多档表 10px→13px、颜色加深、数字加粗 -->
+                   <table style="width:100%; font-size:13px; font-family:monospace; border-collapse:collapse; color:#334155;">
+                     <thead>
+                       <tr style="border-bottom:1px solid #e5e7eb;">
+                         <th style="text-align:left; font-weight:normal;">档</th>
+                         <th style="text-align:right; font-weight:normal; color:#2e7d32;">买价</th>
+                         <th style="text-align:right; font-weight:normal;">量</th>
+                         <th style="text-align:right; font-weight:normal; color:#d32f2f;">卖价</th>
+                         <th style="text-align:right; font-weight:normal;">量</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       <tr v-for="i in 10" :key="'ob'+i" style="border-bottom:1px dotted #f1f5f9;">
+                         <td style="text-align:left;">{{ i }}</td>
+                         <td style="text-align:right; color:#2e7d32; font-weight:bold;">{{ fmtQ(dualMap[item.symbol]?.futu?.bid_levels?.[i-1]?.[0]) }}</td>
+                         <td style="text-align:right; font-weight:bold;">{{ fmtSz(dualMap[item.symbol]?.futu?.bid_levels?.[i-1]?.[1]) }}</td>
+                         <td style="text-align:right; color:#d32f2f; font-weight:bold;">{{ fmtQ(dualMap[item.symbol]?.futu?.ask_levels?.[i-1]?.[0]) }}</td>
+                         <td style="text-align:right; font-weight:bold;">{{ fmtSz(dualMap[item.symbol]?.futu?.ask_levels?.[i-1]?.[1]) }}</td>
+                       </tr>
+                     </tbody>
+                   </table>
+                 </div>
                </div>
                </template>
 
@@ -463,6 +481,10 @@ const hedgePrice = ref(0)
 // [AI-2026-08-03] 双源盘口对比（IB vs 富途）：只读展示，不参与估值计算。
 // 实时估值始终以 IB 为准；此处仅把两源的原始 bid/ask/量并排显示，供对比时效/准确性。
 const dualMap = ref<Record<string, any>>({})
+// [AI-2026-08-17] 盘口价分时曲线历史缓存：按 symbol 存最近 80 个采样点（约 4 分钟，3 秒轮询）。
+// 纯前端本地缓存，刷新即丢（持久化属下一步 sampler 落库）。不新增任何网络请求。
+const dualHistory = reactive<Record<string, { t: number; last: number; bid: number; ask: number }[]>>({})
+const DUAL_HISTORY_MAX = 80
 let dualTimer: any = null
 const fetchDual = async () => {
   const syms = (vcRef?.value?.uniqueValuationSymbols ?? []).map((s: any) => s.symbol).filter(Boolean)
@@ -470,8 +492,47 @@ const fetchDual = async () => {
   try {
     const r = await fetch(`/api/market/realtime_dual?codes=${encodeURIComponent(syms.join(','))}`)
     const j = await r.json()
-    if (j?.status === 'ok' && j.data) dualMap.value = j.data
+    if (j?.status === 'ok' && j.data) {
+      dualMap.value = j.data
+      // 落盘口价历史点：优先用 IB 主源（与估值同源），缺失则退回富途最新价
+      const now = Date.now()
+      for (const sym of syms) {
+        const d = j.data[sym] || {}
+        const ib = d.ib || {}
+        const futu = d.futu || {}
+        const last = (ib.last && ib.last > 0) ? ib.last : (futu.last && futu.last > 0 ? futu.last : (ib.bid > 0 ? ib.bid : ib.ask))
+        const bid = ib.bid > 0 ? ib.bid : (futu.bid > 0 ? futu.bid : 0)
+        const ask = ib.ask > 0 ? ib.ask : (futu.ask > 0 ? futu.ask : 0)
+        if (last <= 0) continue
+        if (!dualHistory[sym]) dualHistory[sym] = []
+        dualHistory[sym].push({ t: now, last, bid, ask })
+        if (dualHistory[sym].length > DUAL_HISTORY_MAX) dualHistory[sym].shift()
+      }
+    }
   } catch (e) { /* 对比信息非关键，静默 */ }
+}
+
+// [AI-2026-08-17] 外盘盘口价分时曲线：最新价/买一/卖一 三条纯折线，无影线无成交量，与截图一致。
+const depthChartOption = (symbol: string) => {
+  const hist = dualHistory[symbol] || []
+  if (hist.length < 2) return {}
+  const times = hist.map(p => {
+    const d = new Date(p.t)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+  })
+  return {
+    animation: false,
+    grid: { left: 48, right: 12, top: 24, bottom: 18 },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' }, confine: true },
+    legend: { data: ['最新价', '买一', '卖一'], top: 0, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 10 } },
+    xAxis: { type: 'category', data: times, boundaryGap: false, axisLine: { lineStyle: { color: '#cbd5e1' } }, axisLabel: { show: false }, splitLine: { show: false } },
+    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 9, formatter: (v: number) => v.toFixed(2) }, splitLine: { lineStyle: { type: 'dashed', color: '#eef2f7' } } },
+    series: [
+      { name: '最新价', type: 'line', data: hist.map(p => p.last), smooth: false, showSymbol: false, lineStyle: { width: 1.5 }, itemStyle: { color: '#3b82f6' } },
+      { name: '买一', type: 'line', data: hist.map(p => p.bid), smooth: false, showSymbol: false, lineStyle: { width: 1 }, itemStyle: { color: '#2e7d32' } },
+      { name: '卖一', type: 'line', data: hist.map(p => p.ask), smooth: false, showSymbol: false, lineStyle: { width: 1 }, itemStyle: { color: '#d32f2f' } }
+    ]
+  }
 }
 // 盘口数值格式化：0/空显示「等待数据」，否则两位小数
 const fmtQ = (v: any) => (v !== null && v !== undefined && v > 0) ? Number(v).toFixed(2) : '等待数据'
@@ -698,10 +759,12 @@ onUnmounted(() => {
 .analysis-page { padding: 12px; background-color: #f8fafc; min-height: 100vh; }
 .fund-summary-header { background: #fff; padding: 12px 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .market-depth { padding: 4px; }
-.depth-row { display: flex; justify-content: space-between; font-family: monospace; font-size: 12px; margin-bottom: 2px; padding: 2px 8px; border-radius: 4px; transition: background-color 0.2s; }
+/* [AI-2026-08-18] 老花眼优化：盘口数字黑体加粗、字号 12px→15px */
+.depth-row { display: flex; justify-content: space-between; font-family: monospace; font-size: 15px; font-weight: bold; margin-bottom: 2px; padding: 2px 8px; border-radius: 4px; transition: background-color 0.2s; }
 .depth-row.clickable:hover { background-color: #f1f5f9; }
-.depth-row .price { font-weight: bold; width: 60px; text-align: right; }
-.depth-row .vol { width: 50px; text-align: right; color: #475569; }
+/* [AI-2026-08-18] 老花眼优化：价格/量列加宽（60/50→70px），防大数字换行 */
+.depth-row .price { font-weight: bold; width: 70px; text-align: right; }
+.depth-row .vol { width: 70px; text-align: right; color: #334155; }
 .sandbox-card { background: #fffcf5; border: 1px solid #ffcc80; padding: 16px; }
 .sandbox-layout { display: flex; justify-content: space-between; align-items: center; }
 .text-red { color: #ef4444; } .text-green { color: #22c55e; }
@@ -718,8 +781,9 @@ onUnmounted(() => {
   margin-top: 12px;
   align-items: stretch;
 }
+/* [AI-2026-08-18] 老花眼优化：盘口卡加宽，防大字号数字/数量换行 */
 .depth-table-card-left {
-  width: 280px;
+  width: 340px;
   flex-shrink: 0;
   box-sizing: border-box;
 }
@@ -729,7 +793,7 @@ onUnmounted(() => {
   min-width: 0;
 }
 .depth-table-card-right {
-  width: 280px;
+  width: 400px;
   flex-shrink: 0;
   box-sizing: border-box;
 }

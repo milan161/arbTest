@@ -10,5 +10,6 @@ if not exist "%VENV%" (
 REM [AI-2026-08-03] 启动前释放 8000 端口：本项目仅后端使用 8000。若被残留进程占用，
 REM 会导致 .venv 后端因 Errno 10048 起不来、IB 行情静默失效。强杀任何 8000 占用者再启动。
 powershell -NoProfile -Command "$p=(Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue).OwningProcess | Where-Object { $_ -ne $null -and $_ -ne 0 }; if($p){$p | ForEach-Object { Write-Host ('[runback] 释放占用 8000 的残留进程 PID ' + $_); Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }}"
+set "PYTHONPATH="
 cd /d "%~dp0"
 "%VENV%" main.py
