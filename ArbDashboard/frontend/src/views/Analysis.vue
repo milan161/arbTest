@@ -66,43 +66,22 @@
       </n-card>
     </div>
 
-    <!-- 2. 详情模式：专业狙击工作站 -->
-    <div v-else class="detail-mode animate-fade-in">
-      <!-- 顶部专业摘要栏 (标题 + 基础仓位) -->
-      <div class="fund-summary-header shadow-soft" style="background: #fff; padding: 12px 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 2px solid #ffcc80;">
-         <div class="header-left" style="display: flex; align-items: center; gap: 16px;">
-            <n-button quaternary circle @click="handleBack"><template #icon><n-icon><ArrowLeft /></n-icon></template></n-button>
-            <div class="fund-info">
-               <div style="font-size:18px; font-weight:bold; color: #d35400;">
-                   {{ fundName }} ({{ fundCode }})
-                   <template v-if="vcRef?.isCashManagement && vcRef?.cashFundInfo">
-                      <n-tag type="success" size="small" round style="margin-left: 8px;">{{ vcRef.cashFundInfo.type }}</n-tag>
-                      <n-tag type="info" size="small" round style="margin-left: 4px;">{{ vcRef.cashFundInfo.riskLevel }}</n-tag>
-                   </template>
-                   <template v-else>
-                      - 实时估值计算器
-                   </template>
-               </div>
-            </div>
-             <template v-if="!vcRef?.isCashManagement">
-                <n-tag type="warning" size="medium" round style="font-weight: bold;">
-                   基础仓位: {{ ((vcRef?.positionRatio ?? 0.95) * 100).toFixed(2) }}%
-                </n-tag>
-             </template>
-             <template v-else>
-                <n-tag type="success" size="medium" round style="font-weight: bold;">
-                   日均增长: {{ vcRef?.meta?.avg_daily_growth ? (vcRef.meta.avg_daily_growth * 10000).toFixed(1) + '万' : '-' }}
-                </n-tag>
-             </template>
-         </div>
-         <div class="header-right" v-if="!vcRef?.isCashManagement" style="display: flex; align-items: center; gap: 12px;">
-            <n-checkbox :disabled="!vcRef?.meta?.fund_config?.trade_future" :checked="!!vcRef?.showFutCalib" @update:checked="(v) => { if (vcRef) vcRef.showFutCalib = v }" size="large"><span style="font-size:15px; font-weight:bold; color:#0284c7;" :style="{ opacity: vcRef?.meta?.fund_config?.trade_future ? 1 : 0.5 }">期货校准估值</span></n-checkbox>
-            <n-checkbox :disabled="!vcRef?.meta?.fund_config?.trade_future" :checked="!!vcRef?.showPureFut" @update:checked="(v) => { if (vcRef) vcRef.showPureFut = v }" size="large"><span style="font-size:15px; font-weight:bold; color:#0284c7;" :style="{ opacity: vcRef?.meta?.fund_config?.trade_future ? 1 : 0.5 }">纯期货估值</span></n-checkbox>
-         </div>
-      </div>
-
-      <!-- [AI-2026-07-08] 共享估值计算器组件（替换原有 T-2/T-1/实时行 + 现金管理 + 估值推演面板） -->
-      <ValuationCalculator ref="vcRef" :fund-code="fundCode" />
+    <!-- 2. 详情模式：专业狙击工作站（合并：共享工作台骨架 TradeWorkbench，公开模式，不含 Monitor/规则引擎） -->
+    <TradeWorkbench v-else
+      mode="public"
+      :fund-code="fundCode"
+      :fund-name="fundName"
+      :is-cash-management="vcRef?.isCashManagement"
+      :position-ratio="vcRef?.positionRatio"
+      v-model:show-fut-calib="showFutCalibProxy"
+      v-model:show-pure-fut="showPureFutProxy"
+      :has-trade-future="vcRef?.meta?.fund_config?.trade_future"
+      :meta="vcRef?.meta"
+    >
+      <template #calculator>
+        <!-- [AI-2026-07-08] 共享估值计算器组件 -->
+        <ValuationCalculator ref="vcRef" :fund-code="fundCode" />
+      </template>
 
       <!-- 第五行: 买卖五档的行情表 (并排显示) -->
       <div class="depth-tables-container" v-if="vcRef?.isComplexCategory">
@@ -357,7 +336,7 @@
            <v-chart v-else class="chart" :option="chartOption" autoresize />
          </div>
       </n-card>
-    </div>
+    </TradeWorkbench>
   </div>
 </template>
 
@@ -369,7 +348,7 @@ import {
   NCard, NSpace, NButton, NEmpty,
   NText, NDataTable, NTag, NDatePicker, NIcon, NInputNumber, useMessage, NCheckbox, NDivider, NSelect, useDialog
 } from 'naive-ui'
-import { RefreshCw, Zap, ArrowLeft, Star, StarOff, SearchX } from 'lucide-vue-next'
+import { RefreshCw, Zap, Star, StarOff, SearchX } from 'lucide-vue-next'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
@@ -378,6 +357,7 @@ import VChart from 'vue-echarts'
 import { getDashboard, getFundIntraday, getFundBasket, getFundHistory } from '../api'
 import { useOrderLogic } from '../composables/useOrderLogic'
 import ValuationCalculator from '../components/ValuationCalculator.vue'
+import TradeWorkbench from '../components/TradeWorkbench.vue'
 
 use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, VisualMapComponent])
 
@@ -388,6 +368,16 @@ const dialog = useDialog()
 
 // 共享估值计算器组件 ref（通过它访问所有估值状态）
 const vcRef = ref<InstanceType<typeof ValuationCalculator>>()
+
+// [AI-2026-08-19] 期货校准/纯期货 checkbox 的 v-model 代理（解决 vcRef 初始为 null 时直接绑定报错）
+const showFutCalibProxy = computed({
+  get: () => !!vcRef.value?.showFutCalib,
+  set: (v: boolean) => { if (vcRef.value) vcRef.value.showFutCalib = v }
+})
+const showPureFutProxy = computed({
+  get: () => !!vcRef.value?.showPureFut,
+  set: (v: boolean) => { if (vcRef.value) vcRef.value.showPureFut = v }
+})
 
 // 基础状态
 const fundCode = ref((route.query.code as string) || '')
@@ -599,7 +589,6 @@ const formatDate = (ts: number) => {
   const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
-const handleBack = () => { window.location.replace('/') }
 const disableFutureDates = (ts: number) => ts > Date.now()
 const handleDateChange = () => { fetchIntraday(); if (vcRef.value) vcRef.value.fetchValuationMeta() }
 

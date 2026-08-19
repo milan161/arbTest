@@ -5,7 +5,7 @@ import logging
 import re, os, glob, csv, json
 import yaml as _yaml
 import shutil
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -230,8 +230,24 @@ class LedgerService:
     # 套利对账本（arbitrage_pairs）- 匹配Excel格式
     # ================================================================
 
-    def _get_usd_rate(self) -> float:
-        """获取最新美元汇率"""
+    def _attach_master(self, conn) -> str:
+        """ATTACH 主库（arb_master.db，含每日 exchange_rate）为只读别名 master。
+
+        [AI-2026-08-18] 此前该方法从未定义却被 _get_usd_rate/_get_rates_map 调用，
+        AttributeError 被吞 → 汇率永远回退 7.2，所有 pnl_rmb 系统性算错。现补实现。
+        每次调用先 DETACH（忽略不存在错误）再 ATTACH，保证幂等。
+        """
+        if not self.master_db_path:
+            raise RuntimeError("master_db_path 未配置，无法读取主库汇率")
+        try:
+            conn.execute("DETACH DATABASE master")
+        except Exception:
+            pass
+        conn.execute("ATTACH DATABASE ? AS master", (self.master_db_path,))
+        return 'master'
+
+    def _get_usd_rate(self) -> Optional[float]:
+        """获取最新美元汇率（主库 exchange_rate 最后一天）。无数据返回 None，不兜底（SUPREME 铁律）。"""
         try:
             conn = self.db._get_conn()
             try:
@@ -240,11 +256,11 @@ class LedgerService:
                     f"SELECT usd_cny_mid FROM {m}.exchange_rate ORDER BY date DESC LIMIT 1"
                 )
                 row = cur.fetchone()
-                return float(row[0]) if row else 7.2
+                return float(row[0]) if row else None
             finally:
                 conn.close()
-        except:
-            return 7.2
+        except Exception:
+            return None
 
     def _get_rates_map(self, conn) -> dict:
         """一次性加载 exchange_rate 全表 -> {date: usd_cny_mid}（升序），供按日取汇率"""
@@ -258,17 +274,22 @@ class LedgerService:
             return {}
 
     @staticmethod
-    def _rate_on(rates: dict, date_str) -> float:
-        """取指定日期（或之前最近一天）的美元中间价；无数据回退 7.2"""
+    def _rate_on(rates: dict, date_str) -> Optional[float]:
+        """取指定日期（或之前最近一天）的美元中间价；无数据返回 None（不兜底，符合 SUPREME 铁律）。
+
+        [AI-2026-08-18] 原实现无数据回退 7.2 → 所有组 pnl_rmb 系统性算错。现改为缺失即 None，
+        由调用方（import_v7）显式提示并留空，绝不伪装汇率。
+        """
         if not rates:
-            return 7.2
-        if date_str and date_str in rates:
-            return rates[date_str]
+            return None
         if date_str:
+            if date_str in rates:
+                return rates[date_str]
             prior = [k for k in rates if k <= date_str]
             if prior:
                 return rates[max(prior)]
-        return list(rates.values())[-1]
+            return None  # date 早于汇率表最早一天
+        return None  # 无日期：不猜（瘸腿组应补日期后重导）
 
     def get_all_pairs(self, status: str = None) -> List[Dict[str, Any]]:
         """获取套利对列表"""
@@ -616,13 +637,12 @@ class LedgerService:
             L = ws.cell(r, 12).value  # L列 美股标的
             Q = ws.cell(r, 17).value  # Q列 对冲额(东哥已填SUM)
             R = ws.cell(r, 18).value  # R列 佣金(东哥已填SUM)
-            # 空行: 序号/日期/基金/动作/收益 全空
-            if A is None and B is None and E is None and F is None and N is None:
-                if cur:
-                    if 'summary' not in cur:
-                        logger.warning(f"V7 第 {r} 行附近：存在未以'汇总'行结尾的明细块，该组已跳过（不影响其他组）")
-                    groups.append(cur)
-                    cur = None
+            # [AI-2026-08-18] 空行判定须含 G/O/S：纯美股对冲行（F 空但 O/S 有值）不是空行
+            Gv = ws.cell(r, 7).value
+            if (A is None and B is None and E is None and F is None and N is None
+                    and Gv is None and O is None and S is None):
+                # [AI-2026-08-18 东哥口径] 空行只是格式占位，不参与组边界判断；
+                # 组结束唯一标志 = 汇总行（F='汇总'）。空行直接跳过，绝不切断/收组。
                 continue
             E = str(E).strip() if E else ''
             F = str(F).strip() if F else ''
@@ -640,6 +660,7 @@ class LedgerService:
                     'serial': A_str,
                     'status': status,
                     'fund': E,
+                    'row': r,   # [AI-2026-08-18] 汇总行 Excel 行号，供导入后回填 T 列汇率/N 列公式
                     'pnl_rmb': _num(N),
                     'pnl_usd': _num(S),
                     'buy_amount': _num(G),   # V7习惯写负数(资金流出)，导入时归一为正数
@@ -731,12 +752,11 @@ class LedgerService:
             Q = row.iloc[16] if len(row) > 16 else None  # 对冲额(Q列=17→idx16)
             R = row.iloc[17] if len(row) > 17 else None  # 佣金(R列=18→idx17)
 
-            if pd.isna(A) and pd.isna(B) and pd.isna(E) and pd.isna(F) and pd.isna(N):
-                if cur:
-                    if 'summary' not in cur:
-                        logger.warning(f"V7 第 {idx + 1} 行附近：存在未以'汇总'行结尾的明细块，该组已跳过（不影响其他组）")
-                    groups.append(cur)
-                    cur = None
+            # [AI-2026-08-18] 空行判定须含 G/O/S（同 openpyxl 版）：纯美股对冲行（F 空但 O/S 有值）不是空行
+            Gv = row.iloc[6] if len(row) > 6 else None
+            if (pd.isna(A) and pd.isna(B) and pd.isna(E) and pd.isna(F) and pd.isna(N)
+                    and pd.isna(Gv) and pd.isna(O) and pd.isna(S)):
+                # [AI-2026-08-18 东哥口径] 同 openpyxl 版：空行只是格式占位，组结束唯一标志=汇总行
                 continue
 
             E = str(E).strip() if not pd.isna(E) else ''
@@ -847,20 +867,30 @@ class LedgerService:
                 if status == 'Closed':
                     a_share_pnl = a_sum
                     pnl_usd = u_sum
-                    if a_share_pnl is not None and pnl_usd is not None:
-                        rate = self._rate_on(rates, sell_date or buy_date)
-                        pnl_rmb = round(a_share_pnl + pnl_usd * rate, 2)
-                    else:
+                    # [AI-2026-08-18] 汇率按 平仓日→开仓日 取主库中间价；无买卖腿（瘸腿组）取明细最早日期；缺失不兜底
+                    ref_date = sell_date or buy_date
+                    if not ref_date:
+                        _dates = sorted(d['date'] for d in g['details'] if d.get('date'))
+                        ref_date = _dates[0] if _dates else None
+                    rate = self._rate_on(rates, ref_date)
+                    if rate is None:
                         pnl_rmb = None
+                        logger.warning(
+                            f"[AI-2026-08-18] 组 {s.get('serial')} 缺汇率：ref_date={ref_date}，pnl_rmb 留空，请补日期后重导")
+                    elif pnl_usd is None:
+                        pnl_rmb = round(a_share_pnl, 2) if a_share_pnl is not None else None
+                    else:
+                        # 瘸腿组（无 LOF 腿 a_share_pnl=None）美股单独存在也能算总盈亏
+                        pnl_rmb = round((a_share_pnl or 0) + pnl_usd * rate, 2)
                 else:
                     a_share_pnl = None
                     pnl_usd = None
                     pnl_rmb = None
+                # [AI-2026-08-18] 数量保留 V7 真实符号（买正/卖负/空负/平正），不再 abs
                 buy_volume = sum(d['volume'] or 0 for d in buys) or None
-                sell_volume = sum(abs(d['volume'] or 0) for d in sells) or None
-                short_volume = sum(abs(d['short_vol'] or 0) for d in g['details'] if (d['short_vol'] or 0) < 0)
-                if not short_volume:
-                    short_volume = max([abs(d['short_vol'] or 0) for d in g['details']] or [0]) or None
+                sell_volume = sum(d['volume'] or 0 for d in sells) or None
+                short_volume = sum(d['short_vol'] or 0 for d in g['details'] if (d.get('short_vol') or 0) < 0) or None
+                cover_volume = sum(d['short_vol'] or 0 for d in g['details'] if (d.get('short_vol') or 0) > 0) or None
                 hedge = s.get('hedge_symbol') or self._HEDGE_MAP.get(fund, '')
                 broker = '华宝' if fund == '162411' else '银河'
                 # [AI-2026-08-18] 东哥口径：价格 = 金额求和 ÷ 数量求和（不读汇总手填 I/P 列）
@@ -890,15 +920,16 @@ class LedgerService:
                 cover_s = sum(abs(d.get('s_amt') or 0) for d in cover_rows)
                 cover_o = sum(abs(d.get('short_vol') or 0) for d in cover_rows if (d.get('short_vol') or 0) > 0)
                 cover_price = round(cover_s / cover_o, 6) if cover_o else None
-                # 金额从明细求和（所有状态都算；无对应明细则 None）
-                buy_amount = round(buy_g, 2) or None
-                sell_amount = round(sell_g, 2) or None
-                short_amount = round(short_s, 2) or None
-                cover_amount = round(cover_s, 2) or None
-                us_commission = round(sum(abs(d.get('comm') or 0) for d in g['details']), 2) or None
+                # [AI-2026-08-18] 金额/佣金保留 V7 真实符号（东哥否决 abs）：买负卖正/卖空正/买平负/佣金负
+                buy_amount = round(-buy_g, 2) if buy_g else None        # 买入支出 → 负
+                sell_amount = round(sell_g, 2) if sell_g else None      # 卖出/赎回收入 → 正
+                short_amount = round(short_s, 2) if short_s else None   # 卖空收入 → 正
+                cover_amount = round(-cover_s, 2) if cover_s else None  # 买平支出 → 负
+                us_commission = round(sum(d.get('comm') or 0 for d in g['details']), 2) or None  # R 原样（V7 通常负）
                 short_date = buy_date
-                open_type = 'BUY'
-                close_type = 'REDEEM'
+                # [AI-2026-08-18] open/close_type 按 F 词表真实值（原硬编码 BUY/REDEEM，场内卖出被误标为赎回）
+                open_type = 'ADD' if any(d.get('action') == '开仓续' for d in buys) else 'BUY'
+                close_type = 'SELL' if any(d.get('action') == '卖出' for d in sells) else 'REDEEM'
                 buy_notes = s.get('buy_notes') or ''
 
                 serial = s.get('serial')
@@ -914,13 +945,13 @@ class LedgerService:
                 if existing:
                     conn.execute(
                         """UPDATE arbitrage_pairs SET
-                            fund_code=?, buy_date=?, sell_date=?, buy_volume=?, sell_volume=?, short_volume=?,
+                            fund_code=?, buy_date=?, sell_date=?, buy_volume=?, sell_volume=?, short_volume=?, cover_volume=?,
                             buy_amount=?, buy_price=?, sell_amount=?, sell_price=?, short_date=?, short_price=?, short_amount=?,
                             cover_date=?, cover_price=?, cover_amount=?, us_commission=?,
                             pnl_rmb=?, pnl_usd=?, a_share_pnl=?, status=?, hedge_symbol=?, broker_name=?,
                             buy_notes=?, open_type=?, close_type=?, updated_at=?
                             WHERE id=?""",
-                        (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume,
+                        (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
                          buy_amount, buy_price, sell_amount, sell_price, short_date, short_price, short_amount,
                          sell_date, cover_price, cover_amount, us_commission,
                          pnl_rmb, pnl_usd, a_share_pnl, status, hedge, broker,
@@ -930,13 +961,13 @@ class LedgerService:
                 else:
                     conn.execute(
                         """INSERT INTO arbitrage_pairs
-                            (fund_code, buy_date, sell_date, buy_volume, sell_volume, short_volume,
+                            (fund_code, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
                              buy_amount, buy_price, sell_amount, sell_price, short_date, short_price, short_amount,
                              cover_date, cover_price, cover_amount, us_commission,
                              pnl_rmb, pnl_usd, a_share_pnl, status, hedge_symbol, broker_name, serial_no,
                              buy_notes, open_type, close_type, created_at, updated_at)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume,
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
                          buy_amount, buy_price, sell_amount, sell_price, short_date, short_price, short_amount,
                          sell_date, cover_price, cover_amount, us_commission,
                          pnl_rmb, pnl_usd, a_share_pnl, status, hedge, broker, serial,
@@ -944,12 +975,51 @@ class LedgerService:
                     )
                     inserted += 1
             conn.commit()
+            # [AI-2026-08-18] 汇率回填 V7 汇总行 T 列 + N 列公式（用户 V7 为原始账本/核对基准，免手查汇率）
+            try:
+                self._write_back_v7(file_path, rates, groups)
+            except Exception as e:
+                logger.error(f"[AI-2026-08-18] 写回 V7（T列汇率/N列公式）失败: {e}")
             return {'inserted': inserted, 'updated': updated, 'skipped': skipped, 'errors': errors}
         except Exception as e:
             logger.error(f"导入 v7 失败: {e}")
             raise
         finally:
             conn.close()
+
+    def _write_back_v7(self, file_path: str, rates: dict, groups: list) -> int:
+        """[AI-2026-08-18] 导入后回填 V7 Excel：汇总行 T 列写汇率（主库按平仓日→开仓日取），
+        N 列写公式 =G+S*T 覆盖旧手填值。用户 V7 是原始账本+核对基准：
+        T 程序回填免手查汇率，N 由 Excel 公式自动算收益，与库 pnl_rmb 同源可核对。
+        仅回填 Closed 组；非 Closed（OPEN/unfinished）不动（无最终盈亏）。
+        """
+        import openpyxl
+        wb = openpyxl.load_workbook(file_path)  # data_only=False：保留公式
+        ws = wb.active
+        written = 0
+        for g in groups:
+            s = g.get('summary') or {}
+            row = s.get('row')
+            if not row or s.get('status') != 'Closed':
+                continue
+            buys = [d for d in g['details'] if d['action'] in ('买入', '开仓续')]
+            sells = [d for d in g['details'] if d['action'] in ('卖出', '赎回')]
+            buy_date = s.get('buy_date') or (buys[0]['date'] if buys else None)
+            sell_date = s.get('sell_date') or (sells[-1]['date'] if sells else None)
+            ref_date = sell_date or buy_date
+            if not ref_date:
+                _dates = sorted(d['date'] for d in g['details'] if d.get('date'))
+                ref_date = _dates[0] if _dates else None
+            rate = self._rate_on(rates, ref_date)
+            if rate is None:
+                continue  # 缺汇率：import 已 WARNING，此处不写，避免污染
+            ws.cell(row, 20).value = rate                 # T 列 = 汇率
+            ws.cell(row, 14).value = f"=G{row}+S{row}*T{row}"  # N 列 = 收益公式
+            written += 1
+        if written:
+            wb.save(file_path)
+            logger.info(f"[AI-2026-08-18] V7 回填完成：{written} 个 Closed 组写入汇率+收益公式")
+        return written
 
     def get_ledger_alerts(self) -> Dict[str, Any]:
         """赎回提醒：OPEN 笔推算可优惠赎回日/倒计时/告警级别；unfinished 提示待净值。"""

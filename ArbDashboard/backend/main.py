@@ -2089,7 +2089,34 @@ async def smart_monitor_mark_ib_taken_over(request: Request):
     return {"status": "ok", "message": f"{fund_code} 美股ETF腿已标记用户接管"}
 
 @app.get("/api/private/smart_monitor/status")
-async def smart_monitor_status():
+async def smart_monitor_status(fund_code: str = Query(""),
+                                rt_val: float = Query(0.0),
+                                bid_premiums: str = Query(""),
+                                ask_premiums: str = Query("")):
+    # [AI-2026-08-19] Monitor 零计算：接收前端盘口算好的溢价率数组（与盘口表 100% 同源），写入 Monitor 实例。
+    # Monitor 只比较这些溢价率，不再自算 rt_val/溢价率，杜绝前后端口径分裂。
+    if fund_code:
+        try:
+            from private.smart_open_monitor import get_monitor
+            m = get_monitor(fund_code)
+            if m:
+                def _parse_prem(s):
+                    if not s:
+                        return None
+                    try:
+                        return [float(x) for x in s.split(',') if x not in ('', 'None')]
+                    except Exception:
+                        return None
+                bp = _parse_prem(bid_premiums)
+                ap = _parse_prem(ask_premiums)
+                if bp is not None:
+                    m.bid_premiums = bp
+                if ap is not None:
+                    m.ask_premiums = ap
+                if rt_val and rt_val > 0:
+                    m.backend_rt_val = rt_val  # 保留兼容字段，Monitor 已不用于决策
+        except Exception:
+            pass
     if not _smart_status:
         return {"status": "error", "message": "SmartOpenMonitor not loaded"}
     return _smart_status()
@@ -2291,7 +2318,7 @@ async def delete_broker_fee(fee_id: int):
 async def get_exchange_rate():
     """返回最新 USD/CNY 中间价（供前端账本等使用）"""
     rate = ledger_service._get_usd_rate()
-    return {"status": "ok", "rate": round(rate, 4)}
+    return {"status": "ok", "rate": round(rate, 4) if rate is not None else None}
 
 # [AI-2026-08-16] 导入 v7 套利账本 Excel -> arbitrage_pairs（upsert）
 @app.post("/api/ledger/import-v7")

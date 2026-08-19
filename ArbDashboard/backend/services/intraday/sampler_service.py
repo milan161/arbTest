@@ -22,11 +22,14 @@ class IntradaySamplerService:
 
     async def start(self):
         if self.running: return
-        
-        # [V10.1] 分时采样服务暂时禁用：该服务持续消耗新浪配额导致反爬封禁，
-        # 且目前实盘无实际价值（分时图功能待后续重新设计）
-        enable_sampler = False
-            
+
+        # [AI-2026-08-18] 启用分时采样服务：
+        # - 只采样重点基金（target_codes = {'162411'}），DB 压力可控
+        # - 汇率改用 DB 美元中间价（exchange_rate.usd_cny_mid），零网络请求
+        # - 实时价格从内存缓存读取，零网络请求
+        # - 每60秒采样一次，仅 A股交易时段（9:30-15:00）
+        enable_sampler = True
+
         if not enable_sampler:
             logger.info("ℹ️ 分时采样服务已根据配置禁用 (enable_intraday_sampler 默认为 False)")
             return
@@ -78,8 +81,8 @@ class IntradaySamplerService:
             except Exception as e:
                 logger.error(f"采样服务读取配置基金失败: {e}")
 
-            # 限制只采样这几个核心测试基金，包含用户指定的四个，以及用来采集 GLD 和 SLV 的对应基金
-            target_codes = {'162411', '164701', '501018', '164824', '160216', '160719', '161116'}
+            # 限制只采样重点基金（东哥 2026-08-18：先只做 162411，后续可扩展至 164701、161116）
+            target_codes = {'162411'}
             
             funds_to_sample = []
             for f in all_config_funds:
@@ -93,15 +96,18 @@ class IntradaySamplerService:
             if not funds_to_sample:
                 return
             
-            # [非阻塞优化] 采样时不再等待缓慢的 VPS 同步，直接从内存缓存或默认值取汇率
+            # [AI-2026-08-18] 改用美元中间价汇率（从 DB 读，不新增网络请求）
+            # 东哥要求：LOF 基金只使用美元中间价，不需要新浪在岸价
             current_fx = None
             try:
-                from arbcore.fetchers.data_fetcher import data_fetcher
-                # 尝试快速获取本地已有的最新在岸价 (不再触发 SFTP 网络连接)
-                fx_data = data_fetcher.fetch_cny_spot_rate()
-                if fx_data: current_fx = fx_data.get('人民币在岸价')
+                conn = self.db._get_conn()
+                row = conn.execute("SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1").fetchone()
+                conn.close()
+                if row and row[0]:
+                    current_fx = float(row[0])
+                    logger.info(f"📊 采样服务使用美元中间价汇率: {current_fx}")
             except Exception as e:
-                logger.warning(f"⚠️ 获取汇率失败: {e}")
+                logger.warning(f"⚠️ 获取美元中间价汇率失败: {e}")
             
             # [修复] 构建完整符号的实时价格字典（如 ^INDA-EU → 35.5）
             current_etfs = {}

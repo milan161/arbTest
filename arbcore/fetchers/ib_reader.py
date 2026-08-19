@@ -153,7 +153,7 @@ class IBReader(EWrapper, EClient):
         self.sub_dead_max_retries = 3       # 每 symbol 连续重订上限，超限判定 Gateway 侧推流僵死
         self._dead_resub_count = {}         # sym -> 连续重订次数(收到首 tick 清零)
         self._last_dead_alarm = 0.0         # Gateway 僵死告警限频时间戳
-        self.connection_ready_fallback = 30  # 连接超此秒数强制置 ready(防 2104/2106 信号丢失)
+        self.connection_ready_fallback = 30  # [AI-2026-08-06] 连上 Gateway 后最多 30s 兜底置 connection_ready；[AI-2026-08-19] 回退：当日误把门禁改严(只认usfarm+180s硬超时)致行情"启动不来/很久才来"，恢复 30s 宽松兜底(东哥"先启IB立刻程序秒到"实测可行)
 
         # [AI-2026-08-04] 注册协议层容错钩子（进程内只注册一次）
         global _IB_READER_INSTANCE, _ORIG_THREAD_EXCEPTHOOK
@@ -421,10 +421,11 @@ class IBReader(EWrapper, EClient):
 
             # [AI-2026-08-06] 订阅门禁：未连接握手完成(行情农场 2104/2106 就绪)前不订阅，
             # 避免 IB 静默丢弃连接握手期过早发出的 reqMktData(竞态根因，近期回归)。
+            # [AI-2026-08-19] 回退：恢复 30s 宽松兜底，不筛 usfarm/不拉 180s 硬超时(旧行为"先启IB立刻程序秒到"验证可行)
             if not self.connection_ready:
-                if self.connected and (time.time() - self.connect_time) > self.connection_ready_fallback:
+                if (time.time() - self.connect_time) > self.connection_ready_fallback:
                     self.connection_ready = True
-                    logger.warning(f"[IB] 订阅门禁保护超时({self.connection_ready_fallback}s)，强制解除并订阅")
+                    logger.info(f"[IB] 订阅门禁兜底解除(连上 {self.connection_ready_fallback}s 未收到2104/2106则强制订阅)")
                 else:
                     time.sleep(2)
                     continue
@@ -559,10 +560,12 @@ class IBReader(EWrapper, EClient):
         # [V10.11] 新增 502（连接被拒/端口不对）— 端口重试过程中的 502 是预期行为，不应触发断连
         # [AI-2026-08-06] 2104/2106=行情农场连接正常，是"可订阅"的就绪信号；收到即置 connection_ready
         # 解除订阅门禁(配合 connect_time 保护超时，防信号丢失永久不订阅)。
+        # [AI-2026-08-19] 回退：任何 2104/2106 即就绪(不再解析农场名/筛 usfarm)——旧行为实测"先启IB立刻程序秒到"；
+        # 严格等 usfarm 是把空窗拉到 180s 的退化，已废弃。
         if errorCode in [2104, 2106]:
             if not self.connection_ready:
                 self.connection_ready = True
-                logger.info(f"[IB] 行情农场就绪(代码 {errorCode})，解除订阅门禁")
+                logger.info("[IB] 行情农场就绪信号(2104/2106)，解除订阅门禁")
             return
         if errorCode in [200, 502, 2107, 2108, 2157, 2158, 10091, 10197, 10089, 10346]:
             return
