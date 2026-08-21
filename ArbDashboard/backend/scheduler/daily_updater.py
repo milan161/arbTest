@@ -810,7 +810,12 @@ class DailyUpdater(BaseApp):
                 if "=" in txt:
                     txt = txt.split("=", 1)[1]
                 data = __import__("json", fromlist=["json"]).loads(txt)
-                node = data["data"].get(tx_code, {})
+                # [AI-2026-08-20] 防御：腾讯接口对少数基金返回 data="数据"（空字符串），直接跳过
+                dd = data.get("data")
+                if not isinstance(dd, dict):
+                    self.logger.warning(f"⚠️ [{code}] 腾讯K线响应异常: data字段非dict (type={type(dd).__name__})，跳过")
+                    continue
+                node = dd.get(tx_code, {})
                 kline = node.get("day") or node.get("qfqday")
                 if not kline:
                     # [AI-2026-08-03] 首次探测到无K线：写入跳过名单，避免后续每次启动刷 WARNING
@@ -918,7 +923,8 @@ class DailyUpdater(BaseApp):
                 else:
                     expected_nav_date = t_1_date.strftime('%Y-%m-%d')
             elif category in T0_CATEGORIES:
-                expected_nav_date = today_str
+                # [AI-2026-08-20] 国内LOF/QDII亚洲/日本：盘中(15:00前)净值尚未出，expected 用 T-1 避免白刷东财；盘后 >=15:00 才预期 T 日。
+                expected_nav_date = (today_str if now_hour >= NAV_CUTOFF_HOUR else t_1_date.strftime('%Y-%m-%d'))
             else:
                 expected_nav_date = t_1_date.strftime('%Y-%m-%d')
             
@@ -1761,6 +1767,79 @@ class DailyUpdater(BaseApp):
         conn.close()
         self.logger.info(f"✅ [简单估值] 完成，共更新 {total_updated} 条记录")
 
+    # ================================================================
+    # 步骤十二：白银期货官方估值（历史表 static_val 列）
+    # 公式: static_val(D) = NAV(D-1) × AG0_settle(D) / AG0_settle(D-1)
+    # 与主面板实时官方估值 nav_home × VWAP/昨结算 同源：
+    #   - 主面板用盘中 VWAP；历史闭合日用当日官方结算价 settle(D) 替代（历史无 VWAP 概念）
+    #   - 二者均"以昨结算为基准、用当日 AG0 比值缩放昨净值"，故数字与真实 NAV 几乎一致，用于和 NAV 对比
+    # 严格不 fallback：NAV(D-1)/settle(D)/settle(D-1) 任一为 0 或空 → 留 NULL（绝不拿 NAV 冒充）
+    # ================================================================
+    def step12_silver_static_valuation(self, recent_days=None):
+        import sqlite3
+        self.logger.info("=== 步骤十二：白银期货官方估值 (历史表 static_val 列) ===")
+
+        # [AI-2026-08-16] 活库移出仓库根到 D:\Study\arbTest\database（物理隔离防泄漏）；5层dirname到项目根父目录(arbTest)
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))))), "database", "arb_master.db")
+        conn = sqlite3.connect(db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        cursor = conn.cursor()
+
+        # 1. 取 161226 的 NAV 序列（按日期升序）
+        cursor.execute(
+            "SELECT date, nav FROM unified_fund_history WHERE fund_code='161226' ORDER BY date")
+        nav_rows = cursor.fetchall()
+
+        # 2. 取 AG0 结算价序列（过滤掉 0/None，避免脏分母）
+        cursor.execute(
+            "SELECT date, settle_price FROM futures_daily WHERE symbol='AG0' ORDER BY date")
+        ag0_rows = cursor.fetchall()
+        ag0_settle = {d: float(s) for d, s in ag0_rows if s is not None and float(s) > 0}
+
+        if not nav_rows or not ag0_settle:
+            self.logger.warning("   白银/AG0 数据不足，跳过")
+            conn.close()
+            return
+
+        # 3. 逐日计算：prev_row 的 NAV 作 NAV(D-1)，prev_row 日期作 D-1 取 settle
+        updates = []
+        prev_nav = None
+        prev_date = None
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        for date, nav in nav_rows:
+            # [AI-2026-08-21] 今天这一行不写历史估值：盘中未收盘、AG0 结算价为昨结算，写进历史表会误导
+            if date != today_str and (prev_nav is not None and prev_nav > 0
+                    and date in ag0_settle and prev_date in ag0_settle):
+                sd = ag0_settle[date]
+                sp = ag0_settle[prev_date]
+                if sd > 0 and sp > 0:
+                    updates.append((round(prev_nav * sd / sp, 4), date))
+            prev_nav = nav if nav is not None else prev_nav
+            prev_date = date
+
+        if not updates:
+            self.logger.info("   无可用白银官方估值计算")
+            conn.close()
+            return
+
+        # 4. recent_days 优化：仅保留最近 N 天
+        if recent_days:
+            cutoff = (datetime.now() - timedelta(days=recent_days)).strftime('%Y-%m-%d')
+            updates = [(v, d) for v, d in updates if d >= cutoff]
+
+        # 5. 写回 static_val（白银专属列，不碰其他字段）
+        count = 0
+        for val, date in updates:
+            cursor.execute(
+                "UPDATE unified_fund_history SET static_val=? WHERE fund_code='161226' AND date=?",
+                (val, date))
+            if cursor.rowcount > 0:
+                count += 1
+        conn.commit()
+        conn.close()
+        self.logger.info(f"✅ [白银官方估值] 更新 {count} 条 static_val")
+
     def run(self, nav_only=False, refresh_morning=False, static_valuation=False, daily_close=False):
         today_str = datetime.now().strftime('%Y-%m-%d')
         now = datetime.now()
@@ -1769,6 +1848,7 @@ class DailyUpdater(BaseApp):
             self.logger.info("🚀 [静态估值模式] 仅执行静态估值计算 (step10 + step11)...")
             self._step10_calculate_static_valuation()
             self.step11_simple_static_valuation()
+            self.step12_silver_static_valuation()
             self.logger.info("🎉 [静态估值模式] 静态估值计算完成！")
             return
 
@@ -1778,6 +1858,7 @@ class DailyUpdater(BaseApp):
             self.step4_fetch_lof_market()
             self._step10_calculate_static_valuation()
             self.step11_simple_static_valuation(recent_days=5)
+            self.step12_silver_static_valuation(recent_days=5)
             self.logger.info("🎉 [收盘后更新] 收盘价/净值/静态估值已更新！")
             return
 
@@ -1834,6 +1915,7 @@ class DailyUpdater(BaseApp):
         self.step9_fetch_jsl_shares_from_vps()
         self._step10_calculate_static_valuation()
         self.step11_simple_static_valuation(recent_days=5)
+        self.step12_silver_static_valuation(recent_days=5)
         self.logger.info("🎉 流水线执行完毕，数据大盘一切就绪！")
 
 if __name__ == "__main__":

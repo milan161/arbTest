@@ -489,18 +489,20 @@ async def lifespan(app: FastAPI):
             # [V10.0] 启动完成提示：引导用户手动连接需要的券商客户端
             system_status.add_milestone("INFO", "💡 如需实时行情，请点击对应按钮连接券商客户端")
             
-            # [AI-2026-07-07] 启动时自动检测并连接 IB Gateway（如果已在运行）
-            try:
-                if market_data_service.ib_reader:
-                    success, msg = market_data_service.ib_reader.reconnect()
-                    if success:
-                        logger.info(f"✅ IB Gateway 自动连接成功")
-                        system_status.add_milestone("SUCCESS", "IB Gateway 自动连接成功")
-                    else:
-                        logger.info(f"ℹ️ IB Gateway 自动连接跳过: {msg}")
-                        system_status.add_milestone("INFO", f"IB Gateway 未检测到: {msg}")
-            except Exception as e:
-                logger.warning(f"IB 自动连接异常: {e}")
+            # [AI-2026-08-20 东哥口径] 本地模式启动绝不自动连接 IB（恢复 V10.0 手动语义：
+            # 用户点击侧边 IB 按键才连接；云端 ARB_DASHBOARD_MODE=1 由 market_data_service 守护线程负责自动连接）。
+            if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1':
+                try:
+                    if market_data_service.ib_reader:
+                        success, msg = market_data_service.ib_reader.reconnect()
+                        if success:
+                            logger.info(f"✅ IB Gateway 自动连接成功")
+                            system_status.add_milestone("SUCCESS", "IB Gateway 自动连接成功")
+                        else:
+                            logger.info(f"ℹ️ IB Gateway 自动连接跳过: {msg}")
+                            system_status.add_milestone("INFO", f"IB Gateway 未检测到: {msg}")
+                except Exception as e:
+                    logger.warning(f"IB 自动连接异常: {e}")
         
         asyncio.create_task(start_mds_later())
 
@@ -689,9 +691,58 @@ async def lifespan(app: FastAPI):
             if not _fz or _fz.get('date') != _now.strftime('%Y-%m-%d'):
                 snapshot_realtime_freeze(fund_service)
                 logger.info("[FREEZE] 启动备用源：补拍今日冻结快照")
+
     except Exception as e:
         logger.error(f"[FREEZE] 调度器启动失败（冻结功能停用，其余正常）: {e}")
         system_status.add_milestone("ERROR", f"冻结调度器启动失败: {e}")
+
+    # 4.7 [2026-08-20] 盘后收盘价兜底调度器：时间 ≥15:00 且今天 price 为 NULL 时，
+    # 调 daily_updater 写今天官方收盘。解决主看板盘后显示"昨天收盘"的问题，无需等 15:35 流水线。
+    # [AI-2026-08-20] 修复：① 原插入位置破坏 4.6 冻结调度器的 try/except 结构（SyntaxError）；
+    # ② 原实现同步调 _DU()._step4_fetch_prices() 在 asyncio 事件循环内阻塞数分钟（腾讯K线
+    # 每只 12s 超时 × 数十只），导致 uvicorn 全接口超时。改为 _popen_script_once 异步子进程
+    # 启动 daily_updater --daily-close（与 15:35 流水线同款，不阻塞事件循环）。
+    try:
+        async def _after_hours_close_price_loop():
+            """[AI-2026-08-20] 盘后收盘价兜底：15:00后每天自动写今天官方收盘。
+            使用DB检查保证幂等（重启/崩溃不重复写）；子进程异步执行不阻塞事件循环。"""
+            while True:
+                await asyncio.sleep(30)
+                _n = _dt.now()
+                if _n.weekday() in (5, 6) or _n.hour < 15:
+                    continue
+                # 幂等检查：DB中今天是否已有收盘价？
+                _today = _n.strftime('%Y-%m-%d')
+                try:
+                    _conn = db._get_conn()
+                    _count = _conn.execute(
+                        "SELECT COUNT(*) FROM unified_fund_history WHERE date=? AND price IS NOT NULL",
+                        (_today,)
+                    ).fetchone()[0]
+                    _conn.close()
+                except Exception as _e:
+                    logger.error(f"[AFTER_HOURS] DB检查失败: {_e}")
+                    continue
+                if _count > 0:
+                    continue  # 已有今天收盘价，跳过
+                # 没有 → 异步子进程触发写入（不阻塞 uvicorn 事件循环）
+                try:
+                    _pe = os.path.normpath(os.path.join(backend_dir, "..", ".venv", "Scripts", "python.exe"))
+                    _sd = os.path.normpath(os.path.join(backend_dir, "scheduler"))
+                    _du_py = os.path.join(_sd, "daily_updater.py")
+                    if _popen_script_once([_pe, _du_py, "--daily-close"], _sd, "daily_updater.py"):
+                        logger.info(f"[AFTER_HOURS] 盘后收盘价兜底已异步启动 daily_updater --daily-close ({_today})")
+                    else:
+                        logger.warning(f"[AFTER_HOURS] 盘后收盘价兜底启动被拒（可能已在运行）({_today})")
+                except Exception as _e:
+                    logger.error(f"[AFTER_HOURS] 启动盘后收盘价任务失败: {_e}")
+
+        asyncio.create_task(_after_hours_close_price_loop())
+        logger.info("[AFTER_HOURS] 盘后收盘价兜底调度器已启动（每日 15:00 后异步子进程写入，asyncio 零依赖）")
+        system_status.add_milestone("SUCCESS", "盘后收盘价兜底调度器已启动")
+
+    except Exception as e:
+        logger.warning(f"⚠️ [AFTER_HOURS] 盘后收盘价兜底调度器启动失败: {e}")
 
     yield
 
@@ -1042,9 +1093,11 @@ async def reconcile_static_val(code: str, days: int = 10):
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/fund/{code}/intraday")
-async def get_fund_intraday(code: str, date: str = None):
-    """获取基金的分时数据（曲线图用）"""
-    data = fund_service.get_fund_intraday(code, date)
+async def get_fund_intraday(code: str, date: str = None, days: int = 1):
+    """获取基金的分时数据（曲线图用，支持多日）
+    - days: 向前回溯天数（1/3/5），默认1天
+    """
+    data = fund_service.get_fund_intraday(code, date, days)
     return {"status": "ok", "data": data}
 
 @app.get("/api/fund/{code}/basket")
@@ -2049,11 +2102,17 @@ async def smart_monitor_start(request: Request):
     # [AI-2026-07-20] 前端算好的各档溢价率（与盘口表 tag 同源），后端直接使用不再自算
     bid_premiums = data.get("bid_premiums", None)
     ask_premiums = data.get("ask_premiums", None)
+    bid_vols = data.get("bid_vols", None)
+    ask_vols = data.get("ask_vols", None)
+    bid_prices = data.get("bid_prices", None)
+    ask_prices = data.get("ask_prices", None)
     if not fund_code or not trade_etf or not lof_quantity:
         return JSONResponse(status_code=400, content={"status": "error", "message": "缺少必要参数(fund_code/trade_etf/lof_quantity)"})
     success, msg = _smart_start(
         fund_code, direction, target_premium, lof_quantity, trade_etf, hedge_order, lof_broker,
         bid_premiums=bid_premiums, ask_premiums=ask_premiums,
+        bid_vols=bid_vols, ask_vols=ask_vols,
+        bid_prices=bid_prices, ask_prices=ask_prices,
         lazy_trader=_smart_lt, fund_service=_smart_fs,
         market_data_service=_smart_mds, trading_service=_smart_ts,
         trade_manager=getattr(_smart_ts, 'trade_manager', None) if _smart_ts else None,
@@ -2092,7 +2151,11 @@ async def smart_monitor_mark_ib_taken_over(request: Request):
 async def smart_monitor_status(fund_code: str = Query(""),
                                 rt_val: float = Query(0.0),
                                 bid_premiums: str = Query(""),
-                                ask_premiums: str = Query("")):
+                                ask_premiums: str = Query(""),
+                                bid_vols: str = Query(""),
+                                ask_vols: str = Query(""),
+                                bid_prices: str = Query(""),
+                                ask_prices: str = Query("")):
     # [AI-2026-08-19] Monitor 零计算：接收前端盘口算好的溢价率数组（与盘口表 100% 同源），写入 Monitor 实例。
     # Monitor 只比较这些溢价率，不再自算 rt_val/溢价率，杜绝前后端口径分裂。
     if fund_code:
@@ -2109,10 +2172,22 @@ async def smart_monitor_status(fund_code: str = Query(""),
                         return None
                 bp = _parse_prem(bid_premiums)
                 ap = _parse_prem(ask_premiums)
+                bv = _parse_prem(bid_vols)
+                av = _parse_prem(ask_vols)
+                bpr = _parse_prem(bid_prices)
+                apr = _parse_prem(ask_prices)
                 if bp is not None:
                     m.bid_premiums = bp
                 if ap is not None:
                     m.ask_premiums = ap
+                # [AI-2026-08-19] 同源修复：盘口量一并写入，深度闸门优先用前端同源量（与盘口表一致）
+                if bv is not None:
+                    m.bid_vols = bv
+                if av is not None:
+                    m.ask_vols = av
+                # [AI-2026-08-20] 同源修复：盘口价格也由前端推送，Monitor 用前端深度替代后端自抓那路
+                if bpr is not None and apr is not None:
+                    m._last_depth = {'bid': bpr, 'ask': apr, 'bid_vol': (bv or []), 'ask_vol': (av or [])}
                 if rt_val and rt_val > 0:
                     m.backend_rt_val = rt_val  # 保留兼容字段，Monitor 已不用于决策
         except Exception:
@@ -2479,29 +2554,35 @@ async def reconnect_ib():
 
 @app.post("/api/system/reconnect_futu")
 async def reconnect_futu():
-    """重连富途 - 使用 reconnect() 方法，试连 3 次"""
+    """重连富途 - 后台线程异步重连，HTTP 立即返回，避免同步阻塞导致前端超时"""
     try:
         # [V10.1] 重置熔断器
         market_data_service._circuit_reset('富途')
-        if market_data_service.futu_reader:
-            success, msg = market_data_service.futu_reader.reconnect()
-            if success:
-                system_status.add_milestone("SUCCESS", msg)
-                return {"status": "ok", "message": msg}
-            else:
-                system_status.add_milestone("WARNING", msg)
-                return {"status": "error", "message": msg}
-        else:
-            from arbcore.fetchers.futu_reader import FutuReader
-            reader = FutuReader()
-            market_data_service.futu_reader = reader
-            success, msg = reader.reconnect()
-            if success:
-                system_status.add_milestone("SUCCESS", msg)
-                return {"status": "ok", "message": msg}
-            else:
-                system_status.add_milestone("WARNING", msg)
-                return {"status": "error", "message": msg}
+
+        def _do_reconnect():
+            try:
+                if market_data_service.futu_reader:
+                    success, msg = market_data_service.futu_reader.reconnect()
+                else:
+                    from arbcore.fetchers.futu_reader import FutuReader
+                    reader = FutuReader()
+                    market_data_service.futu_reader = reader
+                    success, msg = reader.reconnect()
+                if success:
+                    system_status.add_milestone("SUCCESS", msg)
+                    # [AI-2026-08-20] 连上后主动播种订阅+取盘口，否则连上但 prices 空→按钮"无数据"灰
+                    market_data_service._seed_futu_prices()
+                else:
+                    system_status.add_milestone("WARNING", msg)
+            except Exception as e:
+                system_status.add_milestone("ERROR", f"富途重连异常: {e}")
+
+        # [AI-2026-08-20] 异步化：reconnect() 同步阻塞最长 ~17s（3×5s 超时+重试间隔），
+        # 会先触发前端 15s axios 超时导致按钮"没反应"。改为后台线程跑，HTTP 立即返回，
+        # 连接结果经 status 轮询体现在状态栏，符合富途已有 30s 懒重连设计。
+        t = threading.Thread(target=_do_reconnect, daemon=True)
+        t.start()
+        return {"status": "pending", "message": "富途重连中，请稍候在状态栏查看"}
     except Exception as e:
         system_status.add_milestone("ERROR", f"富途重连异常: {e}")
         return {"status": "error", "message": str(e)}

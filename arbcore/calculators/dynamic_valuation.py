@@ -44,35 +44,56 @@ class DynamicValuationCalculator:
             )
             category_fx = str(cat_df.iloc[0]['category']).strip() if not cat_df.empty else ''
             fx_col = 'jpy_cny_mid' if category_fx == 'QDII日本' else 'usd_cny_mid'
+            category = category_fx  # 复用
 
-            # 联表查询：净值 + 因子 + 汇率
-            query = f"""
-                SELECT
-                    a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
-                    c.{fx_col} as exchange_rate,
-                    b.position, b.hedge, b.calibration
-                FROM unified_fund_history a
-                LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
-                LEFT JOIN exchange_rate c ON a.date = c.date
-                WHERE a.fund_code = ? AND COALESCE(a.nav, b.nav) IS NOT NULL AND COALESCE(a.nav, b.nav) > 0
-                ORDER BY a.date DESC LIMIT 1
-            """
-            df = pd.read_sql(query, conn, params=(fund_code,))
-            if df.empty: return None
-            
-            base_row = df.iloc[0].to_dict()
-            base_date = base_row['date']
-            
-            # [AI-2026-07-08] 校验基准日是否有美股ETF数据；仅对持有美股的基金类别做美国假期回溯
-            # QDII亚洲/国内LOF/债券货币 → 跳过，它们不持有美股
-            cat_df = pd.read_sql(
-                "SELECT category FROM unified_fund_list WHERE fund_code = ?",
+            # ── 第一步：独立取各数据源最新值 ──────────────────────────────
+            # fund_daily_factors：position/hedge/calibration 数天不变，独立取最新
+            factor_df = pd.read_sql(
+                "SELECT date, position, hedge, calibration FROM fund_daily_factors "
+                "WHERE fund_code = ? AND position IS NOT NULL AND position > 0 "
+                "ORDER BY date DESC LIMIT 1",
                 conn, params=(fund_code,)
             )
-            category = str(cat_df.iloc[0]['category']).strip() if not cat_df.empty else ''
+            if not factor_df.empty:
+                fr = factor_df.iloc[0]
+                base_row: Dict[str, Any] = {
+                    'position': fr['position'],
+                    'hedge': fr['hedge'],
+                    'calibration': fr['calibration'],
+                }
+            else:
+                base_row = {'position': None, 'hedge': None, 'calibration': None}
+
+            # unified_fund_history：nav/close 每天更新，独立取最新
+            # [AI-2026-08-21] 修复：只取 nav IS NOT NULL 的行，避免取到盘中空行导致 calculate() 返回 None
+            history_df = pd.read_sql(
+                "SELECT date, nav, price FROM unified_fund_history "
+                "WHERE fund_code = ? AND nav IS NOT NULL "
+                "ORDER BY date DESC LIMIT 1",
+                conn, params=(fund_code,)
+            )
+            if history_df.empty:
+                return None
+            hr = history_df.iloc[0]
+            base_date = str(hr['date'])
+            base_row['date'] = base_date
+            base_row['nav'] = hr['nav']  # 保证非 NULL
+            base_row['close'] = hr['price']  # 可能有收盘价
+
+            # exchange_rate：用 history 的最新日期取
+            rate_df = pd.read_sql(
+                f"SELECT {fx_col} as exchange_rate FROM exchange_rate WHERE date = ?",
+                conn, params=(base_date,)
+            )
+            if not rate_df.empty and pd.notna(rate_df.iloc[0]['exchange_rate']):
+                base_row['exchange_rate'] = rate_df.iloc[0]['exchange_rate']
+            else:
+                base_row['exchange_rate'] = None
+
+            # ── 第二步：美股 ETF 基准日校验（仅 QDII欧美/黄金原油/白银/混合跨境）
             us_categories = {'黄金原油', 'QDII欧美', '混合跨境', '白银'}
             if category in us_categories:
-                # 先尝试从 fund_basket_weights 获取 ETF 代码，缺失则补充用 related_index（单一ETF基金如162411）
+                # 先尝试从 fund_basket_weights 获取 ETF 代码，缺失则补充用 related_index
                 etf_syms = pd.read_sql(
                     "SELECT DISTINCT underlying_symbol FROM fund_basket_weights WHERE fund_code = ?",
                     conn, params=(fund_code,)
@@ -97,25 +118,31 @@ class DynamicValuationCalculator:
                         (*sym_list, base_date)
                     ).fetchone()[0]
                     if etf_count == 0:
-                        # 基准日无ETF数据 → 向前回溯找最近一个有数据的日期（不一定是假期，可能只是数据未采集）
+                        # 基准日无ETF数据 → 向前回溯找最近一个有数据的日期
                         logger.info(f"  ⏭️ [{fund_code}] 基准日 {base_date} 无美股ETF数据，向前回溯最近有效日期...")
                         corrected_df = pd.read_sql(f"""
-                            SELECT a.date, COALESCE(a.nav, b.nav) as nav, a.price as close,
-                                   c.usd_cny_mid as exchange_rate,
-                                   b.position, b.hedge, b.calibration
-                            FROM unified_fund_history a
-                            LEFT JOIN fund_daily_factors b ON a.date = b.date AND a.fund_code = b.fund_code
-                            LEFT JOIN exchange_rate c ON a.date = c.date
-                            WHERE a.fund_code = ? AND COALESCE(a.nav, b.nav) > 0
+                            SELECT date, nav, price
+                            FROM unified_fund_history
+                            WHERE fund_code = ? AND (nav IS NOT NULL OR price IS NOT NULL)
                               AND EXISTS (
                                   SELECT 1 FROM usa_etf_daily_prices e
-                                  WHERE e.symbol IN ({placeholders}) AND e.date = a.date AND e.price > 0
+                                  WHERE e.symbol IN ({placeholders}) AND e.date = unified_fund_history.date AND e.price > 0
                               )
-                            ORDER BY a.date DESC LIMIT 1
+                            ORDER BY date DESC LIMIT 1
                         """, conn, params=(fund_code, *sym_list))
                         if not corrected_df.empty:
-                            base_row = corrected_df.iloc[0].to_dict()
-                            base_date = base_row['date']
+                            cd = corrected_df.iloc[0]
+                            base_date = str(cd['date'])
+                            base_row['date'] = base_date
+                            base_row['nav'] = cd['nav']
+                            base_row['close'] = cd['price']
+                            # 重新取该日汇率
+                            cr_df = pd.read_sql(
+                                f"SELECT {fx_col} as exchange_rate FROM exchange_rate WHERE date = ?",
+                                conn, params=(base_date,)
+                            )
+                            if not cr_df.empty and pd.notna(cr_df.iloc[0]['exchange_rate']):
+                                base_row['exchange_rate'] = cr_df.iloc[0]['exchange_rate']
                             logger.info(f"  ✅ [{fund_code}] 回溯后基准日调整为 {base_date}")
 
             # [AI-2026-07-27] 删除旧的「向前取最近 hedge」填补（原第②级，当年三条路径里最不精确的）：
@@ -123,8 +150,6 @@ class DynamicValuationCalculator:
             # 改为：hedge 缺失时不再用陈旧值填补——calculate() 会直接落到
             # 矩阵(篮子)标准公式，仅依赖 usa_etf_daily_prices.netvalue(Yahoo) +
             # exchange_rate(官方中间价) + yaml 权重/仓位，全链路可脱离 Woody 独立计算。
-            # [AI-2026-08-04 SUPREME 铁律] position 缺失时由 get_base_data 回溯最近 factors 行，
-            # 不再用 yaml holdings.equity_ratio 填补（误填成 1.0 会导致篮子 H 失真 4%~25%）。
 
             # [AI-2026-07-21] 补充底层 ETF 基准价格：查询 fund_basket_weights 判断基金会是否为多篮子
             # 有 basket 条目的基金（如161116→GLD+^GLD-EU）必须取 price（市场价格），矩阵公式需要真实价格变化率
@@ -172,34 +197,14 @@ class DynamicValuationCalculator:
                     if pd.notna(r['weight']) and float(r['weight']) != 0
                 ]
 
-            # [AI-2026-08-04 SUPREME 铁律] position 缺失时回溯最近有 factors 的日期，
-            # 禁止用 equity_ratio 填补（误填成 1.0 会导致篮子 H 失真 4%~25%）。
-            # 根因：unified_fund_history 更新到 08-03 但 fund_daily_factors 滞后 07-31，
-            # LEFT JOIN 同日期取不到 position → None → assemble_dynamic_components 误填成 1.0。
-            # 修复：从 fund_daily_factors 取该基金最近有非空 position 的行，补回 position/hedge/calibration。
-            # 这不是掩盖缺失（不编造数据），而是回溯到最近的真实数据点（与上方 ETF 数据回溯同理）。
+            # position/hedge/calibration 已在顶部独立查询 fund_daily_factors 获取。
+            # 若仍为 None：有 basket 的基金（QDII欧美/黄金原油等）缺 position 属异常；
+            # 无 basket 的基金（国内LOF/指数等）本就不依赖 position，缺失属预期。
             if base_row.get('position') is None or pd.isna(base_row.get('position')):
-                factor_df = pd.read_sql(
-                    """SELECT position, hedge, calibration FROM fund_daily_factors
-                       WHERE fund_code = ? AND position IS NOT NULL AND position > 0
-                       ORDER BY date DESC LIMIT 1""",
-                    conn, params=(fund_code,)
-                )
-                if not factor_df.empty:
-                    fr = factor_df.iloc[0]
-                    base_row['position'] = fr['position']
-                    if base_row.get('hedge') is None or pd.isna(base_row.get('hedge')):
-                        base_row['hedge'] = fr['hedge']
-                    if base_row.get('calibration') is None or pd.isna(base_row.get('calibration')):
-                        base_row['calibration'] = fr['calibration']
-                    logger.info(f"  ✅ [{fund_code}] position 回溯至最近 factors 行: pos={base_row['position']}")
+                if basket_count > 0:
+                    logger.warning(f"  ⚠️ [{fund_code}] fund_daily_factors 无任何有效 position 行，position=None，估值可能失真")
                 else:
-                    # [AI-2026-08-07] 无 basket 的基金（国内LOF等）本就不依赖 position，缺失属预期→DEBUG；
-                    # 仅带 basket 却缺 position 才是真异常→WARNING（铁律：仍不误填成 1.0）
-                    if basket_count > 0:
-                        logger.warning(f"  ⚠️ [{fund_code}] fund_daily_factors 无任何有效 position 行，position 将为 None")
-                    else:
-                        logger.debug(f"  [{fund_code}] 无 basket 且 fund_daily_factors 无 position 行（国内LOF等预期如此），position=None，估值显 --")
+                    logger.debug(f"  [{fund_code}] 无 basket 且 fund_daily_factors 无 position（国内LOF等预期如此），position=None")
 
             self._base_data_cache[fund_code] = base_row
             self._cache_timestamp[fund_code] = time.time()

@@ -72,7 +72,6 @@ class IntradaySamplerService:
 
     async def _perform_sample(self):
         try:
-            # 临时允许针对测试目标基金进行采样，即使自选为空也继续
             # 加载所有的配置基金
             all_config_funds = []
             try:
@@ -81,8 +80,9 @@ class IntradaySamplerService:
             except Exception as e:
                 logger.error(f"采样服务读取配置基金失败: {e}")
 
-            # 限制只采样重点基金（东哥 2026-08-18：先只做 162411，后续可扩展至 164701、161116）
-            target_codes = {'162411'}
+            # [AI-2026-08-20] 东哥指定常用基金：162411（华宝油气）+ 164701（汇添富贵金属）+ 161116（易方达黄金）
+            # 最多5只，每只每天约240条（4小时×60分钟），5只 = 1200条/天，10天 = 12000条 ≈ 2MB
+            target_codes = {'162411', '164701', '161116'}
             
             funds_to_sample = []
             for f in all_config_funds:
@@ -194,13 +194,18 @@ class IntradaySamplerService:
                     if res and res.get('rt_val') and res['rt_val'] > 0:
                         rt_val = res['rt_val']
                         premium = (price / rt_val - 1) * 100
-                        
+
+                        # [2026-08-21] 计算开仓/平仓溢价率（使用收盘价作为代理）
+                        # 注意：采样服务无盘口数据，用 price*1.001/price*0.999 作为近似
+                        open_premium = ((price * 1.001) / rt_val - 1) * 100
+                        close_premium = ((price * 0.999) / rt_val - 1) * 100
+
                         # 存入分时表
                         cursor.execute("""
-                            INSERT INTO fund_intraday_quotes 
-                            (fund_code, date, time, price, rt_val, premium)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (code, date_str, time_str, price, rt_val, premium))
+                            INSERT INTO fund_intraday_quotes
+                            (fund_code, date, time, price, rt_val, premium, open_premium, close_premium)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (code, date_str, time_str, price, rt_val, premium, open_premium, close_premium))
                 conn.commit()
             except Exception as e:
                 logger.error(f"❌ 采样写入数据库失败: {e}")

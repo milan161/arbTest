@@ -835,10 +835,13 @@ class DataFetcher:
                         symbol = line.split('=')[0].split('_')[-1]
                         parts = line.split('"')[1].split(',')
                         if len(parts) >= 11:
-                            # [AI-2026-07-03] 修复：parts[9]=今日结算价(VWAP/动态均价)，parts[10]=昨结算
-                            # 昨结算(parts[10])是前一天的结算价，不能作为今日的 settle_price 存入
-                            close_price = float(parts[8]) if len(parts) > 8 else None
-                            settle_price = float(parts[9]) if len(parts) > 9 and parts[9] else None
+                            # [AI-2026-08-21] 修复: parts[9]=今日结算价(盘中恒为0), parts[10]=昨结算价(=T-1结算价)
+                            # 估值分母需"最新可用结算价(T-1)", 与美股期货 parts[7] 语义一致, 故优先取 parts[10]
+                            # parts[9] 仅在盘后才有值, 且盘中为0会污染 settle, 故作 fallback 而非首选
+                            close_price = float(parts[8]) if len(parts) > 8 and parts[8] else None
+                            settle_today = float(parts[9]) if len(parts) > 9 and parts[9] else None
+                            settle_yesterday = float(parts[10]) if len(parts) > 10 and parts[10] else None
+                            settle_price = settle_yesterday if settle_yesterday else settle_today
                             volume = int(float(parts[14])) if len(parts) > 14 and parts[14] else None
                             if close_price or settle_price:
                                 logger.info(f"{symbol} 收盘价: {close_price}, 结算价: {settle_price}")

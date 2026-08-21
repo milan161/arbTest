@@ -23,6 +23,24 @@ from services.realtime_freeze import apply_freeze_to_dashboard, update_rt_cache
 _FUTURES_CACHE_TTL = 30
 _futures_cache = {'data': None, 'time': 0.0}
 
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+_SINA_THROTTLE_INTERVAL = 15.0
+_sina_last_request_time = 0.0
+_sina_request_lock = threading.Lock()
+
+def _throttle_sina_request():
+    """等待直到距上次新浪请求超过15秒"""
+    global _sina_last_request_time
+    with _sina_request_lock:
+        elapsed = time.time() - _sina_last_request_time
+        if elapsed < _SINA_THROTTLE_INTERVAL:
+            wait_time = _SINA_THROTTLE_INTERVAL - elapsed
+            logger.debug(f"[SINA-THROTTLE] 等待 {wait_time:.1f}s 以遵守15秒间隔限制")
+            time.sleep(wait_time)
+            _sina_last_request_time = time.time()
+        else:
+            _sina_last_request_time = time.time()
+
 logger = logging.getLogger(__name__)
 
 # [V11.0] 加载 lof_config.yaml 获取基金配置（rate_type 等字段不在数据库中的）
@@ -366,6 +384,27 @@ class SSEFuturesReader:
 
     def _listen_loop(self):
         import requests
+        from requests.adapters import HTTPAdapter
+        import socket
+
+        # [AI-2026-08-21] 强制 IPv4：域名 81.futsseapi.eastmoney.com 解析到 IPv6，
+        # 本地 IPv6 路由半通导致 SSE 长连接建链后零数据(Read timeout)、ag0_price 恒为 0。
+        # adapter 在每次请求期间临时覆盖 socket.getaddrinfo 使其只返回 IPv4 记录，
+        # 保留域名 SNI 不变（避免 IP 直连的证书/SNI 问题），与 ARM 钉 hosts IPv4 思路一致。
+        _orig_getaddrinfo = socket.getaddrinfo
+        class _ForceIPv4Adapter(HTTPAdapter):
+            def send(self, request, **kwargs):
+                def _ipv4_only(*a, **kw):
+                    return [r for r in _orig_getaddrinfo(*a, **kw) if r[0] == socket.AF_INET]
+                socket.getaddrinfo = _ipv4_only
+                try:
+                    return super().send(request, **kwargs)
+                finally:
+                    socket.getaddrinfo = _orig_getaddrinfo
+
+        _session = requests.Session()
+        _session.mount("https://", _ForceIPv4Adapter())
+
         url = "https://81.futsseapi.eastmoney.com/sse/113_agm_qt"
         retry_delay = 2.0
         while self.running:
@@ -373,7 +412,7 @@ class SSEFuturesReader:
                 time.sleep(15)
                 continue
             try:
-                res = requests.get(url, stream=True, timeout=(5, 60),
+                res = _session.get(url, stream=True, timeout=(5, 60),
                                    verify=False, proxies={"http": None, "https": None})
                 if res.status_code == 200:
                     retry_delay = 2.0
@@ -1170,11 +1209,13 @@ class FundService:
             )
             nav = float(nav_df.iloc[0]['nav']) if not nav_df.empty else None
             nav_date = nav_df.iloc[0]['date'] if not nav_df.empty else None
-            price_df = pd.read_sql(
-                "SELECT date, price FROM unified_fund_history WHERE fund_code=? AND price IS NOT NULL AND price > 0 ORDER BY date DESC LIMIT 1",
-                conn, params=(code,)
+            # [AI-2026-08-20] 优先取今天收盘价，盘后显示当天官方数据而非昨日收盘
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            today_price_df = pd.read_sql(
+                "SELECT price FROM unified_fund_history WHERE fund_code=? AND date=? AND price IS NOT NULL AND price > 0",
+                conn, params=(code, today_str)
             )
-            close_price = float(price_df.iloc[0]['price']) if not price_df.empty else None
+            today_price = float(today_price_df.iloc[0]['price']) if not today_price_df.empty else None
 
             # 3. LOF 实时盘口（A股）
             lof_quote = None
@@ -1186,7 +1227,19 @@ class FundService:
             realtime_price = None
             if lof_quote and lof_quote.get('price', 0) > 0:
                 realtime_price = float(lof_quote['price'])
-            price = realtime_price if realtime_price else close_price
+
+            # 优先级：实时价 > 今天收盘价 > 最近收盘价
+            if realtime_price:
+                price = realtime_price
+            elif today_price:
+                price = today_price
+            else:
+                price_df = pd.read_sql(
+                    "SELECT price FROM unified_fund_history WHERE fund_code=? AND price IS NOT NULL AND price > 0 ORDER BY date DESC LIMIT 1",
+                    conn, params=(code,)
+                )
+                price = float(price_df.iloc[0]['price']) if not price_df.empty else None
+            close_price = price  # 保持close_price变量用于后续逻辑
 
             # 4. 当前实时估值
             rt_val = None
@@ -1731,6 +1784,20 @@ class FundService:
                             except:
                                 pass
 
+                        # [AI-2026-08-21 FIX] 优先级4: SSE/程序1/新浪全部失败 → 回退DB最新收盘价
+                        # 解决DNS失败/SSE未就绪时AG0实时价缺失问题
+                        if ag_future_price <= 0:
+                            try:
+                                _conn = self.db._get_conn()
+                                _row = _conn.execute(
+                                    "SELECT close_price FROM futures_daily WHERE symbol='AG0' AND close_price>0 ORDER BY date DESC LIMIT 1"
+                                ).fetchone()
+                                if _row and _row[0] and float(_row[0]) > 0:
+                                    ag_future_price = float(_row[0])
+                                    logger.debug(f"[{code}] AG0 实时价为0，回退数据库最新收盘={ag_future_price}")
+                            except Exception as _e:
+                                logger.debug(f"[{code}] AG0 收盘DB回退失败: {_e}")
+
                         # [AI-2026-08-03] 盘中实时结算价可能为 0（今日结算未产生 / 刚启动流未就绪）→ 回退 futures_daily
                         # 最近一条非零 AG0 结算价（即上一交易日官方结算价，盘中稳定不变，是"昨结算价"的正确基准；
                         # 实时流的今日结算价盘中恒为 0，不能当昨结算用）。仅在 SHFE 开盘时段有意义——非开盘时下面守卫会清零。
@@ -1764,15 +1831,18 @@ class FundService:
                                 metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
                                 
                             # 🚀 官方估值 (static_val) = 昨天净值 * (VWAP / 昨结算价)
+                            # [AI-2026-08-21 FIX] 严禁 fallback 到 NAV：官方估值与 NAV 是"对比"关系(数字近但含义不同)，
+                            # VWAP 缺失即视为无官方估值，留 None（前端显示"等待数据"），绝不用 NAV 冒充（违反 SUPREME 铁律）。
                             if vwap > 0:
                                 metrics['static_val'] = round(nav_home * (vwap / settlement_price), 4)
                             else:
-                                # 如果盘中没取到 vwap，就降级为 NAV (避免出现脏数据)
-                                metrics['static_val'] = nav_home
-                                
-                            # 联动计算官方溢价
-                            if metrics['static_val'] > 0 and metrics.get('price', 0) > 0:
+                                metrics['static_val'] = None
+
+                            # 联动计算官方溢价（仅官方估值有效时；缺失则置 None，绝不拿 NAV 派生）
+                            if isinstance(metrics.get('static_val'), (int, float)) and metrics['static_val'] > 0 and metrics.get('price', 0) > 0:
                                 metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
+                            else:
+                                metrics['static_premium'] = None
                         
                         # [SI 实时估值] 基于 COMEX 白银期货的实时估值（和 Woody GetRealtimeNetValue 一致）
                         # [AI-2026-08-03] 仅在 SHFE 交易时段内计算：午休/休市已丢弃 AG0 价（见上守卫），此时不计算 SI 估值，
@@ -2152,6 +2222,44 @@ class FundService:
         finally:
             conn.close()
 
+    def _ensure_today_close_price(self) -> None:
+        """[AI-2026-08-20] 盘后兜底：时间 ≥15:00 且今天 price 仍为 NULL 时，
+        调 daily_updater 立刻写今天收盘价。
+        解决主看板盘后显示"昨天收盘"的问题。"""
+        if datetime.now().hour < 15:
+            return
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = self.db._get_conn()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM unified_fund_history WHERE date=? AND price IS NULL",
+                (today,)
+            ).fetchone()[0]
+            if count == 0:
+                return
+            conn.close()
+            # [AI-2026-08-20] 调 daily_updater 写今天收盘价（幂等，已写则跳过）
+            import subprocess, os
+            scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scheduler')
+            script_path = os.path.join(scripts_dir, 'daily_updater.py')
+            python_exe = sys.executable
+            # 用 -c 调用，只跑 _step4_fetch_prices
+            code = f"""
+import sys
+sys.path.insert(0, r'{scripts_dir}')
+from daily_updater import DailyUpdater
+DailyUpdater()._step4_fetch_prices()
+"""
+            subprocess.run([python_exe, '-c', code], capture_output=True, timeout=120)
+            logger.info(f"✅ [盘后兜底] 今日收盘价写入完成，共 {count} 只基金")
+        except Exception as e:
+            logger.warning(f"⚠️ [盘后兜底] 写入今天收盘价失败: {e}")
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
+
     def get_fund_history(self, fund_code: str) -> List[Dict[str, Any]]:
         """
         历史对账数据（验算用）。
@@ -2165,7 +2273,7 @@ class FundService:
 
             # 1. 基础历史数据 (包含静态估值、汇率、并从 fund_daily_factors 回填缺失的净值 + hedge)
             query_hist = """
-            SELECT h.date, h.price, 
+            SELECT h.date, h.price,
                    COALESCE(h.nav, f.nav) as nav,
                    h.static_val, h.premium as static_premium, h.calibration,
                    h.index_close, h.index_pct, h.shares, h.shares_added, h.trade_volume, h.turnover_rate, h.volume,
@@ -2426,6 +2534,27 @@ class FundService:
                 except Exception as e:
                     logger.warning(f"[BondETF] 获取国债期货历史数据失败: {e}")
 
+            # [AI-2026-08-21] 白银基金：获取 AG0 结算价历史，供历史弹窗"结算价"列
+            # 结算价是白银估值分母，来自 futures_daily.symbol='AG0'（DB 权威，不回填不兜底）
+            ag0_settle_map = {}
+            try:
+                _cat_row = conn.execute("SELECT category FROM unified_fund_list WHERE fund_code=?", (fund_code,)).fetchone()
+                _cat = _cat_row[0] if _cat_row else ''
+                if _cat == '白银':
+                    _ag0_rows = conn.execute(
+                        "SELECT date, settle_price FROM futures_daily WHERE symbol='AG0' AND settle_price IS NOT NULL AND settle_price>0 ORDER BY date DESC"
+                    ).fetchall()
+                    _prices = {r[0]: r[1] for r in _ag0_rows}
+                    _ds = sorted(_prices.keys(), reverse=True)
+                    for i in range(len(_ds) - 1):
+                        _dc, _dp = _ds[i], _ds[i + 1]
+                        if _prices[_dp] and _prices[_dp] > 0 and _prices[_dc] and _prices[_dc] > 0:
+                            ag0_settle_map[_dc] = {'settle': _prices[_dc], 'chg': round((_prices[_dc] / _prices[_dp] - 1) * 100, 4)}
+                    if _ds:
+                        ag0_settle_map[_ds[-1]] = {'settle': _prices[_ds[-1]], 'chg': None}
+            except Exception as e:
+                logger.warning(f"[FundHistory] 获取AG0结算价失败 {fund_code}: {e}")
+
             # [AI-2026-07-21] 获取该基金跟踪的ETF历史价格
             # 单主ETF基金（如162411→XOP）显示净值（netvalue），列名"XOP净值"
             # 多篮子基金（如161116→GLD+^GLD-EU）显示价格（price），列名"GLD价格/^GLD-EU价格"
@@ -2616,8 +2745,22 @@ class FundService:
                             if w is not None:
                                 item[f'{etf_sym}_weight'] = round(w, 4)
 
+                # [AI-2026-08-21] 白银：附加 AG0 结算价（历史弹窗"结算价"列）
+                if ag0_settle_map:
+                    row_date = str(item.get('date', ''))[:10]
+                    _ag0 = ag0_settle_map.get(row_date)
+                    if _ag0:
+                        item['ag0_settle'] = _ag0['settle']
+                        item['ag0_settle_chg'] = _ag0['chg']
+
                 item['is_single_etf'] = is_single_etf
                 data_list.append(item)
+
+            # [AI-2026-08-21] 历史对账页不展示"今天"这一行：
+            # 今天行 nav/price 多数为 NULL（盘中未收盘），且白银今天行 AG0 结算价实为昨结算，显示会误导。
+            # 东哥明确：历史记录页不需要今天行（其他基金今天行全空、视觉上本就无此行）。
+            # 顶部全局汇率走 get_market_overview，不依赖本接口 today 行，故过滤安全。
+            data_list = [x for x in data_list if str(x.get('date', ''))[:10] != today]
 
             return data_list
         finally:
@@ -2665,12 +2808,26 @@ class FundService:
         finally: conn.close()
         return res
 
-    def get_fund_intraday(self, fund_code: str, date: str = None) -> List[Dict[str, Any]]:
+    def get_fund_intraday(self, fund_code: str, date: str = None, days: int = 1) -> List[Dict[str, Any]]:
+        """获取基金分时数据（支持多日）
+        - date: 基准日期（默认今天），days: 向前回溯天数
+        - 返回按时间排序的多日数据，X轴使用连续时间戳
+        """
         if not date: date = pd.Timestamp.now().strftime('%Y-%m-%d')
         conn = self.db._get_conn()
         try:
-            query = "SELECT time, price, rt_val, premium FROM fund_intraday_quotes WHERE fund_code = ? AND date = ? ORDER BY time ASC"
-            return pd.read_sql(query, conn, params=(fund_code, date)).to_dict(orient='records')
+            # 计算起始日期
+            start_date = (pd.Timestamp(date) - pd.Timedelta(days=days-1)).strftime('%Y-%m-%d')
+            query = """SELECT date, time, price, rt_val, premium
+                       FROM fund_intraday_quotes
+                       WHERE fund_code = ? AND date >= ?
+                       ORDER BY date ASC, time ASC"""
+            df = pd.read_sql(query, conn, params=(fund_code, start_date))
+            if df.empty:
+                return []
+            # 转换为时间戳X轴格式：MM-DD HH:MM
+            df['display_time'] = df['date'] + ' ' + df['time']
+            return df[['display_time', 'price', 'rt_val', 'premium']].to_dict(orient='records')
         finally: conn.close()
 
     def get_fund_basket(self, fund_code: str) -> List[Dict[str, Any]]:

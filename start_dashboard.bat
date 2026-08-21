@@ -1,15 +1,25 @@
 @echo off
 title ArbNext Dashboard Launcher
+
+:: [AI-2026-08-20] 启动前确认客户端已开：Enter 继续 / Esc 退出批处理
+powershell -NoProfile -Command "$Host.UI.RawUI.FlushInputBuffer(); Write-Host ''; Write-Host '【启动前检查】请先确保以下客户端已启动：' -ForegroundColor Yellow; Write-Host '   - IB Gateway  (美股/港股行情)' -ForegroundColor White; Write-Host '   - 富途 OpenD  (外盘 ETF 10档)' -ForegroundColor White; Write-Host '   - 通达信      (A股盘口)' -ForegroundColor White; Write-Host '   - 银河 QMT   (LOF 下单通道)' -ForegroundColor White; Write-Host ''; Write-Host '按 [Enter] 确认已启动并继续, 按 [Esc] 退出去启动客户端' -ForegroundColor Cyan; while($true){$k=$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); if($k.VirtualKeyCode -eq 13){break} if($k.VirtualKeyCode -eq 27){exit 1}}"
+if errorlevel 1 (
+  echo [已取消] 你选择退出。请启动上述客户端后重新运行本批处理。
+  exit /b
+)
+
 echo ========================================
 echo  Starting ArbNext Unified Dashboard...
 echo ========================================
 
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-set "VENV=%SCRIPT_DIR%\.venv\Scripts"
+:: [AI-2026-08-20] 本脚本已上移至 src\ 层，实际项目根目录在 ArbDashboard 子目录，故统一定位到 PROJ_DIR
+set "PROJ_DIR=%SCRIPT_DIR%\ArbDashboard"
+set "VENV=%PROJ_DIR%\.venv\Scripts"
 set "PY=%VENV%\python.exe"
-set "BACKEND=%SCRIPT_DIR%\backend"
-set "FRONTEND=%SCRIPT_DIR%\frontend"
+set "BACKEND=%PROJ_DIR%\backend"
+set "FRONTEND=%PROJ_DIR%\frontend"
 
 :: [AI-2026-08-17] 清空 PYTHONPATH：防止继承外层终端（如国金 QMT）注入的 GJQMT 路径，
 :: 否则其老版本 defusedxml 会因 PYTHONPATH 在 sys.path 中先于 venv 而覆盖 venv 包，导致导入 V7 报 XMLParser 错误。

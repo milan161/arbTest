@@ -66,19 +66,19 @@
       <n-grid :cols="24" :x-gap="12">
         <n-gi :span="4">
           <div class="stat-card">
-            <div class="stat-label">总盈亏(RMB)</div>
+            <div class="stat-label">总盈(RMB)</div>
             <div class="stat-value" :class="totalPnl >= 0 ? 'text-green' : 'text-red'">{{ totalPnl.toFixed(2) }}</div>
           </div>
         </n-gi>
         <n-gi :span="4">
           <div class="stat-card">
-            <div class="stat-label">A股总盈亏</div>
+            <div class="stat-label">A股总盈</div>
             <div class="stat-value" :class="totalASharePnl >= 0 ? 'text-green' : 'text-red'">{{ Math.round(totalASharePnl).toLocaleString() }}</div>
           </div>
         </n-gi>
         <n-gi :span="4">
           <div class="stat-card">
-            <div class="stat-label">美股总盈亏(USD)</div>
+            <div class="stat-label">美股总盈(USD)</div>
             <div class="stat-value" :class="totalUsd >= 0 ? 'text-green' : 'text-red'">{{ totalUsd.toFixed(2) }}</div>
           </div>
         </n-gi>
@@ -120,13 +120,13 @@
     <n-card :bordered="false" class="shadow-soft mb-4">
       <n-tabs type="line" animated>
         <n-tab-pane name="open" :tab="`持仓未赎回 (${openPairs.length})`">
-          <n-data-table :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1130" />
+          <n-data-table class="ledger-table" :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
         </n-tab-pane>
         <n-tab-pane name="unfinished" :tab="`已退出待结算 (${unfinishedPairs.length})`">
-          <n-data-table :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1130" />
+          <n-data-table class="ledger-table" :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
         </n-tab-pane>
         <n-tab-pane name="settled" :tab="`已结项 (${settledPairs.length})`">
-          <n-data-table :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1130" />
+          <n-data-table class="ledger-table" :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
         </n-tab-pane>
       </n-tabs>
     </n-card>
@@ -165,7 +165,7 @@
         bordered
         :row-class-name="pnlRowClass"
         :max-height="700"
-        :scroll-x="1130"
+        :scroll-x="1200"
         :pagination="{ pageSize: 20 }"
       />
     </n-card>
@@ -486,12 +486,12 @@ const monthlyColumns = [
       { default: () => (r.pnl_rmb >= 0 ? '+' : '') + r.pnl_rmb.toFixed(2) })
   },
   {
-    title: 'A股盈亏', key: 'a_share_pnl', width: 100, align: 'right' as const,
+    title: 'A股盈', key: 'a_share_pnl', width: 100, align: 'right' as const,
     render: (r: any) => h(NText, { style: r.a_share_pnl >= 0 ? 'color:#e53e3e' : 'color:#16a34a' },
       { default: () => Math.round(r.a_share_pnl).toLocaleString() })
   },
   {
-    title: '美股盈亏(USD)', key: 'pnl_usd', width: 120, align: 'right' as const,
+    title: '美股盈(USD)', key: 'pnl_usd', width: 120, align: 'right' as const,
     render: (r: any) => h(NText, { style: r.pnl_usd >= 0 ? 'color:#e53e3e' : 'color:#16a34a' },
       { default: () => (r.pnl_usd >= 0 ? '+' : '') + r.pnl_usd.toFixed(2) })
   },
@@ -506,7 +506,7 @@ const fundList = [
   { code: '161129', name: '易方达原油' }, { code: '501018', name: '南方原油' },
   { code: '164824', name: '印度基金' }, { code: '165513', name: '信诚四国' },
   { code: '160723', name: '嘉实原油' }, { code: '161815', name: '银华通胀' },
-  { code: '160216', name: '国泰商品' }, { code: '161116', name: '白银基金' },
+  { code: '160216', name: '国泰商品' }, { code: '161116', name: '易方达黄金' },
 ]
 const fundSelectOptions = computed(() =>
   fundList.map(f => ({ label: `${f.code} ${f.name}`, value: f.code }))
@@ -732,31 +732,31 @@ const statusTag = (s: string) => {
 const pairColumns = [
   { title: '序号', key: 'serial_no', width: 56, align: 'center' as const, fixed: 'left' as const,
     render: (r: any) => r.serial_no || '-' },
-  { title: '基金', key: 'fund', width: 72, fixed: 'left' as const,
+  { title: '基金', key: 'fund', width: 76, fixed: 'left' as const,
     render: (r: any) => {
+      const db_name = r.fund_name || ''
       const found = fundList.find(f => f.code === r.fund_code)
       const code = found ? found.code : r.fund_code
-      const name = found ? found.name : ''
-      const children = [
-        h(NText, { strong: true, style: 'font-size:13px;' }, { default: () => code })
-      ]
-      if (name) children.push(h('div', { style: 'font-size:12px; color:#666; margin-top:2px; line-height:1.25;' }, name))
-      return h('div', { style: 'line-height:1.25; text-align:left; white-space:normal; word-break:break-all;' }, children)
+      const name = db_name || (found ? found.name : '')
+      return h('div', { style: 'font-size:12px; line-height:1.3;', title: `${code} ${name}` }, [
+        h('div', { style: 'font-weight:700; color:#1e293b; white-space:nowrap;' }, code),
+        h('div', { style: 'color:#64748b; white-space:nowrap;' }, name)
+      ])
     }
   },
   { title: '状态', key: 'status', width: 48, align: 'center' as const,
     render: (r: any) => statusTag(r.status) },
   // A股开仓
-  { title: '开仓日', key: 'buy_date', width: 46, align: 'center' as const,
+  { title: '开仓', key: 'buy_date', width: 46, align: 'center' as const,
     render: (r: any) => r.buy_date ? shortDate(r.buy_date) : '-' },
   { title: '开仓价', key: 'buy_price', width: 48, align: 'center' as const,
     render: (r: any) => fmt(r.buy_price, 3) },
   { title: '数量', key: 'buy_volume', width: 48, align: 'center' as const,
-    render: (r: any) => r.buy_volume ? Number(r.buy_volume) : '-' },
+    render: (r: any) => r.buy_volume ? h('span', { style: 'font-size:11px' }, Number(r.buy_volume)) : '-' },
   { title: twoLineTitle('金额', '(RMB)'), key: 'buy_amount', width: 68, align: 'right' as const,
     render: (r: any) => h(NText, { style: (r.buy_amount ? 'color:#e53e3e;' : '') + 'white-space:nowrap' }, { default: () => fmt(r.buy_amount, 0) }) },
   // A股平仓
-  { title: '平仓日', key: 'sell_date', width: 44, align: 'center' as const,
+  { title: '平仓', key: 'sell_date', width: 44, align: 'center' as const,
     render: (r: any) => r.sell_date ? shortDate(r.sell_date) : '-' },
   { title: '平仓价', key: 'sell_price', width: 46, align: 'center' as const,
     render: (r: any) => fmt(r.sell_price, 3) },
@@ -772,14 +772,14 @@ const pairColumns = [
   { title: twoLineTitle('空金额', '(USD)'), key: 'short_amount', width: 66, align: 'right' as const,
     render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.short_amount)) },
   // 美股买平
-  { title: '买平日', key: 'cover_date', width: 44, align: 'center' as const,
+  { title: '买平', key: 'cover_date', width: 44, align: 'center' as const,
     render: (r: any) => r.cover_date ? shortDate(r.cover_date) : '-' },
   { title: '买平价', key: 'cover_price', width: 58, align: 'center' as const,
     render: (r: any) => r.cover_price ? `$${fmt(r.cover_price)}` : '-' },
   { title: twoLineTitle('金额', '(USD)'), key: 'cover_amount', width: 64, align: 'right' as const,
     render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.cover_amount)) },
   // 盈亏汇总：未结项(OPEN/unfinished)显示空白，已结项(Closed)才显示数值
-  { title: 'A股盈亏', key: 'a_share_pnl', width: 56, align: 'right' as const,
+  { title: 'A股盈', key: 'a_share_pnl', width: 56, align: 'right' as const,
     render: (r: any) => {
       if (r.status !== 'Closed') return '-'
       if (r.a_share_pnl === null || r.a_share_pnl === undefined) return '-'
@@ -787,7 +787,7 @@ const pairColumns = [
         { default: () => fmt(r.a_share_pnl, 0) })
     }
   },
-  { title: 'USD盈亏', key: 'pnl_usd', width: 56, align: 'right' as const,
+  { title: 'USD盈', key: 'pnl_usd', width: 56, align: 'right' as const,
     render: (r: any) => {
       if (r.status !== 'Closed') return '-'
       if (r.pnl_usd === null || r.pnl_usd === undefined) return '-'
@@ -795,7 +795,7 @@ const pairColumns = [
         { default: () => fmt(r.pnl_usd, 0) })
     }
   },
-  { title: twoLineTitle('总盈亏', '(RMB)'), key: 'pnl_rmb', width: 68, align: 'right' as const, fixed: 'right' as const,
+  { title: twoLineTitle('总盈', '(RMB)'), key: 'pnl_rmb', width: 68, align: 'right' as const, fixed: 'right' as const,
     render: (r: any) => {
       if (r.status !== 'Closed') return '-'
       if (r.pnl_rmb === null || r.pnl_rmb === undefined) return '-'
@@ -823,7 +823,7 @@ const categoryToFunds: Record<string, {label:string, value:string}[]> = {
   'QDII欧美': [{ label: '162411 (华宝油气)', value: '162411' }, { label: '161125 (标普500)', value: '161125' }, { label: '161130 (纳斯达克)', value: '161130' }, { label: '161128 (标普科技)', value: '161128' }, { label: '161126 (标普医疗)', value: '161126' }, { label: '161127 (标普生物)', value: '161127' }],
   'QDII亚洲': [{ label: '164824 (印度基金)', value: '164824' }, { label: '165513 (信诚四国)', value: '165513' }],
   '国内LOF': [{ label: '501018 (南方原油)', value: '501018' }],
-  '白银': [{ label: '161116 (白银基金)', value: '161116' }]
+  '白银': [{ label: '161116 (易方达黄金)', value: '161116' }]
 }
 const fundCodeOptions = computed(() => categoryToFunds[newFee.value.category] || [])
 const onCategoryChange = (val: string) => {
@@ -914,11 +914,17 @@ onMounted(() => {
 :deep(.row-loss) td { background-color: #f0fdf4 !important; } /* 亏损淡绿底 */
 
 /* 套利配对对账表：数据行紧凑，列头保持默认可读性 */
-.ledger-table :deep(.n-data-table-td) { padding: 3px 5px !important; }
+.ledger-table :deep(.n-data-table-td) { padding: 3px 4px !important; }
 /* 前两列（基金+状态）进一步收紧水平间距 */
 .ledger-table :deep(tr > td:nth-child(1)),
 .ledger-table :deep(tr > th:nth-child(1)) { padding-right: 2px !important; }
 .ledger-table :deep(tr > td:nth-child(2)),
-.ledger-table :deep(tr > th:nth-child(2)) { padding-left: 2px !important; }
+.ledger-table :deep(tr > th:nth-child(2)) { padding-left: 0 !important; padding-right: 0 !important; }
+.ledger-table :deep(tr > td:nth-child(3)),
+.ledger-table :deep(tr > th:nth-child(3)) { padding-left: 0 !important; }
+/* 消除固定列与滚动区域之间的视觉间隙 */
+.ledger-table :deep(.n-data-table-fixed-left) { box-shadow: none !important; }
+.ledger-table :deep(.n-data-table-cell-fix-left),
+.ledger-table :deep(.n-data-table-cell-fix-left-first) { border-right-width: 0 !important; }
 .ledger-table :deep(.n-data-table-wrapper) { border-collapse: separate; border-spacing: 0; }
 </style>

@@ -238,6 +238,7 @@ def apply_freeze_to_dashboard(result: list) -> None:
             if fz and fz.get('rt_val') is not None:
                 item['rt_val'] = fz['rt_val']
                 item['rt_premium'] = fz['rt_premium']
+                # 不恢复 price：DB 中今天官方收盘价已由 _step4_fetch_prices() 写入
                 item['rt_frozen'] = True
                 item['rt_frozen_note'] = '15:00冻结'
 
@@ -259,5 +260,6 @@ def apply_freeze_to_dashboard(result: list) -> None:
             if c and c.get('rt_val') is not None:
                 item['rt_val'] = c['rt_val']
                 item['rt_premium'] = c['rt_premium']
+                # 不恢复 price：DB 中今天官方收盘价已由 _step4_fetch_prices() 写入
                 item['rt_frozen'] = True
                 item['rt_frozen_note'] = f'最后有效 {updated_at}'

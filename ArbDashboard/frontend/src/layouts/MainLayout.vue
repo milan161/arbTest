@@ -115,7 +115,6 @@ import {
 } from 'naive-ui'
 import { 
   LayoutDashboard, 
-  LineChart, 
   Settings, 
   Database,
   Bot,
@@ -175,6 +174,10 @@ const reconnectEngine = async (sourceLabel: string, reconnectFn: () => Promise<a
     const data = await reconnectFn()
     if (data.status === 'ok') {
       message.success(`${sourceLabel} 重连成功！`)
+      refreshStatus()
+    } else if (data.status === 'pending') {
+      // [AI-2026-08-20] 异步重连：后端立即返回 pending，连接结果经状态栏轮询体现
+      message.info(`${sourceLabel} ${data.message || '重连中，请稍候'}`)
       refreshStatus()
     } else {
       message.warning(`${sourceLabel} 重连未就绪: ${data.message}`)
@@ -236,11 +239,6 @@ const menuOptions = [
     icon: renderIcon(LayoutDashboard)
   },
   {
-    label: () => h(RouterLink, { to: '/analysis' }, { default: () => '实时沙盘' }),
-    key: 'analysis',
-    icon: renderIcon(LineChart)
-  },
-  {
     label: () => h(RouterLink, { to: '/auto-trade' }, { default: () => '信号监视' }),
     key: 'auto-trade',
     icon: renderIcon(Activity)
@@ -264,11 +262,6 @@ const menuOptions = [
     label: () => h(RouterLink, { to: '/settings' }, { default: () => '系统配置' }),
     key: 'settings',
     icon: renderIcon(Settings)
-  },
-  {
-    label: () => h(RouterLink, { to: '/lazymode' }, { default: () => '我的交易' }),
-    key: 'lazymode',
-    icon: renderIcon(Bot)
   },
   {
     label: () => h(RouterLink, { to: '/maintenance' }, { default: () => '后台维护' }),

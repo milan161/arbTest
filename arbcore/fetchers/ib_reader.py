@@ -20,15 +20,17 @@ logging.getLogger('ibapi.utils').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Windows GBK encoding safe print helper
+# 同时兜住 OSError（WinError 1 等）：Windows 控制台 stdout 异常时 builtins.print
+# 会抛 OSError，不兜住会导致轮询线程崩溃 → 重连 → 又崩的无限循环（2026-08-20 实测）。
 def print(*args, **kwargs):
     try:
         builtins.print(*args, **kwargs)
-    except UnicodeEncodeError:
+    except (UnicodeEncodeError, OSError):
         try:
             encoding = sys.stdout.encoding or 'gbk'
             safe_args = [str(arg).encode(encoding, errors='replace').decode(encoding) for arg in args]
             builtins.print(*safe_args, **kwargs)
-        except:
+        except Exception:
             pass
 
 try:

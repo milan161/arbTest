@@ -26,9 +26,9 @@ export function getCategories() {
   return client.get('/api/config/categories')
 }
 
-/** 基金分时数据（曲线图用） */
-export function getFundIntraday(code: string, date?: string) {
-  return client.get(`/api/fund/${code}/intraday`, { params: { date } })
+/** 基金分时数据（曲线图用，支持多日） */
+export function getFundIntraday(code: string, date?: string, days?: number) {
+  return client.get(`/api/fund/${code}/intraday`, { params: { date, days } })
 }
 
 /** 基金篮子权重 */

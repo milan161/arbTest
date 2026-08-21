@@ -84,7 +84,7 @@
           <div><strong>仓位：</strong> {{ fundHistoryPositionDisplay }}</div>
           <div>
             <strong>跟踪标的：</strong> 
-            {{ getIdxDisplayName(selectedFund) }}
+            {{ selectedFund?.category === '白银' ? '上期所白银期货AG0' : getIdxDisplayName(selectedFund) }}
           </div>
           <div><strong>申购费率：</strong> {{ selectedFund.purchase_fee || '-' }}</div>
           <div><strong>赎回费率：</strong> {{ selectedFund.redemption_fee || '-' }}</div>
@@ -370,27 +370,34 @@ const allColumns: DataTableColumns<any> = [
   {
     title: () => h('div', { class: 'col-title-wrapper' }, [
       h('div', { style: 'font-size: 12px; font-weight: bold;' }, '实时估值'),
-      h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击进实盘')
+      h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击进实盘(黄金原油/QDII欧美)')
     ]),
     key: 'rt_val_display', width: 80, align: 'center',
     className: 'col-rt-val',
     render(row: any) {
-      // [AI-2026-08-18] 修复：原第一个分支(rt_val>0)直接 return 未绑 onClick，导致有数据时点击不跳转；现统一提前 onClick
-      const onClick = () => router.push({ path: '/analysis', query: { code: row.fund_code, name: row.fund_name } })
-      if (row.rt_val && row.rt_val > 0) {
-        return h('span', { class: 'num-cell strong clickable-cell', onClick }, row.rt_val.toFixed(4))
-      }
-      if (row.rt_unavailable === 'FUTU') {
-        return h('span', { class: 'num-cell strong clickable-cell', style: 'color:#f59e0b;font-size:11px;', onClick }, '缺FUTU')
-      }
-      const val = '-'
+      // [AI-2026-08-20] 盘后(≥15:00)实时估值无意义，优先显示"冻"标签
       if (row.rt_frozen) {
-        return h('span', { class: 'num-cell strong clickable-cell frozen-cell', onClick }, [
-          val,
+        const canEnter = ['黄金原油', 'QDII欧美', 'QDII日本', '白银'].includes(row.category)
+        const onClick = canEnter ? () => router.push({ path: '/lazymode', query: { code: row.fund_code, name: row.fund_name } }) : undefined
+        const cellCls = canEnter ? 'num-cell strong clickable-cell' : 'num-cell strong'
+        const tip = canEnter ? undefined : '暂不支持（非可套利分类）'
+        return h('span', { class: cellCls + ' frozen-cell', onClick, title: tip || '收盘冻结估值' }, [
+          row.rt_val?.toFixed(4) || '-',
           h('span', { class: 'freeze-badge', title: row.rt_frozen_note || '收盘冻结估值' }, '冻')
         ])
       }
-      return h('span', { class: 'num-cell strong clickable-cell', onClick }, val)
+      // 盘中：正常显示实时估值
+      const canEnter = ['黄金原油', 'QDII欧美', 'QDII日本', '白银'].includes(row.category)
+      const onClick = canEnter ? () => router.push({ path: '/lazymode', query: { code: row.fund_code, name: row.fund_name } }) : undefined
+      const cellCls = canEnter ? 'num-cell strong clickable-cell' : 'num-cell strong'
+      const tip = canEnter ? undefined : '暂不支持（非可套利分类）'
+      if (row.rt_val && row.rt_val > 0) {
+        return h('span', { class: cellCls, onClick, title: tip }, row.rt_val.toFixed(4))
+      }
+      if (row.rt_unavailable === 'FUTU') {
+        return h('span', { class: cellCls, style: 'color:#f59e0b;font-size:11px;', onClick, title: tip }, '缺FUTU')
+      }
+      return h('span', { class: cellCls, onClick, title: tip }, '-')
     }
   },
   {
@@ -581,6 +588,8 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
 
     // [AI-2026-07-04] 判断是否有 hedge 数据（单ETF基金使用魔法公式需要）
     const hasHedge = fundHistory.value.some(r => r.hedge != null && r.hedge > 0)
+    // [AI-2026-08-21] 白银基金：历史弹窗"对冲值"列改为"结算价"（ag0_settle 由后端注入）
+    const isSilver = selectedFund.value?.category === '白银'
 
     const baseCols: DataTableColumns<any> = [
         { title: '日期', key: 'date', width: 85, align: 'center', render(row: any) {
@@ -633,8 +642,8 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                 { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
                 { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
                 { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium; if (v == null) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
-                // [AI-2026-07-04] 单ETF基金（魔法公式）显示对冲值
-                ...(hasHedge ? [{ title: '对冲值', key: 'hedge', width: 95, align: 'center', render(row: any) { return row.hedge != null ? h('span', { class: 'num-cell' }, row.hedge.toFixed(2)) : '-' } }] : []),
+                // [AI-2026-08-21] 白银：历史弹窗"对冲值"列改为"结算价"（仅白银显示，数据来自后端 ag0_settle）
+                ...(isSilver ? [{ title: '结算价', key: 'ag0_settle', width: 95, align: 'center', render(row: any) { return row.ag0_settle != null ? renderValWithChg(row.ag0_settle, row.ag0_settle_chg, 2) : '-' } }] : []),
               ],
         // QDII亚洲 / QDII日本 / 国内LOF / 指数型基金 专属：指数价 + 指数涨跌
         ...(['QDII亚洲', 'QDII日本', '国内LOF'].includes(selectedFund.value?.category || '') || selectedFund.value?.sub_category?.includes('指数') ? [
@@ -647,7 +656,7 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
     // [2026-07-30] 份额/新增/换手率 列（移到最右侧）
     const shareCols: DataTableColumns<any> = isCash ? [] : [
         { title: '份额(万)', key: 'shares', width: 85, align: 'center', render(row: any) { const v = row.shares; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(0)) } },
-        { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { const v = row.shares_added; if (v == null) return '-'; const n = Number(v); return h('span', { style: { color: priceColor(n), fontSize: '11px' } }, (n >= 0 ? '+' : '') + n.toFixed(0)) } },
+        { title: '新增(万)', key: 'shares_added', width: 80, align: 'center', render(row: any) { const v = row.shares_added; if (v == null) return '-'; const n = Number(v); return h('span', { style: { color: priceColor(n), fontSize: '11px' } }, (n >= 0 ? '+' : '') + n.toFixed(2)) } },
         { title: '换手率', key: 'turnover_rate', width: 80, align: 'center', render(row: any) { const v = row.turnover_rate; if (v == null) return '-'; return h('span', { style: 'font-size: 12px;' }, Number(v).toFixed(2) + '%') } },
     ]
 

@@ -232,6 +232,8 @@ def is_a_share_session(now_dt: datetime = None) -> bool:
 # 故美股/港股盘口展示放宽到 16:00；16:00 之后一律不显示（连冻结值都不留）。
 # 仅用于美股/港股实时盘口的"是否展示"判定；A 股仍走 is_a_share_session（15:00 冻结），两者互不干扰。
 # [AI-2026-08-07] 东哥修改：盘口展示窗口提前到 8:30（8:30=510），原 9:30=570
+# [AI-2026-08-19] 注意：此窗口仅服务 IB（未购买行情，仅 OVERNIGHT 8:30-16:00 免费）。
+#   富途促销期全时段免费，其门禁在 futu_reader.get_prices / get_dual_quote 中单独放开（不依赖本函数）。
 def is_quote_window(now_dt: datetime = None) -> bool:
     """判断当前是否处于美股/港股盘口展示时段（北京时间 8:30-16:00，含午休，周一~周五）。"""
     if now_dt is None:

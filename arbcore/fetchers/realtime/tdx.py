@@ -466,35 +466,20 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
 
     def _internal_callback(self, data_str):
 
-
-
-
         """通达信价格跳动回调"""
 
-
-
-
         try:
-
-
-
-
             import json
-
-
-
+            from datetime import datetime
 
             data = json.loads(data_str)
-
-
-
-
             stock_code = data.get('Code')
 
-
-
-
             if stock_code:
+                # [AI-2026-08-20] debug: 打印推送时间戳，对比本地时间看延迟
+                push_ts = data.get('Time', data.get('time', ''))
+                now_str = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                logger.info(f"[TDX_DEBUG] 收到推送 {stock_code} Time={push_ts} now={now_str}")
 
 
 
@@ -739,7 +724,7 @@ class TdxRealtimeFetcher(BaseRealtimeFetcher):
         now = time.time()
         with self._lock:
             cached = self.quotes.get(clean_symbol)
-            if cached and (now - cached.get("time", 0)) < 5:
+            if cached and (now - cached.get("time", 0)) < 1:
                 return cached
 
         # 缓存过期或缺失时主动拉取最新快照

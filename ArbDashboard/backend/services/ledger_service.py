@@ -298,12 +298,12 @@ class LedgerService:
             self._ensure_a_share_pnl(conn)
             if status:
                 df = pd.read_sql_query(
-                    "SELECT * FROM arbitrage_pairs WHERE status = ? ORDER BY buy_date DESC",
+                    "SELECT * FROM arbitrage_pairs WHERE status = ? ORDER BY buy_date DESC, serial_no DESC",
                     conn, params=(status,)
                 )
             else:
                 df = pd.read_sql_query(
-                    "SELECT * FROM arbitrage_pairs ORDER BY buy_date DESC",
+                    "SELECT * FROM arbitrage_pairs ORDER BY buy_date DESC, serial_no DESC",
                     conn
                 )
             pairs = df.to_dict(orient='records')
@@ -574,6 +574,8 @@ class LedgerService:
     # [AI-2026-08-16] 导入 v7 Excel 套利账本：解析 -> upsert 到 arbitrage_pairs
     _HEDGE_MAP = {'162411': 'XOP', '164701': 'GLD', '161116': 'GLD', '164824': 'INDA'}
     _STATUS_MAP = {'closed': 'Closed', 'final': 'Closed', 'open': 'OPEN', 'unfinished': 'unfinished'}
+    # [AI-2026-08-18] 用户习惯叫法（优先于主库官方名）：统一前端展示口径，勿改
+    _HABIT_FUND_NAMES = {'161116': '易方达黄金', '162411': '华宝油气', '164701': '汇添富黄金', '164824': '印度基金'}
 
     def _parse_v7_groups(self, file_path: str) -> List[Dict[str, Any]]:
         """解析 v7 Excel，返回 [{summary, details}] 列表。每组配对由连续的明细行 + 一个汇总行组成。"""
@@ -838,6 +840,16 @@ class LedgerService:
         try:
             self._ensure_a_share_pnl(conn)
             rates = self._get_rates_map(conn)
+            # [AI-2026-08-18] fund_name 从主库 unified_fund_list 查（V7 只有基金代码没有名字），
+            # 否则新组 INSERT 后 fund_name=NULL → 前端"即将赎回"卡片显示 null
+            fund_names = {}
+            try:
+                m = self._attach_master(conn)
+                for r in conn.execute(
+                        f"SELECT fund_code, fund_name FROM {m}.unified_fund_list WHERE fund_name IS NOT NULL").fetchall():
+                    fund_names[str(r[0])] = r[1]
+            except Exception as e:
+                logger.warning(f"[AI-2026-08-18] 读取 fund_name 映射失败: {e}")
             inserted = 0
             updated = 0
             skipped = 0
@@ -853,6 +865,7 @@ class LedgerService:
                     errors.append(f"组缺少基金代码 (pnl_rmb={s.get('pnl_rmb')})")
                     skipped += 1
                     continue
+                fund_name = self._HABIT_FUND_NAMES.get(fund) or fund_names.get(fund, fund)  # 习惯叫法优先，缺则官方名/代码
                 status = s.get('status') or 'Closed'
                 if status == 'Final':   # 历史误把日期当状态词 -> 归一为 Closed
                     status = 'Closed'
@@ -945,13 +958,13 @@ class LedgerService:
                 if existing:
                     conn.execute(
                         """UPDATE arbitrage_pairs SET
-                            fund_code=?, buy_date=?, sell_date=?, buy_volume=?, sell_volume=?, short_volume=?, cover_volume=?,
+                            fund_code=?, fund_name=?, buy_date=?, sell_date=?, buy_volume=?, sell_volume=?, short_volume=?, cover_volume=?,
                             buy_amount=?, buy_price=?, sell_amount=?, sell_price=?, short_date=?, short_price=?, short_amount=?,
                             cover_date=?, cover_price=?, cover_amount=?, us_commission=?,
                             pnl_rmb=?, pnl_usd=?, a_share_pnl=?, status=?, hedge_symbol=?, broker_name=?,
                             buy_notes=?, open_type=?, close_type=?, updated_at=?
                             WHERE id=?""",
-                        (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
+                        (fund, fund_name, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
                          buy_amount, buy_price, sell_amount, sell_price, short_date, short_price, short_amount,
                          sell_date, cover_price, cover_amount, us_commission,
                          pnl_rmb, pnl_usd, a_share_pnl, status, hedge, broker,
@@ -961,13 +974,13 @@ class LedgerService:
                 else:
                     conn.execute(
                         """INSERT INTO arbitrage_pairs
-                            (fund_code, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
+                            (fund_code, fund_name, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
                              buy_amount, buy_price, sell_amount, sell_price, short_date, short_price, short_amount,
                              cover_date, cover_price, cover_amount, us_commission,
                              pnl_rmb, pnl_usd, a_share_pnl, status, hedge_symbol, broker_name, serial_no,
                              buy_notes, open_type, close_type, created_at, updated_at)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (fund, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (fund, fund_name, buy_date, sell_date, buy_volume, sell_volume, short_volume, cover_volume,
                          buy_amount, buy_price, sell_amount, sell_price, short_date, short_price, short_amount,
                          sell_date, cover_price, cover_amount, us_commission,
                          pnl_rmb, pnl_usd, a_share_pnl, status, hedge, broker, serial,
@@ -1039,14 +1052,13 @@ class LedgerService:
                     continue
                 days_left = (redeem_d - today).days
                 wd_cn = _wd_cn[redeem_d.weekday()]
+                # [AI-2026-08-20] 只显示下一个交易日需要赎回的（days_left <= 1）
+                if days_left > 1:
+                    continue
                 if days_left <= 0:
                     level, msg = 'critical', f"已到可优惠赎回日（{redeem_d.isoformat()} {wd_cn}），请赎回"
-                elif days_left == 1:
-                    level, msg = 'warning', f"明天（{redeem_d.isoformat()} {wd_cn}）即可优惠赎回"
-                elif days_left <= 3:
-                    level, msg = 'notice', f"还有 {days_left} 天到可优惠赎回日（{redeem_d.isoformat()} {wd_cn}）"
                 else:
-                    level, msg = 'info', f"还有 {days_left} 天到可优惠赎回日（{redeem_d.isoformat()} {wd_cn}）"
+                    level, msg = 'warning', f"明天（{redeem_d.isoformat()} {wd_cn}）即可优惠赎回"
                 open_alerts.append({
                     'id': p.get('id'), 'fund_code': p.get('fund_code'), 'fund_name': p.get('fund_name'),
                     'buy_date': buy_date, 'redeem_date': redeem_d.isoformat(), 'redeem_weekday': wd_cn,

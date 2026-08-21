@@ -11,8 +11,6 @@ import threading
 import pandas as pd
 import logging
 
-from arbcore.utils.market_calendar import is_a_share_session, is_quote_window
-
 logger = logging.getLogger(__name__)
 
 # 尝试导入富途API
@@ -224,13 +222,11 @@ class FutuReader:
         if self.disabled:
             return False, "富途API已被禁用（启动时连接失败，请点击页面'富途'标签重试）", self.prices
 
-        # [AI-2026-08-04] 美股/港股盘口展示窗口门禁（东哥拍板）：套利 9:30-15:00，但港股 16:00 收盘、
-        # IB/Futu 夜盘也 16:00 结束，故盘口展示放宽到 16:00；16:00 后一律不显示（连冻结值不留）。
-        # 窗口外：不建连、不订阅、不请求 OpenD，返回空盘口（前端显示"—"），从源头不产生错价/冻结值。
+        # [AI-2026-08-04] 原美股/港股盘口展示窗口门禁（8:30-16:00）仅服务 IB（未购买行情）。
+        # [AI-2026-08-19] 东哥确认：富途促销期全时段免费实时行情（含盘前/夜盘/现在），
+        # 故富途不再受 is_quote_window 限制，全时段可取。IB 路径未动（仍走 is_quote_window）。
+        # 窗口外不建连/不订阅/不请求 OpenD 的逻辑对富途不适用——OpenD 全时段有真实行情。
         self.session_closed = False
-        if not is_quote_window():
-            self.session_closed = True
-            return False, "非行情展示时段(16:00后)，富途盘口不显示", {}
 
         with self._lock:  # [V10.13] 多线程并发保护
             return self._get_prices_impl(symbols)

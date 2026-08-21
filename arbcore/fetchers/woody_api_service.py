@@ -192,8 +192,16 @@ class WoodyAPIService:
             cal = float(f_data['calibration']) if f_data.get('calibration') is not None else None
             hed = float(f_data['hedge']) if f_data.get('hedge') is not None else None
             nav_val = float(f_data['netvalue']) if f_data.get('netvalue') else None
-            
+
+            # [AI-2026-08-20] 写入基准日数据
             db.upsert_fund_factor(date=b_date, fund_code=fund_code, calibration=cal, hedge=hed, position=pos, nav=nav_val)
+
+            # [AI-2026-08-20] 如果est_date存在且不同于b_date，也在est_date写入同样的因子
+            # 原因：历史数据显示日期列显示的是est_date（今天），但程序只用b_date（基准日）写入
+            # 导致历史页est_date行缺失hedge数据（如162411在8-19缺hedge）
+            if e_date and e_date != b_date:
+                db.upsert_fund_factor(date=e_date, fund_code=fund_code, calibration=cal, hedge=hed, position=pos, nav=nav_val)
+                logger.debug(f"  🔧 [{fund_code}] 回填 {e_date} 因子数据 (b_date={b_date}, est_date={e_date})")
             
             # 🌟 Woody API 返回了真实仓位时，同步更新 unified_fund_list.pos_ratio
             raw_pos = f_data.get('position')

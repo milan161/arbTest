@@ -1,5 +1,6 @@
 import logging
 import time
+import os
 from typing import List, Dict, Optional, Any
 from .base import BaseRealtimeFetcher
 from .guojin import GuojinQmtFetcher
@@ -108,9 +109,19 @@ class RealtimeMarketManager:
             "sina": "新浪财经"
         }
 
+        # [AI-2026-08-20 东哥口径] 客户端类数据源（tdx/guojin/galaxy）：本地模式启动
+        # 一律不实例化不连接——用户不用的客户端不占任何资源；点击侧边按键才按需实例化+连接。
+        # 云端无人值守（ARB_DASHBOARD_MODE=1）保留自动实例化+连接（见下方 client_source_keys 分支）。
+        client_source_keys = {"tdx", "guojin", "galaxy"}
+        is_cloud = os.environ.get('ARB_DASHBOARD_MODE', '0') == '1'
+
         for item in full_config:
             source_name_key = item['source_name']
             source_name_cn = source_name_map.get(source_name_key, source_name_key)
+
+            if source_name_key in client_source_keys and not is_cloud:
+                logger.info(f"⏳ {source_name_cn} 本地模式：不自动实例化/连接，等待用户点击侧边按键")
+                continue
 
             config_dict = {}
             try:
@@ -132,13 +143,25 @@ class RealtimeMarketManager:
                     if self.system_status: self.system_status.add_milestone("ERROR", msg)
                     continue
 
-                # [V10.0] 客户端类数据源（tdx/guojin/galaxy）启动时不自动连接
-                # 用户点击页面顶部对应按钮才触发 reconnect()
-                client_source_keys = {"tdx", "guojin", "galaxy"}
+                # [V10.0] 客户端类数据源：仅云端走到这里（本地已 continue 跳过）。
+                # 云端：客户端已运行则自动连上并注册 active_fetchers（按钮自动变绿）；未运行则跳过待手动。
                 if source_name_key in client_source_keys:
-                    msg = f"⏳ {source_name_cn} 待连接（请点击页面顶部'{source_name_cn}'按钮启动）"
-                    logger.info(msg)
-                    if self.system_status: self.system_status.add_milestone("INFO", msg)
+                    try:
+                        if fetcher.connect():
+                            fetcher.set_on_update(self._on_internal_update)
+                            self.active_fetchers[source_name_key] = fetcher
+                            if self.symbols:
+                                fetcher.subscribe(self.symbols)
+                            msg = f"✅ {source_name_cn} 云端启动探测成功（客户端已运行，已自动挂载）"
+                            logger.info(msg)
+                            if self.system_status: self.system_status.add_milestone("SUCCESS", msg)
+                        else:
+                            msg = f"⏳ {source_name_cn} 客户端未运行，跳过（可点击页面按钮手动启动）"
+                            logger.info(msg)
+                            if self.system_status: self.system_status.add_milestone("INFO", msg)
+                    except Exception as e:
+                        msg = f"⏳ {source_name_cn} 云端启动连接失败: {e}（可点击页面按钮手动启动）"
+                        logger.info(msg)
                     continue
 
                 # 纯 API 源（sina/tencent）正常自动连接

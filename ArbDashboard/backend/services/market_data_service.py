@@ -13,6 +13,25 @@ from arbcore.utils.market_calendar import is_quote_window  # [AI-2026-08-07] 美
 
 logger = logging.getLogger(__name__)
 
+# [AI-2026-08-21] 强制 IPv4 adapter：hq.sinajs.cn 解析到 IPv6 半通，导致美股期货(hf_NK/ES/NQ/MGC…)
+# 直连 DNS 失败(NameResolutionError)。adapter 在每次请求期间临时覆盖 socket.getaddrinfo 只返回
+# IPv4 记录，保留域名 SNI 不变（避免 IP 直连证书/SNI 问题）。挂载于共享 session，一次根治所有
+# 美股期货 sina 路径（与 fund_service.py SSE reader 同源思路）。
+import requests
+import socket
+from requests.adapters import HTTPAdapter
+
+class _ForceIPv4Adapter(HTTPAdapter):
+    def send(self, request, **kwargs):
+        _orig_getaddrinfo = socket.getaddrinfo
+        def _ipv4_only(*a, **kw):
+            return [r for r in _orig_getaddrinfo(*a, **kw) if r[0] == socket.AF_INET]
+        socket.getaddrinfo = _ipv4_only
+        try:
+            return super().send(request, **kwargs)
+        finally:
+            socket.getaddrinfo = _orig_getaddrinfo
+
 # 美股 ETF 代码模式（纯字母，2-6个字符）
 US_SYMBOL_PATTERN = re.compile(r'^[A-Z]{2,6}$')
 
@@ -54,6 +73,11 @@ class MarketDataService:
 
         # [白银] 初始化 DataFetcher（新浪数据源）
         self.data_fetcher = DataFetcher()
+
+        # [AI-2026-08-21] 美股期货 sina 专用共享 session（强制 IPv4，根治 hq.sinajs.cn IPv6 半通 DNS 失败）
+        self._sina_session = requests.Session()
+        self._sina_session.mount("http://", _ForceIPv4Adapter())
+        self._sina_session.mount("https://", _ForceIPv4Adapter())
         
         # [V10.1] 富途备用源日志去重：每 symbol 每 300 秒最多记一次 warning
         self._futu_warn_cooldown: Dict[str, float] = {}
@@ -67,10 +91,18 @@ class MarketDataService:
         # 原实现只在启动时 reconnect 一次，OpenD 若晚起/重启/掉线就永久 disabled，无人可点按钮 → 看板实时源全废。
         # 改为常驻守护线程：巡检 disabled/connected，掉线即重连（重连前顺带清富途熔断），失败指数退避。
         # 必须放在熔断器状态字典初始化之后（守护线程会调用 _circuit_reset）。
-        if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1' and self.futu_reader is not None:
+        # [AI-2026-08-20 东哥口径] 自动连接守护【仅云端（ARB_DASHBOARD_MODE=1）启用】；
+        # 本地模式恢复 V10.0 手动语义：用户点击侧边"富途/IB"按键才连接，读到数据按键才变绿，
+        # 启动绝不自动尝试连接任何客户端（防"启动即握手/探测"状态混乱）。
+        _is_cloud_mode = os.environ.get('ARB_DASHBOARD_MODE', '0') == '1'
+        if _is_cloud_mode and self.futu_reader is not None:
             threading.Thread(target=self._futu_autoconnect_loop, daemon=True,
                              name='futu-autoconnect').start()
-            logger.info("[DASHBOARD_MODE] 富途 OpenD 自动连接守护线程已启动（断线自愈）")
+            logger.info("富途 OpenD 自动连接守护线程已启动（云端，断线自愈）")
+        if _is_cloud_mode and self.ib_reader is not None:
+            threading.Thread(target=self._ib_autoconnect_loop, daemon=True,
+                             name='ib-autoconnect').start()
+            logger.info("IB Gateway 自动连接守护线程已启动（云端，断线自愈）")
         
         # 启动实时引擎（A股数据源）
         # [V4.2] 移至 lifespan 异步启动，避免与 TradingService 冲突
@@ -81,13 +113,46 @@ class MarketDataService:
     FUTU_AUTOCONNECT_MIN_BACKOFF = 30    # 重连失败首次退避（秒）
     FUTU_AUTOCONNECT_MAX_BACKOFF = 300   # 重连失败最大退避（秒）
 
+    def _get_futu_symbols(self) -> List[str]:
+        """收集富途需要订阅的美股/港股 ETF 代码（与启动播种一致）"""
+        try:
+            import json
+            syms: List[str] = []
+            _con = self.db.get_connection() if hasattr(self.db, 'get_connection') else None
+            if _con is None:
+                return syms
+            try:
+                _w = _con.execute("SELECT config_json FROM data_source_config WHERE module='ib_config' AND source_name='whitelist'").fetchone()
+                if _w:
+                    syms += json.loads(_w[0]).get('symbols', [])
+                _bw = _con.execute("SELECT DISTINCT symbol FROM fund_basket_weights").fetchall()
+                syms += [r[0] for r in _bw]
+            finally:
+                _con.close()
+            return sorted(set(syms))
+        except Exception:
+            return []
+
+    def _seed_futu_prices(self):
+        """连上 OpenD 后主动播种订阅+取盘口（本地模式也跑，不再依赖双源轮询/云端模式分支）"""
+        try:
+            reader = self.futu_reader
+            if reader is None or getattr(reader, 'disabled', True) or not getattr(reader, 'connected', False):
+                return
+            syms = self._get_futu_symbols()
+            if syms:
+                reader.get_prices(syms)
+        except Exception as e:
+            logger.warning(f"[富途] 自动播种订阅失败: {e}")
+
     def _futu_autoconnect_loop(self):
-        """常驻守护：保证无人值守环境下富途 OpenD 始终在线。
+        """常驻守护：保证无人值守环境下富途 OpenD 始终在线且有盘口。
 
         触发重连的两种情况：
           1) 启动时 OpenD 尚未就绪（reconnect 失败被置 disabled）
           2) 运行中 OpenD 重启/网络抖动（get_prices 异常把 connected 置 False 或 disabled 置 True）
         重连前必须先清富途熔断，否则连上了也会被 _circuit_is_tripped 挡住取不到价。
+        连上后主动播种 get_prices（订阅+取盘口），否则 connected=True 但 prices 空 → 按钮"无数据"灰。
         """
         backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
         while True:
@@ -97,8 +162,11 @@ class MarketDataService:
                     time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
                     continue
 
-                healthy = (not getattr(reader, 'disabled', True)) and getattr(reader, 'connected', False)
-                if healthy:
+                connected = (not getattr(reader, 'disabled', True)) and getattr(reader, 'connected', False)
+                if connected:
+                    # 已连：价格空则补种（主看板不跑双源轮询，必须这里主动取），每周期一次不刷屏
+                    if not getattr(reader, 'prices', {}):
+                        self._seed_futu_prices()
                     backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
                     time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
                     continue
@@ -106,6 +174,7 @@ class MarketDataService:
                 self._circuit_reset('富途')
                 ok, msg = reader.reconnect()
                 if ok:
+                    self._seed_futu_prices()
                     backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
                     logger.info(f"[DASHBOARD_MODE] 富途 OpenD 自动连接成功: {msg}")
                     time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
@@ -115,6 +184,43 @@ class MarketDataService:
                     backoff = min(backoff * 2, self.FUTU_AUTOCONNECT_MAX_BACKOFF)
             except Exception as e:
                 logger.warning(f"[DASHBOARD_MODE] 富途自动连接守护异常: {e}")
+                time.sleep(self.FUTU_AUTOCONNECT_MAX_BACKOFF)
+
+    # ── [AI-2026-08-20] IB Gateway 自动连接守护（本地/云端均启用，与富途守护同源）──
+    def _ib_autoconnect_loop(self):
+        """常驻守护：客户端(IB Gateway)开着时启动即连、断线自愈。
+
+        触发重连：
+          1) 启动时 IB Gateway 尚未就绪（main.py:495 那次 reconnect 失败）
+          2) 运行中 IB Gateway 重启/网络抖动（connected 被置 False 或 disabled 置 True）
+        重连前先清 IB 熔断，否则连上了也被 _circuit_is_tripped 挡住取不到价。
+        """
+        backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
+        while True:
+            try:
+                reader = self.ib_reader
+                if reader is None:
+                    time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
+                    continue
+
+                healthy = getattr(reader, 'connected', False) and not getattr(reader, 'disabled', True)
+                if healthy:
+                    backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
+                    time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
+                    continue
+
+                self._circuit_reset('IB')
+                ok, msg = reader.reconnect()
+                if ok:
+                    backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
+                    logger.info(f"IB Gateway 自动连接成功: {msg}")
+                    time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
+                else:
+                    logger.warning(f"IB Gateway 自动连接失败: {msg}；{backoff}s 后重试")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.FUTU_AUTOCONNECT_MAX_BACKOFF)
+            except Exception as e:
+                logger.warning(f"IB Gateway 自动连接守护异常: {e}")
                 time.sleep(self.FUTU_AUTOCONNECT_MAX_BACKOFF)
 
     # ── 熔断器方法 ──
@@ -275,12 +381,15 @@ class MarketDataService:
                         # 与“源头不产生错价”原则一致；且不计失败，避免热身期误触发熔断。
                         if bid > 0 or ask > 0 or last > 0:
                             self._circuit_record_success('富途')
+                            bid_size = quote.get('bid_size', 0)
+                            ask_size = quote.get('ask_size', 0)
                             return {
                                 'symbol': symbol,
                                 'price': last if last > 0 else bid,
                                 'bid': bid,
                                 'ask': ask if ask > 0 else bid,
-                                'amount': 0,
+                                'bid_size': bid_size,
+                                'ask_size': ask_size,
                                 'source': '富途'
                             }
                     else:
@@ -332,12 +441,15 @@ class MarketDataService:
                         # [AI-2026-08-03] 同 IB 分支备用源：富途全 0 视为无数据，不返回错误 0 价。
                         if bid > 0 or ask > 0 or last > 0:
                             self._circuit_record_success('富途')
+                            bid_size = quote.get('bid_size', 0)
+                            ask_size = quote.get('ask_size', 0)
                             return {
                                 'symbol': symbol,
                                 'price': last if last > 0 else bid,
                                 'bid': bid,
                                 'ask': ask if ask > 0 else bid,
-                                'amount': 0,
+                                'bid_size': bid_size,
+                                'ask_size': ask_size,
                                 'source': '富途'
                             }
                     else:
@@ -394,9 +506,9 @@ class MarketDataService:
                 symbol = symbol[:-len(suffix)]
                 break
 
-        # [AI-2026-08-07] 美股/港股盘口展示窗口（东哥修改）：8:30-16:00，16:00 后一律不显示，连冻结值都不留。
-        if not is_quote_window():
-            return {'symbol': symbol, 'ib': None, 'futu': None}
+        # [AI-2026-08-07] 原整体窗口门禁（8:30-16:00）删除：
+        # [AI-2026-08-19] IB 未购买行情、仅 OVERNIGHT(8:30-16:00) 免费 → IB 分支仍按 is_quote_window 判断；
+        # 富途促销期全时段免费实时行情 → 富途分支全时段取数。删除整体门禁，IB 分支自然降级（有则有、无则无）。
 
         # IB 原始盘口（仅夜盘有免费实时；其余时段 prices 可能为空/滞后，原样返回供对比）
         ib_q = None
@@ -453,7 +565,6 @@ class MarketDataService:
     def _get_sina_futures_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """从新浪 hf_ API 获取 CME 期货实时数据（最新价用作 bid/ask）"""
         try:
-            import requests
             headers = {'Referer': 'https://finance.sina.com.cn/'}
 
             # 尝试取目标合约（微合约可能为空，后续从母合约备用源）
@@ -465,7 +576,8 @@ class MarketDataService:
             used_symbol = symbol
             for t in targets:
                 url = f"http://hq.sinajs.cn/list=hf_{t}"
-                r = requests.get(url, headers=headers, timeout=5.0, proxies={"http": None, "https": None})
+                # [AI-2026-08-21] 改用共享 session（已挂 IPv4 adapter），根治 hq.sinajs.cn IPv6 半通 DNS 失败
+                r = self._sina_session.get(url, headers=headers, timeout=5.0, proxies={"http": None, "https": None})
                 r.encoding = 'gbk'
                 if r.status_code == 200 and '="' in r.text:
                     parts = r.text.split('"')[1].split(',')
@@ -527,10 +639,17 @@ class MarketDataService:
         """获取当前活跃的数据源名称（仅返回真正已连接的）"""
         sources = []
         for name, fetcher in self.realtime_manager.active_fetchers.items():
-            # 跳过 disabled（连接失败 3 次后熔断）的 fetcher
-            if getattr(fetcher, 'disabled', False):
-                continue
-            sources.append(name)
+            if name in ('tdx', 'galaxy', 'guojin'):
+                # [AI-2026-08-20] 客户端类：以真实连接态为准，避免熔断标志误判导致"有数据却灰"
+                conn = getattr(fetcher, 'is_connected', False) or getattr(fetcher, 'connected', False)
+                if getattr(fetcher, 'disabled', False) and not conn:
+                    continue
+                sources.append(name)
+            else:
+                # 跳过 disabled（连接失败 3 次后熔断）的 fetcher
+                if getattr(fetcher, 'disabled', False):
+                    continue
+                sources.append(name)
         # 实时检测 IB 的真实连接状态
         if self.ib_reader is not None and getattr(self.ib_reader, 'connected', False) and not any("IB" in s for s in sources):
             sources.append("IB (Ready)")

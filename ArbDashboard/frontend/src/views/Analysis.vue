@@ -382,6 +382,13 @@ const showPureFutProxy = computed({
 // 基础状态
 const fundCode = ref((route.query.code as string) || '')
 const fundName = ref((route.query.name as string) || '')
+
+// [AI-2026-08-19] 页面合并：详情页统一由 LazyMode（/lazymode）承担。
+// /analysis 仅保留 radar 机会榜单（radar 功能东哥后续要大改，先保留代码）；
+// 带 code 参数（旧链接/书签）时立即跳转详情页，避免渲染已废弃的 detail 分支。
+if (fundCode.value) {
+  router.replace({ path: '/lazymode', query: { code: fundCode.value, name: fundName.value } })
+}
 const opportunityData = ref<any[]>([])
 const intradayData = ref<any[]>([])
 const basketData = ref<any[]>([])

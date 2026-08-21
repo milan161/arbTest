@@ -65,7 +65,7 @@ class TencentRealtimeFetcher(BaseRealtimeFetcher):
             if res.status_code == 200:
                 self._process_response(res.text)
         except Exception as e:
-            logger.error(f"腾讯轮询异常: {e}")
+            logger.warning(f"腾讯轮询异常: {e}")
 
     def _process_response(self, text: str):
         lines = text.strip().split(';')
