@@ -49,7 +49,7 @@ import pandas as pd
 import logging
 from logging.handlers import RotatingFileHandler
 import uvicorn
-from fastapi import FastAPI, Request, UploadFile, File, Query
+from fastapi import FastAPI, Request, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -165,17 +165,8 @@ try:
     from services.ledger_service import LedgerService
     from services.etf_rotation_service import ETFRotationService
 
-    # [AI-2026-07-02] 旧版信号监测引擎 (已从 private/ 移出到 services/，需要上传 GitHub)
-    try:
-        from services.auto_trade.engine_runner import auto_trade_runner
-    except ImportError:
-        class DummyRunner:
-            running = False
-            def start(self): pass
-            def stop(self): pass
-            def get_recent_logs(self): return []
-        auto_trade_runner = DummyRunner()
-        auto_trade_runner.engine = type("DummyEngine", (), {"rules": [], "add_rule": lambda *a: "", "update_rule": lambda *a: False, "delete_rule": lambda *a: None, "save_rules": lambda *a: None})()
+    # [AI-2026-08-22] 旧版文件型信号监测引擎已废弃删除（single source of truth = DB 驱动 rule_engine）
+    auto_trade_runner = None
 
     logger.info("Core modules imported successfully")
 except Exception as e:
@@ -345,7 +336,7 @@ if DASHBOARD_MODE:
     logger.info("[DASHBOARD_MODE] RuleEngine 已禁用（看板纯展示）")
 else:
     try:
-        from private.rule_engine import rule_engine
+        from services.rule_engine import rule_engine
         # 注入依赖
         rule_engine.inject(fund_service=fund_service, lazy_trader=lazy_trader_instance, trading_service=trading_service, db_path=tran_db_path, master_db_path=root_db_path)
         logger.info("✅ RuleEngine (DB驱动) loaded.")
@@ -371,21 +362,9 @@ else:
         _smart_start = _smart_stop = _smart_status = None
         logger.info(f"SmartOpenMonitor not loaded: {e}")
 
-if DASHBOARD_MODE:
-    # [AI-2026-08-02] 看板模式：不加载 SignalDetector（避免与下单引擎耦合）
-    signal_detector = None
-    logger.info("[DASHBOARD_MODE] SignalDetector 已禁用（看板纯展示）")
-else:
-    try:
-        from services.signal_detector import signal_detector
-        signal_detector.inject(
-            rule_engine=auto_trade_runner.engine,
-            fund_service=fund_service,
-        )
-        logger.info("✅ SignalDetector loaded.")
-    except (ImportError, NameError) as e:
-        signal_detector = None
-        logger.info(f"SignalDetector not loaded: {e}")
+# [AI-2026-08-22] SignalDetector 已废弃删除（其僵尸端点 /api/signal_detector/* 一并移除）；
+# 唯一策略引擎为 DB 驱动的 rule_engine（见上方加载块）
+signal_detector = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -752,7 +731,8 @@ async def lifespan(app: FastAPI):
     await sampler_service.stop()
     if signal_detector:
         signal_detector.stop()
-    auto_trade_runner.stop()
+    if auto_trade_runner:
+        auto_trade_runner.stop()
     market_data_service.realtime_manager.stop()
     # [AI-2026-07-13] 先 stop_polling() 再 disconnect()，防止 polling 线程抢重连
     if market_data_service and market_data_service.ib_reader:
@@ -1367,20 +1347,6 @@ async def update_paused_categories(request: Request):
         return {"status": "error", "message": str(e)}
 
 # [AI-2026-07-07] 回补缺失指数历史
-@app.post("/api/config/app_settings/backfill_indices")
-async def backfill_indices(request: Request):
-    """回补缺失的指数历史数据（Sina/腾讯 API）"""
-    try:
-        data = await request.json() or {}
-        days = data.get('days', 30)
-        
-        from services.index_repair_service import repair_with_sina
-        result = repair_with_sina(days_back=days)
-        return result
-    except Exception as e:
-        logger.error(f"回补缺失指数历史失败: {e}")
-        return {"status": "error", "message": str(e)}
-
 # --- Private / Custom Export APIs ---
 @app.get("/api/private/status")
 async def get_private_status():
@@ -2397,9 +2363,19 @@ async def get_exchange_rate():
 
 # [AI-2026-08-16] 导入 v7 套利账本 Excel -> arbitrage_pairs（upsert）
 @app.post("/api/ledger/import-v7")
-async def import_v7_ledger(file: UploadFile = File(...)):
-    """上传 v7 Excel 套利账本，解析并 upsert 到数据库。返回导入统计。"""
+async def import_v7_ledger(file: UploadFile = File(None), path: str = Form(None)):
+    """上传 v7 Excel 套利账本，解析并 upsert 到数据库。返回导入统计。
+
+    [AI-2026-08-20] 新增 path 模式：传 V7 文件绝对路径，后端直接读写该文件——
+    T 列汇率/N 列公式回填到【用户原文件】（上传模式回填写入临时文件即删，原文件永远不更新）。
+    推荐前端传 path（本地单机，后端与 V7 同机）。
+    """
     try:
+        if path:
+            if not os.path.exists(path):
+                return {"status": "error", "message": f"V7 文件不存在: {path}"}
+            result = ledger_service.import_v7(path)
+            return {"status": "ok", "data": result}
         import tempfile
         content = await file.read()
         suffix = os.path.splitext(file.filename or 'v7.xlsx')[1] or '.xlsx'
@@ -2822,58 +2798,7 @@ async def get_data_status():
 
 # [AI-2026-07-25] 已删除 /api/system/health-check 与 /api/system/runtime-health 端点（方案C：健康检查功能无调用方，华而不实）
 
-# --- Auto Trade Engine APIs (旧版信号监测，重命名文件避免冲突) ---
-@app.get("/api/auto_trade/rules")
-async def get_auto_trade_rules():
-    return {"status": "ok", "rules": auto_trade_runner.engine.rules}
-
-@app.post("/api/auto_trade/rules/add")
-async def add_auto_trade_rule(request: Request):
-    data = await request.json()
-    rule_id = auto_trade_runner.engine.add_rule(data)
-    return {"status": "ok", "id": rule_id}
-
-@app.post("/api/auto_trade/rules/update/{rule_id}")
-async def update_auto_trade_rule(rule_id: str, request: Request):
-    data = await request.json()
-    success = auto_trade_runner.engine.update_rule(rule_id, data)
-    return {"status": "ok" if success else "error"}
-
-@app.delete("/api/auto_trade/rules/{rule_id}")
-async def delete_auto_trade_rule(rule_id: str):
-    auto_trade_runner.engine.delete_rule(rule_id)
-    return {"status": "ok"}
-
-@app.post("/api/auto_trade/rules")
-async def update_all_rules(request: Request):
-    data = await request.json()
-    if "rules" in data:
-        auto_trade_runner.engine.rules = data["rules"]
-        auto_trade_runner.engine.save_rules()
-        return {"status": "ok", "message": "Rules updated successfully"}
-    return JSONResponse(status_code=400, content={"status": "error", "message": "Missing 'rules' in payload"})
-
-@app.get("/api/auto_trade/status")
-async def get_auto_trade_status():
-    return {"status": "ok", "running": auto_trade_runner.running}
-
-@app.post("/api/auto_trade/toggle")
-async def toggle_auto_trade_engine(request: Request):
-    data = await request.json()
-    action = data.get("action")
-    if action == "start":
-        auto_trade_runner.start()
-        system_status.add_milestone("SUCCESS", "手动启动网格引擎")
-        return {"status": "ok", "running": True}
-    elif action == "stop":
-        auto_trade_runner.stop()
-        system_status.add_milestone("WARNING", "手动停止网格引擎")
-        return {"status": "ok", "running": False}
-    return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid action"})
-
-@app.get("/api/auto_trade/logs")
-async def get_auto_trade_logs():
-    return {"status": "ok", "logs": auto_trade_runner.get_recent_logs()}
+# [AI-2026-08-22] 旧版文件型信号监测引擎端点已废弃删除（single source of truth = DB 驱动 rule_engine）
 
 # --- [AI-2026-07-01] RuleEngine API (DB驱动，LazyMode 前端用) ---
 @app.get("/api/rule_engine/status")
@@ -2881,7 +2806,23 @@ async def get_rule_engine_status():
     if not rule_engine:
         return {"status": "error", "message": "RuleEngine not loaded", "running": False, "rules": []}
     rules = rule_engine.get_all_rules()
-    return {"status": "ok", "running": rule_engine.running, "rules": rules}
+    # [AI-2026-08-23] 返回交易数量配置，供前端展示每笔LOF/ETF数量
+    qty_map = rule_engine.get_all_trade_configs()
+    return {"status": "ok", "running": rule_engine.running, "rules": rules, "trigger_qty": qty_map}
+
+# [AI-2026-08-23] 保存基金交易数量配置
+@app.post("/api/rule_engine/trade_config")
+async def save_trade_config(request: Request):
+    if not rule_engine:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "RuleEngine not loaded"})
+    data = await request.json()
+    fund_code = data.get("fund_code")
+    lof_qty = int(data.get("lof_qty", 10000))
+    etf_qty = int(data.get("etf_qty", 60))
+    if not fund_code:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Missing fund_code"})
+    ok = rule_engine.save_trade_config(fund_code, lof_qty, etf_qty)
+    return {"status": "ok" if ok else "error"}
 
 @app.post("/api/rule_engine/toggle")
 async def toggle_rule_engine(request: Request):
@@ -2943,33 +2884,7 @@ async def get_rule_engine_logs():
         return {"status": "ok", "logs": []}
     return {"status": "ok", "logs": rule_engine.get_recent_logs()}
 
-# --- AutoExecutor (Lazy Trader 自动执行) APIs ---
-@app.get("/api/signal_detector/status")
-async def get_signal_detector_status():
-    running = signal_detector.running if signal_detector else False
-    return {"status": "ok", "running": running}
-
-@app.post("/api/signal_detector/toggle")
-async def toggle_signal_detector(request: Request):
-    if not signal_detector:
-        return JSONResponse(status_code=400, content={"status": "error", "message": "SignalDetector not loaded"})
-    data = await request.json()
-    action = data.get("action")
-    if action == "start":
-        signal_detector.start()
-        system_status.add_milestone("SUCCESS", "信号检测启动")
-        return {"status": "ok", "running": True}
-    elif action == "stop":
-        signal_detector.stop()
-        system_status.add_milestone("WARNING", "信号检测停止")
-        return {"status": "ok", "running": False}
-    return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid action"})
-
-@app.get("/api/signal_detector/logs")
-async def get_signal_detector_logs():
-    if not signal_detector:
-        return {"status": "ok", "logs": []}
-    return {"status": "ok", "logs": signal_detector.get_recent_logs()}
+# [AI-2026-08-22] SignalDetector 端点已废弃删除（唯一策略引擎 = DB 驱动 rule_engine，端点见上方 /api/rule_engine/*）
 
 # --- Data Source Config APIs ---
 @app.get("/api/config/data_sources")

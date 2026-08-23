@@ -84,10 +84,12 @@ export function getLedgerAlerts() {
 }
 
 // ===== [AI-2026-08-16] 导入 V7 Excel 账本（upsert，不删除已有记录）=====
-/** 上传 v7 Excel 套利账本，解析并 upsert 到数据库。返回 { inserted, updated, skipped, errors } */
-export function importV7Ledger(file: File) {
+// [AI-2026-08-20] 支持 path 模式：传 V7 绝对路径，后端直接读写原文件（T/N 回填才生效）。
+/** 导入 v7 套利账本。file（上传）或 path（本地路径）二选一。返回 { inserted, updated, skipped, errors } */
+export function importV7Ledger(file: File | null, path?: string) {
   const form = new FormData()
-  form.append('file', file)
+  if (file) form.append('file', file)
+  if (path) form.append('path', path)
   return client.post('/api/ledger/import-v7', form, {
     headers: { 'Content-Type': 'multipart/form-data' }
   })

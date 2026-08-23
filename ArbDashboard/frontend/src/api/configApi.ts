@@ -72,8 +72,3 @@ export function getPausedCategories() {
 export function postPausedCategories(paused: string[]) {
   return client.post('/api/config/app_settings/paused_categories', { paused })
 }
-
-/** 回补缺失指数历史数据 */
-export function postBackfillIndices(days?: number) {
-  return client.post('/api/config/app_settings/backfill_indices', { days: days || 30 })
-}

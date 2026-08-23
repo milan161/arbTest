@@ -9,7 +9,6 @@ import * as api from '../api'
 
 export const useAppStore = defineStore('app', () => {
   // ---- state ----
-  const engineRunning = ref(false)
   const milestones = ref<any[]>([])
   const reconnectingIB = ref(false)
   const reconnectingEngine = ref(false)
@@ -17,15 +16,9 @@ export const useAppStore = defineStore('app', () => {
   // ---- actions ----
   async function fetchSystemStatus() {
     try {
-      const [milestoneRes, engineRes] = await Promise.all([
-        api.getMilestones(),
-        api.getSignalDetectorStatus()
-      ])
+      const milestoneRes = await api.getMilestones()
       if (milestoneRes.data?.status === 'ok') {
         milestones.value = milestoneRes.data.data || []
-      }
-      if (engineRes.data?.status === 'ok') {
-        engineRunning.value = engineRes.data.running
       }
     } catch (err) {
       console.error('获取系统状态失败', err)
@@ -63,7 +56,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   return {
-    engineRunning, milestones,
+    milestones,
     reconnectingIB, reconnectingEngine,
     fetchSystemStatus,
     reconnectIB, reconnectEngine,

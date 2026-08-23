@@ -28,6 +28,13 @@ import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina
+except Exception:
+    def _throttle_sina(): pass
+
 logger = logging.getLogger(__name__)
 
 # Manual BP overrides (in-memory, resets on restart)
@@ -346,6 +353,7 @@ class BondETFValuation:
         result = None
         # [优先级1] 新浪实时接口
         try:
+            _throttle_sina()
             url = "http://hq.sinajs.cn/list=s_sh000012"
             headers = {'Referer': 'https://finance.sina.com.cn/'}
             resp = requests.get(url, headers=headers, timeout=3, proxies={"http": None, "https": None})
@@ -470,6 +478,7 @@ class BondETFValuation:
 
         result = None
         try:
+            _throttle_sina()
             url = "https://hq.sinajs.cn/list=CFF_RE_T2609,CFF_RE_TF2609"
             headers = {
                 'Referer': 'https://finance.sina.com.cn',

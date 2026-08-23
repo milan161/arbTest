@@ -34,10 +34,6 @@ Proxy.bat
 arbcore/traders/
 **/signal_detector.py
 **/useOrderLogic.js
-# 「我的交易」菜单页 + 其 API 客户端（不传）
-**/AutoTrade.vue
-**/AutoTrade*
-**/autoTrade*
 
 # --- 日志（不传）---
 *.log

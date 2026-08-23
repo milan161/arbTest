@@ -10,6 +10,12 @@ import os
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+try:
+    from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina
+except ImportError:
+    def _throttle_sina(): pass  # fallback if utils not available
+
 # 导入Woody网页爬虫
 try:
     # 当作为模块被外部调用时使用相对导入
@@ -258,6 +264,7 @@ class DataFetcher:
         # 1. 尝试使用API接口
         try:
             # 新浪财经的在岸人民币汇率接口
+            _throttle_sina()
             url = "https://hq.sinajs.cn/list=fx_susdcny"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -331,6 +338,7 @@ class DataFetcher:
         """
         logger.debug("从新浪财经获取离岸人民币 CNH 汇率")
         try:
+            _throttle_sina()
             url = "https://hq.sinajs.cn/list=fx_susdcnh"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -367,6 +375,7 @@ class DataFetcher:
         """
         logger.debug("从新浪获取 AG0 期货实时数据")
         try:
+            _throttle_sina()
             url = "http://hq.sinajs.cn/list=nf_AG0"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -402,6 +411,7 @@ class DataFetcher:
         """
         logger.debug("从新浪获取 SI 期货实时数据")
         try:
+            _throttle_sina()
             url = "http://hq.sinajs.cn/list=hf_SI"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -476,6 +486,7 @@ class DataFetcher:
         # 2. 备用源：新浪在岸价
         logger.info("从新浪财经获取 JPY/CNY 日元汇率（备用源）")
         try:
+            _throttle_sina()
             url = "https://hq.sinajs.cn/list=fx_sjpycny"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -510,6 +521,7 @@ class DataFetcher:
         """
         logger.info("从新浪财经获取 JPY/CNY 日元在岸价（spot）")
         try:
+            _throttle_sina()
             url = "https://hq.sinajs.cn/list=fx_sjpycny"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -801,6 +813,7 @@ class DataFetcher:
         
         # [AI-2026-07-02] 美股期货 + 内盘期货（AG0 沪银）分开请求
         # 美股期货 URL
+        _throttle_sina()
         url = "http://hq.sinajs.cn/list=hf_MGC,hf_GC,hf_CL,hf_NQ,hf_ES,hf_SI,hf_NK"
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
@@ -825,6 +838,7 @@ class DataFetcher:
         
         # [AI-2026-07-02] 内盘期货 AG0 沪银（新浪 nf_ 格式）
         try:
+            _throttle_sina()
             url_cn = "http://hq.sinajs.cn/list=nf_AG0"
             response_cn = requests.get(url_cn, headers=headers, timeout=15, verify=False, proxies={"http": None, "https": None})
             response_cn.encoding = 'gbk'

@@ -8,6 +8,12 @@ import requests
 import pandas as pd
 from typing import List, Dict, Any, Optional
 
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+try:
+    from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina
+except ImportError:
+    def _throttle_sina(): pass
+
 logger = logging.getLogger(__name__)
 
 # 分组 -> 美股锚点映射
@@ -80,6 +86,7 @@ class ETFRotationService:
             return _fx_cache['rate']
 
         try:
+            _throttle_sina()
             resp = requests.get(
                 "http://hq.sinajs.cn/list=fx_susdcny",
                 headers={"Referer": "https://finance.sina.com.cn/"},
@@ -151,6 +158,7 @@ class ETFRotationService:
 
         # 降级：新浪美股接口
         try:
+            _throttle_sina()
             resp = requests.get(
                 f"http://hq.sinajs.cn/list=gb_{symbol.lower()}",
                 headers={"Referer": "https://finance.sina.com.cn/"},

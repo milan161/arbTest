@@ -134,12 +134,15 @@
     <!-- [AI-2026-08-16] 导入 V7 账本：从 Excel 一键导入（upsert，不影响程序内手动录入） -->
     <n-card class="shadow-soft mb-4">
       <n-space justify="space-between" align="center">
-        <n-space align="center">
+        <n-space align="center" style="flex-wrap: wrap; gap: 8px;">
           <n-button type="primary" :loading="importing" @click="triggerImport">
             <template #icon><n-icon><Upload /></n-icon></template>
             导入 V7 账本
           </n-button>
-          <n-text depth="3">从 Excel 套利账本导入（新增/更新，不删除已有记录）</n-text>
+          <!-- [AI-2026-08-20] V7 文件路径：path 模式导入时后端直接读写该文件，T/N 回填才生效 -->
+          <n-input v-model:value="v7Path" placeholder="V7 账本文件路径（留空则用文件上传）" clearable
+                   style="width: 340px" size="small" @blur="saveV7Path" />
+          <n-text depth="3" style="font-size: 12px;">从 Excel 套利账本导入（新增/更新，不删除已有记录）；填路径则回填 T/N 到原文件</n-text>
         </n-space>
         <n-tag v-if="importResult" :type="importResult.ok ? 'success' : 'error'">
           新增 {{ importResult.inserted }} · 更新 {{ importResult.updated }} · 跳过 {{ importResult.skipped }}
@@ -415,10 +418,41 @@ const filteredAllPairs = computed(() => {
 })
 
 // [AI-2026-08-16] 导入 V7 账本：上传 Excel → 后端解析 upsert
+// [AI-2026-08-20] 新增 path 模式：填了 V7 路径则后端直接读该文件并回填 T/N 到原文件（上传模式回填不到原文件）
 const importing = ref(false)
 const importResult = ref<{ ok: boolean; inserted: number; updated: number; skipped: number } | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
-const triggerImport = () => fileInput.value?.click()
+const v7Path = ref(localStorage.getItem('v7LedgerPath') || 'D:\\Desktop\\invest\\套利账本_标准化_v7.xlsx')
+const saveV7Path = () => localStorage.setItem('v7LedgerPath', v7Path.value || '')
+const handleImportResult = (data: any) => {
+  if (data?.status === 'ok') {
+    const r = data.data || {}
+    importResult.value = { ok: true, inserted: r.inserted || 0, updated: r.updated || 0, skipped: r.skipped || 0 }
+    fetchPairs()
+    message.success(`导入完成：新增 ${r.inserted} · 更新 ${r.updated} · 跳过 ${r.skipped}`)
+  } else {
+    importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
+    message.error('导入失败：' + (data?.message || '未知错误'))
+  }
+}
+const triggerImport = async () => {
+  if (v7Path.value?.trim()) {
+    // path 模式：后端直接读写本地 V7 文件（回填 T/N 生效）
+    importing.value = true
+    importResult.value = null
+    try {
+      const res = await importV7Ledger(null, v7Path.value.trim())
+      handleImportResult(res.data)
+    } catch (err: any) {
+      importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
+      message.error('导入异常：' + (err?.message || err))
+    } finally {
+      importing.value = false
+    }
+  } else {
+    fileInput.value?.click()
+  }
+}
 const onFileChange = async (e: Event) => {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
@@ -427,16 +461,7 @@ const onFileChange = async (e: Event) => {
   importResult.value = null
   try {
     const res = await importV7Ledger(file)
-    const data = res.data
-    if (data?.status === 'ok') {
-      const r = data.data || {}
-      importResult.value = { ok: true, inserted: r.inserted || 0, updated: r.updated || 0, skipped: r.skipped || 0 }
-      await fetchPairs()
-      message.success(`导入完成：新增 ${r.inserted} · 更新 ${r.updated} · 跳过 ${r.skipped}`)
-    } else {
-      importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
-      message.error('导入失败：' + (data?.message || '未知错误'))
-    }
+    handleImportResult(res.data)
   } catch (err: any) {
     importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
     message.error('导入异常：' + (err?.message || err))

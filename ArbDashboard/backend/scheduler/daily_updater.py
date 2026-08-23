@@ -1131,6 +1131,12 @@ class DailyUpdater(BaseApp):
         早晨(港股已收盘)跑时 rt_hkHSSI[3]=昨收=上一港股交易日收盘。"""
         self.logger.info("=== 步骤五B2：新浪 HSSI 昨收记录器 ===")
         try:
+            # [AI-2026-08-21] 新浪请求节流
+            import time as _tu
+            _LAST = getattr(self, '_sina_last_t', 0.0)
+            if _tu.time() - _LAST < 15:
+                _tu.sleep(15 - (_tu.time() - _LAST))
+            self._sina_last_t = _tu.time()
             import urllib.request
             url = "http://hq.sinajs.cn/list=rt_hkHSSI"
             req = urllib.request.Request(url, headers={"Referer": "https://finance.sina.com.cn"})

@@ -21,6 +21,49 @@
       </div>
     </div>
 
+    <!-- 数据同步状态（原数据管理页面内容迁移） -->
+    <n-card title="数据同步状态" size="small" style="margin-bottom: 12px;">
+      <template #header-extra>
+        <n-tag v-if="morningReady" type="success" ghost size="small">清晨数据已完成</n-tag>
+        <n-tag v-else type="warning" ghost size="small">等待 9:20 自动同步</n-tag>
+      </template>
+
+      <n-alert type="info" :bordered="false" closable style="margin-bottom: 12px;">
+        <template #header>每日数据更新时间线</template>
+        <div style="font-size: 13px; line-height: 1.8;">
+          <div><strong>9:20</strong> — Woody API、官方汇率、VPS 期货/份额数据就绪，<strong>系统自动刷新</strong></div>
+          <div><strong>16:00~21:00</strong> — 基金净值分批发货，系统在 18:00 / 19:30 / 21:00 自动补跑，也支持手动触发</div>
+        </div>
+      </n-alert>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+        <div v-for="item in dataSources" :key="item.key" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #edf2f7;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <n-icon size="16" :color="item.synced ? '#16a34a' : '#d97706'">
+              <CheckCircle v-if="item.synced" /><Clock v-else />
+            </n-icon>
+            <div>
+              <div style="font-weight: 600; color: #1e293b; font-size: 13px;">{{ item.label }}</div>
+              <div style="font-size: 11px; color: #64748b;">{{ item.desc }}</div>
+            </div>
+          </div>
+          <n-tag :type="item.synced ? 'success' : 'warning'" size="tiny" round>{{ item.synced ? '已同步' : '等待中' }}</n-tag>
+        </div>
+      </div>
+
+      <!-- 净值补采按钮 -->
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;">
+        <div>
+          <div style="font-weight: 700; color: #92400e; font-size: 14px;">净值补采</div>
+          <div style="font-size: 11px; color: #a16207; margin-top: 2px;">上次更新: {{ navLastTime || '—' }}</div>
+        </div>
+        <n-button size="small" type="warning" @click="triggerNavUpdate" :loading="navRunning">
+          <template #icon><n-icon><RefreshCw /></n-icon></template>
+          立即更新
+        </n-button>
+      </div>
+    </n-card>
+
     <n-spin :show="loading && !report.local">
       <!-- 健康概览 -->
       <n-card title="程序健康概览" size="small" style="margin-bottom: 12px;">
@@ -106,9 +149,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import {
-  NCard, NTable, NTag, NButton, NIcon, NSpace, NText, NGrid, NGi, NSpin, NSwitch, NAlert
+  NCard, NTable, NTag, NButton, NIcon, NSpace, NText, NGrid, NGi, NSpin, NSwitch, NAlert, NDivider, useMessage
 } from 'naive-ui'
-import { RefreshCw } from 'lucide-vue-next'
+import { RefreshCw, CheckCircle, Clock } from 'lucide-vue-next'
+import { getDataStatus, getNavStatus, triggerTask } from '../api/systemApi'
+
+const message = useMessage()
 
 // 数据源展示顺序与中文名
 const SOURCE_ORDER: { key: string; label: string }[] = [
@@ -128,6 +174,57 @@ const report = ref<any>({ local: {}, h5: null })
 const loading = ref(false)
 const autoRefresh = ref(true)
 let timer: any = null
+
+// [AI-2026-08-22] 数据同步状态（从 Data.vue 迁移）
+const dataSources = ref<any[]>([])
+const morningReady = ref(false)
+const navLastTime = ref('')
+const navRunning = ref(false)
+
+const fetchDataStatus = async () => {
+  try {
+    const res = await getDataStatus()
+    if (res.data.status === 'ok') {
+      const d = res.data.data
+      morningReady.value = d.morning_ready
+      const sources = d.sources
+      dataSources.value = [
+        { key: 'woody_lof_batch', label: 'Woody 因子', desc: 'QDII 基金估值因子数据', synced: sources.woody_lof_batch.synced },
+        { key: 'official_exchange_rate', label: '官方汇率', desc: '美元/人民币中间价', synced: sources.official_exchange_rate.synced },
+        { key: 'futures_data', label: '期货结算价', desc: '黄金/原油/白银/指数期货', synced: sources.futures_data.synced },
+        { key: 'jsl_shares_data', label: '场内份额', desc: '深交所 LOF 基金份额数据', synced: sources.jsl_shares_data.synced }
+      ]
+    }
+  } catch (e) { /* ignore */ }
+}
+
+const fetchNavStatus = async () => {
+  try {
+    const res = await getNavStatus()
+    if (res.data.status === 'ok') {
+      navLastTime.value = res.data.data.last_updated_time
+        ? `${res.data.data.last_updated_date} ${res.data.data.last_updated_time}`
+        : ''
+    }
+  } catch (e) { /* ignore */ }
+}
+
+const triggerNavUpdate = async () => {
+  navRunning.value = true
+  try {
+    const res = await triggerTask('nav')
+    if (res.data.status === 'ok') {
+      message.success('净值更新已后台运行（通常 10-30 秒完成）')
+    } else {
+      message.error(`启动失败: ${res.data.message}`)
+    }
+  } catch (e: any) {
+    message.error(`启动失败: ${e.message}`)
+  } finally {
+    setTimeout(() => { navRunning.value = false }, 2000)
+    setTimeout(() => fetchNavStatus(), 3000)
+  }
+}
 
 // —— 工作日滞后计算（剔除周末，避免休市误报）——
 function workdaysBehind(dateStr: string | null, today: string): number | null {
@@ -237,7 +334,10 @@ async function loadData() {
 
 onMounted(() => {
   loadData()
+  fetchDataStatus()
+  fetchNavStatus()
   timer = setInterval(() => { if (autoRefresh.value) loadData() }, 120000)
+  setInterval(fetchDataStatus, 60000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>

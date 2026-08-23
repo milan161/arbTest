@@ -6,6 +6,12 @@ import threading
 from typing import List, Dict, Optional, Any
 from .base import BaseRealtimeFetcher
 
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+try:
+    from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina
+except ImportError:
+    def _throttle_sina(): pass  # fallback if utils not available
+
 logger = logging.getLogger(__name__)
 
 class SinaRealtimeFetcher(BaseRealtimeFetcher):
@@ -63,8 +69,9 @@ class SinaRealtimeFetcher(BaseRealtimeFetcher):
     def _fetch_batch(self, batch: List[str]):
         sina_codes = [self.normalize_symbol(s) for s in batch]
         url = f"http://hq.sinajs.cn/list={','.join(sina_codes)}"
-        
+
         try:
+            _throttle_sina()
             res = requests.get(url, headers=self.headers, timeout=10, proxies={"http": None, "https": None})
             res.encoding = 'gbk'
             if res.status_code == 200:

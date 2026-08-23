@@ -2,7 +2,7 @@
 title ArbNext Dashboard Launcher
 
 :: [AI-2026-08-20] 启动前确认客户端已开：Enter 继续 / Esc 退出批处理
-powershell -NoProfile -Command "$Host.UI.RawUI.FlushInputBuffer(); Write-Host ''; Write-Host '【启动前检查】请先确保以下客户端已启动：' -ForegroundColor Yellow; Write-Host '   - IB Gateway  (美股/港股行情)' -ForegroundColor White; Write-Host '   - 富途 OpenD  (外盘 ETF 10档)' -ForegroundColor White; Write-Host '   - 通达信      (A股盘口)' -ForegroundColor White; Write-Host '   - 银河 QMT   (LOF 下单通道)' -ForegroundColor White; Write-Host ''; Write-Host '按 [Enter] 确认已启动并继续, 按 [Esc] 退出去启动客户端' -ForegroundColor Cyan; while($true){$k=$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); if($k.VirtualKeyCode -eq 13){break} if($k.VirtualKeyCode -eq 27){exit 1}}"
+powershell -NoProfile -Command "$Host.UI.RawUI.FlushInputBuffer(); Write-Host ''; Write-Host '【启动前检查】请先确保以下客户端已启动：' -ForegroundColor Yellow; Write-Host '   - IB Gateway  (美股行情)' -ForegroundColor White; Write-Host '   - 富途 OpenD  (外盘 ETF 10档)' -ForegroundColor White; Write-Host '   - 通达信      (A股盘口)' -ForegroundColor White; Write-Host '   - 银河 QMT   (LOF 下单通道)' -ForegroundColor White; Write-Host ''; Write-Host '按 [Enter] 确认已启动并继续, 按 [Esc] 退出去启动客户端' -ForegroundColor Cyan; while($true){$k=$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); if($k.VirtualKeyCode -eq 13){break} if($k.VirtualKeyCode -eq 27){exit 1}}"
 if errorlevel 1 (
   echo [已取消] 你选择退出。请启动上述客户端后重新运行本批处理。
   exit /b

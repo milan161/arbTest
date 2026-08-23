@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 import requests
 import socket
 from requests.adapters import HTTPAdapter
+from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina_request_mds
 
 class _ForceIPv4Adapter(HTTPAdapter):
     def send(self, request, **kwargs):
@@ -577,6 +578,8 @@ class MarketDataService:
             for t in targets:
                 url = f"http://hq.sinajs.cn/list=hf_{t}"
                 # [AI-2026-08-21] 改用共享 session（已挂 IPv4 adapter），根治 hq.sinajs.cn IPv6 半通 DNS 失败
+                # [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+                _throttle_sina_request_mds()
                 r = self._sina_session.get(url, headers=headers, timeout=5.0, proxies={"http": None, "https": None})
                 r.encoding = 'gbk'
                 if r.status_code == 200 and '="' in r.text:

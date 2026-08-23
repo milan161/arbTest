@@ -17,6 +17,13 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina
+except Exception:
+    def _throttle_sina(): pass
+
 logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -320,6 +327,7 @@ def _fetch_sina_global_index(symbol: str, days: int = 30) -> list:
 
     # 2. 备用源：使用新浪实时接口 int_nikkei 获取最新收盘价
     try:
+        _throttle_sina()
         sina_code = 'int_nikkei'
         url = f"http://hq.sinajs.cn/list={sina_code}"
         resp = requests.get(url, headers={

@@ -227,6 +227,18 @@ def apply_freeze_to_dashboard(result: list) -> None:
     if not should_apply_freeze():
         return
 
+    # [AI-2026-08-21 FIX] 盘后「现价」收敛到官方收盘（一处根治）：
+    #   所有 A股LOF（含白银161226 / 黄金原油QDII欧美等）盘后 realtime_price 应=官方收盘(price)，
+    #   杜绝白银 AG0 夜盘源盘后仍返当日残留 tick(如1.985)被当现价。
+    #   - 白银161226：盘后 realtime_price 从残留 tick 收敛到官方收盘(1.984)，主看板现价/涨跌幅一并修正。
+    #   - 黄金/原油 QDII欧美：盘后 quote 源本就返 None→realtime_price 已为 None→curPrice 回退 price；
+    #       此处显式置 realtime_price=price 后 curPrice 仍=price，显示完全一致，无回归。
+    #   前端 涨跌幅/实时溢价 列均用 curPrice(=realtime_price) 计算，故一处改动同步修好，不碰其它列。
+    for item in result:
+        _p = item.get('price')
+        if _p is not None and _p != 0:
+            item['realtime_price'] = _p
+
     today = _today_str()
 
     # 1) 15:00 冻结优先（官方收盘锚点）

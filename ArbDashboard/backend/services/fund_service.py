@@ -23,23 +23,8 @@ from services.realtime_freeze import apply_freeze_to_dashboard, update_rt_cache
 _FUTURES_CACHE_TTL = 30
 _futures_cache = {'data': None, 'time': 0.0}
 
-# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
-_SINA_THROTTLE_INTERVAL = 15.0
-_sina_last_request_time = 0.0
-_sina_request_lock = threading.Lock()
-
-def _throttle_sina_request():
-    """等待直到距上次新浪请求超过15秒"""
-    global _sina_last_request_time
-    with _sina_request_lock:
-        elapsed = time.time() - _sina_last_request_time
-        if elapsed < _SINA_THROTTLE_INTERVAL:
-            wait_time = _SINA_THROTTLE_INTERVAL - elapsed
-            logger.debug(f"[SINA-THROTTLE] 等待 {wait_time:.1f}s 以遵守15秒间隔限制")
-            time.sleep(wait_time)
-            _sina_last_request_time = time.time()
-        else:
-            _sina_last_request_time = time.time()
+# [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP（共享工具模块）
+from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina_request
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +153,7 @@ def _get_realtime_spot_fx() -> Optional[float]:
     if now - _SPOT_FX_CACHE['time'] < 15 and _SPOT_FX_CACHE['rate'] > 0:
         return _SPOT_FX_CACHE['rate']
     try:
+        _throttle_sina_request()
         resp = requests.get(
             "http://hq.sinajs.cn/list=fx_susdcny",
             headers={"Referer": "https://finance.sina.com.cn/"},
@@ -209,6 +195,7 @@ def _get_realtime_jpy_spot_fx() -> Optional[float]:
     if now - _JPY_SPOT_FX_CACHE['time'] < 15 and _JPY_SPOT_FX_CACHE['rate'] > 0:
         return _JPY_SPOT_FX_CACHE['rate']
     try:
+        _throttle_sina_request()
         resp = requests.get(
             "http://hq.sinajs.cn/list=fx_sjpycny",
             headers={"Referer": "https://finance.sina.com.cn/"},
@@ -463,9 +450,10 @@ def _get_ag0_future_quote():
         }
     # 补充：新浪 nf_AG0 获取买卖盘口
     try:
+        _throttle_sina_request()
         import requests
         r = requests.get('http://hq.sinajs.cn/list=nf_AG0',
-                         headers={'Referer': 'https://finance.sina.com.cn/'}, timeout=2.0)
+                         headers={'Referer': 'https://finance.sina.com.cn/'}, timeout=3.0)
         if r.status_code == 200 and '="' in r.text:
             parts = r.text.split('"')[1].split(',')
             if len(parts) >= 11:
@@ -521,28 +509,32 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
     try:
         # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
         if 'HSTECH' in clean_sym:
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSTECH", headers=headers_sina, timeout=1.5)
+            _throttle_sina_request()
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSTECH", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSTECH 涨跌幅: {parts[8]}%")
                     result = float(parts[8])
         elif 'HSCEI' in clean_sym:
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=1.5)
+            _throttle_sina_request()
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSCEI 涨跌幅: {parts[8]}%")
                     result = float(parts[8])
         elif 'HSI' in clean_sym:
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=1.5)
+            _throttle_sina_request()
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
                     logger.info(f"[INDEX-SINA] 获取港股指数 HSI 涨跌幅: {parts[8]}%")
                     result = float(parts[8])
         elif 'CES300' in clean_sym or 'CES300.HI' in clean_sym:
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkCES300", headers=headers_sina, timeout=1.5)
+            _throttle_sina_request()
+            r = requests.get("http://hq.sinajs.cn/list=rt_hkCES300", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
@@ -551,7 +543,8 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
                     
         # [AI-2026-07-09] 日经225(N225) — 新浪全球指数接口 int_nikkei
         elif clean_sym in ('N225', 'NKY', 'NIKKEI'):
-            r = requests.get("http://hq.sinajs.cn/list=int_nikkei", headers=headers_sina, timeout=1.5)
+            _throttle_sina_request()
+            r = requests.get("http://hq.sinajs.cn/list=int_nikkei", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 4:
@@ -567,7 +560,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
             else:
                 url = f"http://hq.sinajs.cn/list=s_sh{clean_sym}"
                 
-            r = requests.get(url, headers=headers_sina, timeout=1.5)
+            r = requests.get(url, headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 4 and float(parts[3]) != 0.0:
@@ -1010,7 +1003,8 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
     if missing_sina_reqs:
         url = f"http://hq.sinajs.cn/list={','.join(missing_sina_reqs)}"
         try:
-            r = requests.get(url, headers=headers_sina, timeout=2.0)
+            _throttle_sina_request()
+            r = requests.get(url, headers=headers_sina, timeout=3.0)
             if r.status_code == 200:
                 for line in r.text.splitlines():
                     if '="' not in line: continue
@@ -1772,8 +1766,9 @@ class FundService:
                         # [优先级3] 降级：新浪 nf_AG0 接口补充
                         if ag_future_price <= 0 or settlement_price <= 0:
                             try:
+                                _throttle_sina_request()
                                 headers = {'Referer': 'https://finance.sina.com.cn/'}
-                                r = requests.get("http://hq.sinajs.cn/list=nf_AG0", headers=headers, timeout=1.5)
+                                r = requests.get("http://hq.sinajs.cn/list=nf_AG0", headers=headers, timeout=3.0)
                                 if r.status_code == 200 and '="' in r.text:
                                     parts = r.text.split('"')[1].split(',')
                                     if len(parts) >= 11:
@@ -1838,12 +1833,6 @@ class FundService:
                             else:
                                 metrics['static_val'] = None
 
-                            # 联动计算官方溢价（仅官方估值有效时；缺失则置 None，绝不拿 NAV 派生）
-                            if isinstance(metrics.get('static_val'), (int, float)) and metrics['static_val'] > 0 and metrics.get('price', 0) > 0:
-                                metrics['static_premium'] = round((metrics['price'] / metrics['static_val'] - 1) * 100, 3)
-                            else:
-                                metrics['static_premium'] = None
-                        
                         # [SI 实时估值] 基于 COMEX 白银期货的实时估值（和 Woody GetRealtimeNetValue 一致）
                         # [AI-2026-08-03] 仅在 SHFE 交易时段内计算：午休/休市已丢弃 AG0 价（见上守卫），此时不计算 SI 估值，
                         #              避免对"昨结算价为0"的误报警（非 Bug，是设计上非交易时段不出 AG0 衍生估值，与 rt_val 列一致）
@@ -1858,10 +1847,7 @@ class FundService:
                                 )
                                 if si_result and si_result.get('nav') and si_result['nav'] > 0:
                                     metrics['si_val'] = si_result['nav']
-                                    if metrics.get('price', 0) > 0:
-                                        metrics['si_premium'] = round((metrics['price'] / metrics['si_val'] - 1) * 100, 3)
-                                    else:
-                                        metrics['si_premium'] = None
+                                    # [AI-2026-08-21 FIX] si_premium 改由下方实时溢价三件套用 realtime_price 统一重算
                             except Exception as e:
                                 logger.debug(f"[161226] SI 实时估值失败: {e}")
                                 metrics['si_val'] = None
@@ -2141,19 +2127,24 @@ class FundService:
                 _pc_raw = metrics.get('prev_close')
                 pc = float(_pc_raw) if _pc_raw else None
 
-                if cp > 0 and sv > 0:
-                    metrics['static_premium'] = (cp / sv - 1) * 100
                 # [AI-2026-08-07] 缺失昨收(prev_close)时 price_change 显 None → 前端显 --，禁止用 0 掩盖
                 if cp > 0 and pc is not None and pc > 0:
                     metrics['price_change'] = (cp / pc - 1) * 100
                 else:
                     metrics['price_change'] = None
 
-                # [AI-2026-07-29] 实时溢价(rt_premium) 用 realtime_price 重算，
-                #   与 static_premium(用官方收盘价) 区分：rt_premium = 实时价/rt_val - 1
+                # [AI-2026-08-21 FIX] static_premium 用 DB 官方收盘价(cp) 作分子，
+                #   与 rt_premium(用 realtime_price) 区分，避免分母错位：
+                #   - static_premium = cp / static_val - 1（官方收盘 vs 官方估值）✅
+                #   - rt_premium = rt_p / rt_val - 1（实时价 vs 实时估值）✅
+                #   原错误写法用 realtime_price 作 static_premium 分子，导致盘中错乱、盘后为 None。
                 rt_p = metrics.get('realtime_price')
+                if cp > 0 and sv > 0:
+                    metrics['static_premium'] = (cp / sv - 1) * 100
                 if rt_p and rt_p > 0 and metrics.get('rt_val') and metrics['rt_val'] > 0:
                     metrics['rt_premium'] = round((rt_p / metrics['rt_val'] - 1) * 100, 3)
+                if rt_p and rt_p > 0 and metrics.get('si_val') and metrics['si_val'] > 0:
+                    metrics['si_premium'] = round((rt_p / metrics['si_val'] - 1) * 100, 3)
 
                 # 4. [V4.0] 精度规范：现价3位、溢价率3位、涨跌幅2位
                 # 先创建 fund_dict 用于存储基金数据
@@ -2812,13 +2803,14 @@ DailyUpdater()._step4_fetch_prices()
         """获取基金分时数据（支持多日）
         - date: 基准日期（默认今天），days: 向前回溯天数
         - 返回按时间排序的多日数据，X轴使用连续时间戳
+        - 包含 open_premium/close_premium（真实盘口计算）
         """
         if not date: date = pd.Timestamp.now().strftime('%Y-%m-%d')
         conn = self.db._get_conn()
         try:
             # 计算起始日期
             start_date = (pd.Timestamp(date) - pd.Timedelta(days=days-1)).strftime('%Y-%m-%d')
-            query = """SELECT date, time, price, rt_val, premium
+            query = """SELECT date, time, price, rt_val, premium, open_premium, close_premium
                        FROM fund_intraday_quotes
                        WHERE fund_code = ? AND date >= ?
                        ORDER BY date ASC, time ASC"""
@@ -2827,7 +2819,7 @@ DailyUpdater()._step4_fetch_prices()
                 return []
             # 转换为时间戳X轴格式：MM-DD HH:MM
             df['display_time'] = df['date'] + ' ' + df['time']
-            return df[['display_time', 'price', 'rt_val', 'premium']].to_dict(orient='records')
+            return df[['display_time', 'price', 'rt_val', 'premium', 'open_premium', 'close_premium']].to_dict(orient='records')
         finally: conn.close()
 
     def get_fund_basket(self, fund_code: str) -> List[Dict[str, Any]]:

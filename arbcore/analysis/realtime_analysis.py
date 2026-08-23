@@ -96,7 +96,7 @@ def analyze_realtime(
 
     res = calc.calculate(fund, fx, etfs)
     if not res:
-        logger.error(f"[{code}] calculate 返回 None（组件价/position 缺失）")
+        logger.debug(f"[{code}] calculate 返回 None（组件价/position 缺失）→ rt_val 由主面板独立计算")
         return None
 
     out: Dict[str, Any] = {

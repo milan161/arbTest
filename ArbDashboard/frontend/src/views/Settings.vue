@@ -1,100 +1,132 @@
 <template>
   <div class="p-6">
-    <div class="header-section">
-      <div style="display: flex; align-items: center; gap: 16px;">
-        <h1 class="text-2xl font-bold text-gray-800">数据源配置中心</h1>
+
+    <!-- ===== 顶部一行：左 实时行情 | 右 分类优先级 ===== -->
+    <div style="display:grid; grid-template-columns: 1fr 1.3fr; gap:16px; align-items:start; margin-bottom:16px;">
+
+      <!-- 左卡片：实时行情 -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div class="flex items-center mb-4">
+          <div class="w-2 h-6 bg-blue-500 rounded mr-3" style="background-color: var(--primary-color)"></div>
+          <h2 class="text-xl font-bold text-gray-700">实时行情</h2>
+        </div>
+
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="border-bottom:1px solid #e5e7eb; color:#6b7280; font-weight:500;">
+              <th style="text-align:left; padding-left:12px;">数据源</th>
+              <th style="width:44px; text-align:center;">优先级</th>
+              <th style="width:80px; text-align:center;">状态</th>
+              <th style="width:50px; text-align:center;">排序</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(source, index) in realtimeSources" :key="source.source_name"
+                style="border-bottom:1px solid #f3f4f6; transition: background 0.15s;"
+                :style="{ background: source.is_active ? '#eff6ff' : 'transparent' }">
+              <!-- 数据源名称（左对齐，第一列） -->
+              <td style="text-align:left; padding:6px 12px;">
+                <div style="font-weight:600; color:#1f2937; font-size:13px;">{{ source.displayName }}</div>
+                <div style="font-size:11px; color:#9ca3af; margin-top:1px;">{{ source.config?.desc || '' }}</div>
+              </td>
+              <!-- 优先级圆标 -->
+              <td style="text-align:center; padding:6px 0;">
+                <span style="display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:white; border:1px solid #d1d5db; font-size:11px; font-weight:bold; color:var(--primary-color);">{{ index + 1 }}</span>
+              </td>
+              <!-- 状态开关（点击切换） -->
+              <td style="text-align:center; padding:6px 0;">
+                <div style="display:inline-flex; align-items:center; gap:5px; cursor:pointer;" @click="toggleActive(source)">
+                  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#d1d5db; transition:all 0.2s;" :class="{ 'on': source.is_active }" :style="source.is_active ? { background:'var(--primary-color)', boxShadow:'0 0 6px var(--primary-color)' } : {}"></span>
+                  <span :style="{ color: source.is_active ? 'var(--primary-color)' : '#9ca3af', fontSize:'11px', fontWeight:600 }">{{ source.is_active ? '启用' : '停用' }}</span>
+                </div>
+              </td>
+              <!-- 上下箭头 -->
+              <td style="text-align:center; padding:6px 0;">
+                <n-space :size="2" vertical style="gap:2px;">
+                  <button @click="move(index, -1)" :disabled="index === 0" class="btn-arrow" style="padding:1px 4px; font-size:10px;">▲</button>
+                  <button @click="move(index, 1)" :disabled="index === realtimeSources.length - 1" class="btn-arrow" style="padding:1px 4px; font-size:10px;">▼</button>
+                </n-space>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="font-size:11px; color:#9ca3af; margin-top:6px;">点击状态切换启用/停用 · 箭头调整优先级 · 改动即时自动保存</div>
       </div>
-      <button
-        @click="saveAll"
-        class="btn-standard"
-        style="padding: 8px 24px; font-size: 14px;"
-      >
-        保存并应用配置
-      </button>
-    </div>
 
-    <!-- 实时行情配置 - 强制横向网格 -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8">
-      <div class="flex items-center mb-6">
-        <div class="w-2 h-6 bg-blue-500 rounded mr-3" style="background-color: var(--primary-color)"></div>
-        <h2 class="text-xl font-bold text-gray-700">实时行情 (Real-time Market)</h2>
-        <span class="ml-4 text-sm text-gray-400 font-normal">点击箭头调整优先级</span>
-      </div>
-
-      <!-- 网格容器：强制 4 列 -->
-      <div class="grid-container">
-        <div
-          v-for="(source, index) in realtimeSources"
-          :key="source.source_name"
-          class="source-card"
-          :class="{ 'active': source.is_active }"
-        >
-          <!-- 优先级角标 -->
-          <div class="priority-badge" style="color: var(--primary-color)">{{ index + 1 }}</div>
-
-          <div class="card-header">
-            <div class="title">{{ source.displayName }}</div>
-            <div class="desc">{{ source.config.desc || '暂无描述' }}</div>
+      <!-- 右卡片：分类优先级 -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div class="flex items-center mb-4">
+          <div class="w-2 h-6 rounded mr-3" style="background-color:#7c3aed"></div>
+          <h2 class="text-xl font-bold text-gray-700">分类优先级</h2>
+        </div>
+        <!-- 对齐条：与左侧实时行情表头等高，使下方分类首行（黄金原油）与「通达信极速」行对齐 -->
+        <div style="border-bottom:1px solid #e5e7eb; color:#9ca3af; font-size:12px; padding:3px 0; margin-bottom:8px;">
+          点击卡片切换暂停 / 恢复（即时保存）
+        </div>
+        <!-- 7 个卡片：第一行 4，第二行 3 居中 -->
+        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:8px;">
+          <div v-for="(cat, idx) in allCategories.slice(0,4)" :key="cat.name"
+               @click="toggleCategory(cat.name)"
+               :style="{
+                 padding:'10px 4px',
+                 borderRadius:'8px',
+                 cursor:'pointer',
+                 border: cat.paused ? '1.5px solid #e5e7eb' : '1.5px solid #7c3aed',
+                 background: cat.paused ? '#f9fafb' : '#f5f3ff',
+                 textAlign:'center',
+                 userSelect:'none',
+                 transition:'all 0.15s'
+               }">
+            <div style="font-size:12px; font-weight:700; color:cat.paused?'#9ca3af':'#1f2937'; margin-bottom:3px;">{{ cat.name }}</div>
+            <div :style="{
+              display:'inline-block',
+              padding:'1px 6px',
+              borderRadius:'8px',
+              fontSize:'10px',
+              fontWeight:'bold',
+              background:cat.paused?'#f1f5f9':'#dcfce7',
+              color:cat.paused?'#94a3b8':'#16a34a'
+            }">{{ cat.paused ? '已暂停' : '运行中' }}</div>
           </div>
-
-          <!-- 状态显示 -->
-          <div class="status-box">
-            <div class="dot" :class="{ 'on': source.is_active }" :style="source.is_active ? { backgroundColor: 'var(--primary-color)', boxShadow: '0 0 8px var(--primary-color)' } : {}"></div>
-            <span class="status-text" :style="source.is_active ? { color: 'var(--primary-color)' } : {}">{{ source.is_active ? '已启用' : '已停用' }}</span>
-          </div>
-
-          <!-- 底部操作区 -->
-          <div class="card-footer">
-            <div class="actions">
-              <button @click="toggleActive(source)" class="btn-standard" style="padding: 4px 10px; font-size: 11px;">
-                {{ source.is_active ? '停用' : '启用' }}
-              </button>
-              <button @click="testConnection(source)" class="btn-test">测试</button>
-            </div>
-
-            <div class="arrows">
-              <button @click="move(index, -1)" :disabled="index === 0" class="btn-arrow" style="color: var(--primary-color)">◀</button>
-              <button @click="move(index, 1)" :disabled="index === realtimeSources.length - 1" class="btn-arrow" style="color: var(--primary-color)">▶</button>
-            </div>
+        </div>
+        <div style="display:flex; gap:8px; justify-content:center;">
+          <div v-for="cat in allCategories.slice(4)" :key="cat.name"
+               @click="toggleCategory(cat.name)"
+               :style="{
+                 width:'calc(33.33% - 6px)',
+                 padding:'10px 4px',
+                 borderRadius:'8px',
+                 cursor:'pointer',
+                 border: cat.paused ? '1.5px solid #e5e7eb' : '1.5px solid #7c3aed',
+                 background: cat.paused ? '#f9fafb' : '#f5f3ff',
+                 textAlign:'center',
+                 userSelect:'none',
+                 transition:'all 0.15s'
+               }">
+            <div style="font-size:12px; font-weight:700; color:cat.paused?'#9ca3af':'#1f2937'; margin-bottom:3px;">{{ cat.name }}</div>
+            <div :style="{
+              display:'inline-block',
+              padding:'1px 6px',
+              borderRadius:'8px',
+              fontSize:'10px',
+              fontWeight:'bold',
+              background:cat.paused?'#f1f5f9':'#dcfce7',
+              color:cat.paused?'#94a3b8':'#16a34a'
+            }">{{ cat.paused ? '已暂停' : '运行中' }}</div>
           </div>
         </div>
       </div>
+
     </div>
 
-    <!-- 历史数据配置 -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <div class="flex items-center mb-6">
-        <div class="w-2 h-6 bg-blue-400 rounded mr-3" style="background-color: var(--primary-color); opacity: 0.8;"></div>
-        <h2 class="text-xl font-bold text-gray-700">历史数据 (Historical Data)</h2>
-      </div>
-
-      <div class="grid-container-hist">
-          <div
-            v-for="source in historicalSources"
-            :key="source.source_name"
-            class="hist-card"
-          >
-              <div class="hist-title">{{ source.displayName }}</div>
-              <div class="hist-desc">{{ source.config.desc }}</div>
-              <div class="hist-select-box">
-                <span class="label">状态</span>
-                <select v-model="source.is_active" class="select-status">
-                    <option :value="1">🔵 启用</option>
-                    <option :value="0">⚪ 停用</option>
-                </select>
-              </div>
-          </div>
-      </div>
-    </div>
-    
-    <!-- IB 核心套利标的配置 -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8">
+    <!-- ===== IB 核心套利标的配置（通栏） ===== -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-4">
       <div class="flex items-center mb-6">
         <div class="w-2 h-6 bg-orange-500 rounded mr-3"></div>
         <h2 class="text-xl font-bold text-gray-700">IB 核心套利标的 (Real-time Priority)</h2>
         <span class="ml-4 text-sm text-gray-400 font-normal">IB 只订阅这些标的，其余 ETF 走富途或放弃</span>
       </div>
-      
+
       <!-- 当前标的列表 -->
       <div style="display: flex; flex-direction: column; gap: 12px;">
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
@@ -123,7 +155,7 @@
           </span>
           <span v-if="ibCoreSymbols.length === 0" style="font-size: 13px; color: #94a3b8;">加载中...</span>
         </div>
-        
+
         <!-- 富途标的可选 -->
         <div style="border-top: 1px dashed #e2e8f0; padding-top: 12px;">
           <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;">
@@ -154,92 +186,28 @@
             </span>
           </div>
         </div>
-        
-        <!-- 操作按钮 -->
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <button @click="saveIbCoreSymbols"
-                  style="padding: 6px 20px; font-size: 13px; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; font-weight: bold;">
-            保存
-          </button>
-          <button @click="loadIbCoreSymbols"
-                  style="padding: 6px 16px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #64748b; cursor: pointer;">
-            刷新
-          </button>
-          <button @click="setDefaultIbSymbols"
-                  style="padding: 6px 16px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #64748b; cursor: pointer;">
-            恢复默认
-          </button>
-        </div>
-        
-        <div style="font-size: 12px; color: #94a3b8; line-height: 1.6;">
-          <div>📌 默认 7 只：XOP, GLD, USO, SLV, INDA, QQQ, SPY</div>
-          <div>⚠️ 修改后立即生效，IB 会重新订阅</div>
-          <div>ℹ️ 这些是套利必需的标的，其他 ETF（XLK、ARKK、EWA 等）走富途数据源</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- [AI-2026-07-20] 分类优先级管理（一键暂停/恢复） -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8">
-      <div class="flex items-center mb-4">
-        <div class="w-2 h-6 bg-purple-500 rounded mr-3"></div>
-        <h2 class="text-xl font-bold text-gray-700">分类优先级管理</h2>
-        <span class="ml-4 text-sm text-gray-400 font-normal">一键暂停不关心的分类，节省资源</span>
       </div>
 
-      <!-- 分类卡片网格 -->
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px;">
-        <div v-for="cat in allCategories" :key="cat.name"
-             @click="toggleCategory(cat.name)"
-             :style="{
-               padding: '14px 12px',
-               borderRadius: '10px',
-               cursor: 'pointer',
-               border: cat.paused ? '2px solid #e5e7eb' : '2px solid var(--primary-color)',
-               background: cat.paused ? '#f9fafb' : 'var(--primary-light)',
-               transition: 'all 0.2s',
-               textAlign: 'center',
-               userSelect: 'none',
-             }">
-          <div style="font-size: 13px; font-weight: bold; color: cat.paused ? '#9ca3af' : '#1f2937'; margin-bottom: 6px;">
-            {{ cat.name }}
-          </div>
-          <div :style="{
-            display: 'inline-block',
-            padding: '2px 10px',
-            borderRadius: '12px',
-            fontSize: '11px',
-            fontWeight: 'bold',
-            background: cat.paused ? '#f1f5f9' : '#dcfce7',
-            color: cat.paused ? '#94a3b8' : '#16a34a',
-          }">
-            {{ cat.paused ? '已暂停' : '运行中' }}
-          </div>
-          <div v-if="cat.paused" style="font-size: 10px; color: #94a3b8; margin-top: 4px;">点击恢复</div>
-          <div v-if="!cat.paused" style="font-size: 10px; color: #16a34a; margin-top: 4px;">点击暂停</div>
-        </div>
-      </div>
-
-      <div style="font-size: 12px; color: #94a3b8; line-height: 1.6;">
-        <div>📌 暂停的分类：不生成快照、不抓指数、不产生日志噪音</div>
-        <div>📌 历史数据（index_history表）完全保留，不受影响</div>
-        <div>⚠️ 修改后立即生效</div>
-      </div>
-
-      <!-- 保存按钮和回补历史 -->
-      <div style="margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-        <button @click="savePausedCategories" :disabled="savingPaused"
-                style="padding: 6px 20px; font-size: 13px; border: none; border-radius: 6px; background: #7c3aed; color: white; cursor: pointer; font-weight: bold; opacity: savingPaused ? 0.5 : 1;">
-          {{ savingPaused ? '保存中...' : '保存' }}
+      <!-- 操作按钮 -->
+      <div style="display: flex; gap: 8px; align-items: center; margin-top: 14px;">
+        <button @click="saveIbCoreSymbols"
+                style="padding: 6px 20px; font-size: 13px; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; font-weight: bold;">
+          保存
         </button>
-        <span v-if="savedMessage" style="font-size: 12px; color: #16a34a;">{{ savedMessage }}</span>
-
-        <span style="margin-left: auto; font-size: 13px; color: #64748b;">回补缺失指数历史：</span>
-        <button @click="backfillIndices" :disabled="backfillLoading"
-                style="padding: 6px 16px; font-size: 12px; border: none; border-radius: 6px; background: #dc2626; color: white; cursor: pointer; font-weight: bold; opacity: backfillLoading ? 0.5 : 1;">
-          {{ backfillLoading ? '回补中...' : '开始回补' }}
+        <button @click="loadIbCoreSymbols"
+                style="padding: 6px 16px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #64748b; cursor: pointer;">
+          刷新
         </button>
-        <span v-if="backfillResult" style="font-size: 12px; color: #16a34a;">{{ backfillResult }}</span>
+        <button @click="setDefaultIbSymbols"
+                style="padding: 6px 16px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #64748b; cursor: pointer;">
+          恢复默认
+        </button>
+      </div>
+
+      <div style="font-size: 12px; color: #94a3b8; line-height: 1.6; margin-top:12px;">
+        <div>📌 默认 7 只：XOP, GLD, USO, SLV, INDA, QQQ, SPY</div>
+        <div>⚠️ 修改后立即生效，IB 会重新订阅</div>
+        <div>ℹ️ 这些是套利必需的标的，其他 ETF（XLK、ARKK、EWA 等）走富途数据源</div>
       </div>
     </div>
 
@@ -249,8 +217,8 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { getDataSources, updateDataSource, updateDataSourcesPriority } from '../api';
-import { getIbCoreSymbols, postIbCoreSymbols, getPausedCategories, postPausedCategories, postBackfillIndices } from '../api';
-import { useMessage, NInput, NButton, NTag, NSpace } from 'naive-ui';
+import { getIbCoreSymbols, postIbCoreSymbols, getPausedCategories, postPausedCategories } from '../api';
+import { useMessage, NSpace } from 'naive-ui';
 
 const message = useMessage();
 const ibCoreSymbols = ref([]);
@@ -266,10 +234,6 @@ const allCategories = ref([
   { name: '国内LOF', paused: true, priority: '已暂停' },
   { name: '现金管理', paused: true, priority: '已暂停' },
 ]);
-const savingPaused = ref(false);
-const savedMessage = ref('');
-const backfillLoading = ref(false);
-const backfillResult = ref('');
 
 // 富途可用标的列表（非 IB 核心美股 ETF）
 const futuCandidates = ref([
@@ -282,7 +246,6 @@ const futuCandidates = ref([
 ]);
 
 const realtimeSources = ref([]);
-const historicalSources = ref([]);
 
 const loadIbCoreSymbols = async () => {
   try {
@@ -348,58 +311,49 @@ const fetchConfigs = async () => {
             ...s,
             displayName: sourceNames[s.source_name] || s.source_name
         }));
-
-        const resNav = await getDataSources('historical_nav');
-        const resPrice = await getDataSources('historical_price');
-        historicalSources.value = [
-            ...resNav.data.data.map(s => ({ ...s, displayName: `基金净值源: ${sourceNames[s.source_name] || s.source_name}` })),
-            ...resPrice.data.data.map(s => ({ ...s, displayName: `价格行情源: ${sourceNames[s.source_name] || s.source_name}` }))
-        ];
-
-
     } catch (e) {
         console.error('获取配置失败', e);
     }
 };
 
-const move = (index, direction) => {
+// [AI-2026-08-22] 方向A：排序即时保存（触发引擎重启使新顺序生效）
+const move = async (index, direction) => {
     const target = index + direction;
     if (target < 0 || target >= realtimeSources.value.length) return;
     const temp = realtimeSources.value[index];
     realtimeSources.value[index] = realtimeSources.value[target];
     realtimeSources.value[target] = temp;
-};
-
-const toggleActive = (source) => {
-    source.is_active = source.is_active ? 0 : 1;
-};
-
-const testConnection = async (source) => {
-    alert(`正在对 ${source.displayName} 进行连接诊断...`);
-};
-
-const saveAll = async () => {
     try {
         const priorities = realtimeSources.value.map((s, idx) => ({
             source_name: s.source_name,
             priority: idx + 1
         }));
         await updateDataSourcesPriority('realtime_market', priorities);
-
-        for (const s of [...realtimeSources.value, ...historicalSources.value]) {
-            await updateDataSource({
-                module: s.module,
-                source_name: s.source_name,
-                is_active: s.is_active
-            });
-        }
-
-
-
-        alert('✅ 配置已保存成功！');
-        fetchConfigs();
+        message.success('✅ 优先级已更新');
     } catch (e) {
-        alert('❌ 保存失败: ' + e.message);
+        message.error('❌ 保存失败: ' + (e.message || e));
+    }
+};
+
+// [AI-2026-08-22] 方向A：开关即时保存。updateDataSource 仅持久化，
+// 需再调 updateDataSourcesPriority 触发引擎重启，is_active 才会真正生效
+const toggleActive = async (source) => {
+    source.is_active = source.is_active ? 0 : 1;
+    try {
+        await updateDataSource({
+            module: source.module,
+            source_name: source.source_name,
+            is_active: source.is_active
+        });
+        const priorities = realtimeSources.value.map((s, idx) => ({
+            source_name: s.source_name,
+            priority: idx + 1
+        }));
+        await updateDataSourcesPriority('realtime_market', priorities);
+        message.success(source.is_active ? '✅ 已启用' : '✅ 已停用');
+    } catch (e) {
+        source.is_active = source.is_active ? 0 : 1; // 回滚
+        message.error('❌ 保存失败: ' + (e.message || e));
     }
 };
 
@@ -418,47 +372,18 @@ const loadPausedCategories = async () => {
   }
 }
 
-const toggleCategory = (name) => {
+// [AI-2026-08-22] 方向A：分类暂停即时保存（postPausedCategories 后端立即 sync）
+const toggleCategory = async (name) => {
   const cat = allCategories.value.find(c => c.name === name)
-  if (cat) cat.paused = !cat.paused
-}
-
-const savePausedCategories = async () => {
-  savingPaused.value = true
-  savedMessage.value = ''
+  if (!cat) return
+  cat.paused = !cat.paused
   try {
     const pausedList = allCategories.value.filter(c => c.paused).map(c => c.name)
-    const res = await postPausedCategories(pausedList)
-    if (res.data.status === 'ok') {
-      savedMessage.value = '✅ 设置已保存，立即生效'
-      setTimeout(() => { savedMessage.value = '' }, 3000)
-    } else {
-      message.error(res.data.message || '保存失败')
-    }
+    await postPausedCategories(pausedList)
+    message.success(cat.paused ? `✅ 已暂停 ${name}` : `✅ 已恢复 ${name}`)
   } catch (e) {
-    message.error('保存失败: ' + (e.message || e))
-  } finally {
-    savingPaused.value = false
-  }
-}
-
-const backfillIndices = async () => {
-  backfillLoading.value = true
-  backfillResult.value = ''
-  try {
-    const res = await postBackfillIndices(30)
-    if (res.data.status === 'ok') {
-      backfillResult.value = `✅ 新增 ${res.data.new_records || 0} 条, 跳过 ${res.data.skipped || 0} 条, 失败 ${res.data.failed || 0} 个`
-      message.success('指数历史回补完成')
-    } else {
-      backfillResult.value = '❌ ' + (res.data.message || '回补失败')
-      message.error(backfillResult.value)
-    }
-  } catch (e) {
-    backfillResult.value = '❌ ' + (e.message || e)
-    message.error(backfillResult.value)
-  } finally {
-    backfillLoading.value = false
+    cat.paused = !cat.paused // 回滚
+    message.error('❌ 保存失败: ' + (e.message || e))
   }
 }
 
@@ -473,122 +398,6 @@ onMounted(() => { fetchConfigs(); loadIbCoreSymbols(); loadPausedCategories() })
   margin-bottom: 24px;
 }
 
-.grid-container {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-@media (max-width: 1200px) {
-  .grid-container { grid-template-columns: repeat(2, 1fr); }
-}
-
-.source-card {
-  position: relative;
-  padding: 20px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #f9fafb;
-  transition: all 0.3s;
-  display: flex;
-  flex-direction: column;
-}
-.source-card.active {
-  border-color: var(--primary-color);
-  background: var(--primary-light);
-}
-.priority-badge {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: white;
-  border: 1px solid #d1d5db;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
-}
-.card-header .title {
-  font-weight: 700;
-  color: #1f2937;
-  margin-bottom: 4px;
-}
-.card-header .desc {
-  font-size: 12px;
-  color: #9ca3af;
-  height: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.status-box {
-  margin: 16px 0;
-  display: flex;
-  align-items: center;
-}
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #d1d5db;
-  margin-right: 8px;
-}
-.status-text {
-  font-size: 12px;
-  font-weight: 600;
-  color: #6b7280;
-}
-
-.card-footer {
-  margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid #e5e7eb;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.btn-test {
-  padding: 4px 8px;
-  font-size: 11px;
-  background: #f3f4f6;
-  border: none;
-  border-radius: 6px;
-  margin-left: 8px;
-  cursor: pointer;
-}
-.btn-arrow {
-  padding: 2px 6px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 14px;
-}
+.btn-arrow { padding: 2px 6px; background: transparent; border: none; cursor: pointer; font-size: 12px; }
 .btn-arrow:disabled { color: #d1d5db !important; }
-
-/* 历史数据网格 */
-.grid-container-hist {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-.hist-card {
-  padding: 16px;
-  border: 1px solid #f3f4f6;
-  border-radius: 12px;
-  background: #f9fafb;
-}
-.hist-title { font-weight: 700; font-size: 14px; }
-.hist-desc { font-size: 12px; color: #9ca3af; margin: 4px 0 12px; height: 32px; overflow: hidden; }
-.hist-select-box { display: flex; align-items: center; }
-.hist-select-box .label { font-size: 12px; color: #6b7280; margin-right: 8px; }
-.select-status {
-  flex-grow: 1;
-  padding: 4px;
-  border-radius: 6px;
-  border: 1px solid #e5e7eb;
-  font-size: 12px;
-}
 </style>

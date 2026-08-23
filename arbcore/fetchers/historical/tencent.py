@@ -60,10 +60,10 @@ class TencentHistoricalFetcher(BaseHistoricalFetcher):
             df['close'] = pd.to_numeric(df['close'])
             df['volume_hands'] = pd.to_numeric(df['volume_hands'])
             
-            # 转换为股/份
-            df['volume'] = df['volume_hands'] * 100
-            # 估算成交额(万元) = 份数 * 收盘价 / 10000
-            df['turnover_rate'] = (df['volume'] * df['close']) / 10000.0  # 用 turnover_rate 暂存成交额万元，因为 DB 接口这样写
+            # 转换为股/份（保留用于计算 trade_volume）
+            df['volume_shares'] = df['volume_hands'] * 100
+            # 估算成交额(万元) = 股数 * 收盘价 / 10000，存入 volume 列
+            df['volume'] = (df['volume_shares'] * df['close']) / 10000.0
             
             if start_date:
                 df = df[df['date'] >= pd.to_datetime(start_date)]

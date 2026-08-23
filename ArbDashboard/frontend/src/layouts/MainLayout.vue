@@ -35,14 +35,7 @@
         />
       </div>
 
-      <!-- [互换位置] 引擎状态：从主页移到侧边栏底部 -->
       <div class="sidebar-footer">
-        <n-tag :type="engineRunning ? 'info' : 'warning'" size="small" round
-          style="font-weight: bold; cursor: pointer; width: 100%; justify-content: center; margin-bottom: 6px;"
-          @click="router.push('/auto-trade')">
-          <template #icon><n-icon><Bot /></n-icon></template>
-          {{ engineRunning ? '自动交易: 开启' : '自动交易: 暂停' }}
-        </n-tag>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
           <n-tag :type="hasTdx ? 'success' : 'warning'" size="small" round
             :style="{ fontWeight: 'bold', cursor: hasTdx ? 'default' : 'pointer', width: '100%', justifyContent: 'center' }"
@@ -75,7 +68,6 @@
              国金QMT
            </n-tag>
          </div>
-         <n-text style="font-size: 10px; font-weight: bold; color: #888; display: block; text-align: center; margin-top: 4px;">点击切换启动/停止</n-text>
       </div>
     </n-layout-sider>
     <n-layout>
@@ -83,7 +75,6 @@
           <div v-if="showDataAlert" class="nav-alert-bar">
             <n-icon size="14" color="#d97706"><AlertTriangle /></n-icon>
             <span>{{ navAlertText }}</span>
-            <router-link to="/data" style="color: #d97706; font-weight: 700; margin-left: 6px; text-decoration: underline;">前往更新 →</router-link>
           </div>
         </n-layout-header>
         <n-layout-content content-style="padding: 10px; background-color: #f6f8fb; height: calc(100vh - 30px); overflow: auto;">
@@ -99,7 +90,7 @@
 
 <script setup lang="ts">
 import { ref, h, onMounted, onUnmounted } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
+import { RouterLink } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { 
   NLayout, 
@@ -116,8 +107,6 @@ import {
 import { 
   LayoutDashboard, 
   Settings, 
-  Database,
-  Bot,
   Activity,
   BookOpen,
   AlertTriangle,
@@ -139,12 +128,10 @@ const menuThemeOverrides = {
 const showDataAlert = ref(false)
 const navAlertText = ref('')
 
-const router = useRouter()
 const message = useMessage()
 const appStore = useAppStore()
 const marketStore = useMarketStore()
 
-const { engineRunning } = storeToRefs(appStore)
 const { hasTdx, hasIb, hasGalaxy, hasGuojin, hasFutu, hasFutuNoData } = storeToRefs(marketStore)
 
 
@@ -252,11 +239,6 @@ const menuOptions = [
     label: () => h(RouterLink, { to: '/etf-rotation' }, { default: () => 'ETF轮动' }),
     key: 'etf-rotation',
     icon: renderIcon(Repeat)
-  },
-  {
-    label: () => h(RouterLink, { to: '/data' }, { default: () => '数据管理' }),
-    key: 'data',
-    icon: renderIcon(Database)
   },
   {
     label: () => h(RouterLink, { to: '/settings' }, { default: () => '系统配置' }),

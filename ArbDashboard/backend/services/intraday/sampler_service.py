@@ -157,7 +157,15 @@ class IntradaySamplerService:
                 q = self.market_data.get_realtime_quote(symbol)
                 if q and q.get('price'):
                     current_etfs[symbol] = q['price']
-                    logger.debug(f"采样获取美股ETF实时价格: {symbol} = {q['price']}")
+                    # [2026-08-21] 保存 ETF 买卖一价
+                    if 'etf_prices' not in dir(self):
+                        self.etf_prices = {}
+                    self.etf_prices[symbol] = {
+                        'bid': q.get('bid', 0),
+                        'ask': q.get('ask', 0),
+                        'price': q['price']
+                    }
+                    logger.debug(f"采样获取美股ETF实时价格: {symbol} = {q['price']}, bid={q.get('bid')}, ask={q.get('ask')}")
             
             # 第三步：采集自选LOF基金的实时价格
             for f in funds_to_sample:
@@ -173,6 +181,14 @@ class IntradaySamplerService:
                     q = self.market_data.get_realtime_quote(code)
                     if q and q.get('price'):
                         current_etfs[code] = q['price']
+                        # [2026-08-21] 保存 LOF 买卖一价
+                        if 'lof_prices' not in dir(self):
+                            self.lof_prices = {}
+                        self.lof_prices[code] = {
+                            'bid': q.get('bid', 0),
+                            'ask': q.get('ask', 0),
+                            'price': q['price']
+                        }
             
             # 执行采样
             now = datetime.now()
@@ -195,17 +211,53 @@ class IntradaySamplerService:
                         rt_val = res['rt_val']
                         premium = (price / rt_val - 1) * 100
 
-                        # [2026-08-21] 计算开仓/平仓溢价率（使用收盘价作为代理）
-                        # 注意：采样服务无盘口数据，用 price*1.001/price*0.999 作为近似
-                        open_premium = ((price * 1.001) / rt_val - 1) * 100
-                        close_premium = ((price * 0.999) / rt_val - 1) * 100
+                        # [2026-08-21] 计算真实开仓/平仓溢价率
+                        # open_premium = (LOF_ask1 / backendRtValSafe - 1) * 100  # 买LOF吃卖一
+                        # close_premium = (LOF_bid1 / backendRtValPeg - 1) * 100   # 卖LOF吃买一
+                        lof_ask = self.lof_prices.get(code, {}).get('ask', 0)
+                        lof_bid = self.lof_prices.get(code, {}).get('bid', 0)
 
-                        # 存入分时表
+                        # backendRtValSafe: 用ETF买一价（bid）计算
+                        #   开仓时卖空ETF吃买一（低价），成本保守→估值偏低→溢价偏高
+                        # backendRtValPeg: 用ETF卖一价（ask）计算
+                        #   平仓时买平ETF吃卖一（高价），成本激进→估值偏高→溢价偏低
+                        portfolio = fund.get('valuation_portfolio', []) or fund.get('hedging_portfolio', [])
+                        etf_symbol = portfolio[0].get('symbol', '') if portfolio else ''
+                        etf_bid = self.etf_prices.get(etf_symbol, {}).get('bid', 0) if etf_symbol else 0
+                        etf_ask = self.etf_prices.get(etf_symbol, {}).get('ask', 0) if etf_symbol else 0
+
+                        # 构建safe/peg两种估值所需的ETF价格字典
+                        etfs_safe = dict(current_etfs)  # 默认用last价
+                        etfs_peg = dict(current_etfs)
+                        if etf_symbol:
+                            # safe估值：用ETF bid价（开仓卖空ETF吃买一，成本保守）
+                            if etf_bid > 0:
+                                etfs_safe[etf_symbol] = etf_bid
+                            # peg估值：用ETF ask价（平仓买平ETF吃卖一，成本激进）
+                            if etf_ask > 0:
+                                etfs_peg[etf_symbol] = etf_ask
+
+                        # 计算backendRtValSafe和backendRtValPeg
+                        res_safe = self.calculator.calculate(fund, current_fx, etfs_safe)
+                        res_peg = self.calculator.calculate(fund, current_fx, etfs_peg)
+                        backend_rt_val_safe = res_safe.get('rt_val', 0) if res_safe else 0
+                        backend_rt_val_peg = res_peg.get('rt_val', 0) if res_peg else 0
+
+                        open_premium = None
+                        close_premium = None
+                        if lof_ask > 0 and backend_rt_val_safe > 0:
+                            open_premium = (lof_ask / backend_rt_val_safe - 1) * 100
+                        if lof_bid > 0 and backend_rt_val_peg > 0:
+                            close_premium = (lof_bid / backend_rt_val_peg - 1) * 100
+
                         cursor.execute("""
                             INSERT INTO fund_intraday_quotes
-                            (fund_code, date, time, price, rt_val, premium, open_premium, close_premium)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (code, date_str, time_str, price, rt_val, premium, open_premium, close_premium))
+                            (fund_code, date, time, price, rt_val, premium, open_premium, close_premium,
+                             lof_bid1, lof_ask1, etf_bid1, etf_ask1)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (code, date_str, time_str, price, rt_val, premium,
+                              open_premium, close_premium,
+                              lof_bid, lof_ask, etf_bid, etf_ask))
                 conn.commit()
             except Exception as e:
                 logger.error(f"❌ 采样写入数据库失败: {e}")

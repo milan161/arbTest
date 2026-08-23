@@ -37,11 +37,6 @@ const router = createRouter({
           component: () => import('../views/AutoTrade.vue')
         },
         {
-          path: 'data',
-          name: 'Data',
-          component: () => import('../views/Data.vue')
-        },
-        {
           path: 'ledger',
           name: 'Ledger',
           component: () => import('../views/Ledger.vue')
