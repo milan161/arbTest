@@ -120,6 +120,7 @@ class RuleEngine:
     def _init_db(self):
         conn = self._get_conn()
         try:
+            # 创建规则表
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS auto_trade_rules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +137,14 @@ class RuleEngine:
                     note TEXT DEFAULT '',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # [AI-2026-08-23] 创建交易数量配置表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS fund_trade_config (
+                    fund_code TEXT PRIMARY KEY,
+                    lof_qty INTEGER NOT NULL,
+                    etf_qty INTEGER NOT NULL
                 )
             """)
             conn.commit()
