@@ -21,6 +21,68 @@
       </div>
     </div>
 
+    <!-- 自留地 + 历史数据导出（合并自 Data.vue） -->
+    <n-grid :cols="2" :x-gap="12" :y-gap="12" responsive="screen" item-responsive style="margin-bottom: 12px;">
+      <!-- 自留地卡片 -->
+      <n-gi span="2 m:1">
+        <n-card :bordered="false" class="shadow-soft" style="margin-top: 0; height: 100%;">
+          <template #header>
+            <div class="flex-center gap-2" style="flex-wrap: wrap;">
+              <n-icon size="18" color="#64748b"><Database /></n-icon>
+              <span>自留地</span>
+              <n-text depth="3" style="font-size: 11px; color: #94a3b8;">
+                * 该功能仅在本地环境且加载私有插件时可用
+              </n-text>
+            </div>
+          </template>
+          <div class="p-2 flex flex-col justify-between" style="min-height: 120px;" v-if="!isPrivateVisible">
+            <div></div>
+            <n-button quaternary @click="checkPrivateAccess" style="width: 100%;">进入私有空间</n-button>
+          </div>
+          <div v-else class="p-2 animate-fade-in" style="display: flex; flex-direction: column; gap: 10px;">
+            <n-form-item label-placement="top">
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <n-input v-model:value="exportCode" placeholder="输入 6 位代码" style="width: 110px;" />
+                <n-button v-for="code in quickCodes" :key="code" size="small" secondary @click="exportCode = code">
+                  {{ code }}
+                </n-button>
+              </div>
+            </n-form-item>
+            <n-button type="primary" @click="handleExport" :disabled="!exportCode" style="width: 100%;">
+              <template #icon><n-icon><FileDown /></n-icon></template>
+              导出
+            </n-button>
+          </div>
+        </n-card>
+      </n-gi>
+
+      <!-- 历史数据导出卡片 -->
+      <n-gi span="2 m:1">
+        <n-card :bordered="false" class="shadow-soft" style="margin-top: 0; height: 100%;">
+          <template #header>
+            <div class="flex-center gap-2" style="flex-wrap: wrap;">
+              <n-icon size="18" color="#64748b"><Database /></n-icon>
+              <span>历史数据导出</span>
+              <n-text depth="3" style="font-size: 11px; color: #94a3b8;">
+                * 最新 10 天数据，供分享分析
+              </n-text>
+            </div>
+          </template>
+          <div class="p-2 flex flex-col justify-between" style="min-height: 120px;">
+            <div>
+              <n-text depth="2" style="font-size: 13px; display: block; margin-bottom: 12px;">
+                导出 <n-text strong>arb_master_share.db</n-text>，含近 10 天基金净值、估值、溢价等数据。
+              </n-text>
+            </div>
+            <n-button type="success" @click="handleExportShareDb" :loading="exportShareDbLoading" style="width: 100%;">
+              <template #icon><n-icon><FileDown /></n-icon></template>
+              导出十天数据库
+            </n-button>
+          </div>
+        </n-card>
+      </n-gi>
+    </n-grid>
+
     <!-- 数据同步状态（原数据管理页面内容迁移） -->
     <n-card title="数据同步状态" size="small" style="margin-bottom: 12px;">
       <template #header-extra>
@@ -149,12 +211,92 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import {
-  NCard, NTable, NTag, NButton, NIcon, NSpace, NText, NGrid, NGi, NSpin, NSwitch, NAlert, NDivider, useMessage
+  NCard, NTable, NTag, NButton, NIcon, NSpace, NText, NGrid, NGi, NSpin, NSwitch, NAlert, NDivider, useMessage, NInput
 } from 'naive-ui'
-import { RefreshCw, CheckCircle, Clock } from 'lucide-vue-next'
+import { RefreshCw, CheckCircle, Clock, Database, FileDown } from 'lucide-vue-next'
 import { getDataStatus, getNavStatus, triggerTask } from '../api/systemApi'
+import client from '../api/client'
 
 const message = useMessage()
+
+// [AI-2026-08-22] 自留地与历史数据导出（从 Data.vue 迁移）
+const isPrivateVisible = ref(false)
+const exportCode = ref('')
+const quickCodes = ['162411', '164701', '164824', '161116']
+const exportShareDbLoading = ref(false)
+
+const checkPrivateAccess = async () => {
+  try {
+    const res = await client.get('/api/private/status')
+    if (res.data.loaded) isPrivateVisible.value = true
+    else message.error('未挂载私有插件')
+  } catch (e) { message.error('验证失败') }
+}
+
+const handleExport = async () => {
+  try {
+    message.loading('正在生成导出文件...')
+    const res = await client.get(`/api/private/export/${exportCode.value}`, { responseType: 'blob' })
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `fund_export_${exportCode.value}_${new Date().toISOString().split('T')[0]}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    message.success('导出成功')
+  } catch (e: any) {
+    const errData = e?.response?.data
+    if (errData instanceof Blob) {
+      try {
+        const text = await errData.text()
+        const json = JSON.parse(text)
+        if (json?.message) {
+          console.error('[导出失败]', json.message)
+          message.error(`导出失败: ${json.message}`)
+          return
+        }
+      } catch { /* ignore parse errors */ }
+    }
+    const errMsg = e?.response?.data?.message || e?.message || '未知错误'
+    console.error('[导出失败]', errMsg)
+    message.error(`导出失败: ${errMsg}`)
+  }
+}
+
+const handleExportShareDb = async () => {
+  exportShareDbLoading.value = true
+  try {
+    message.loading('正在生成十天数据库，请稍候...')
+    const res = await client.get('/api/db/export_share', { responseType: 'blob', timeout: 120000 })
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const link = document.createElement('a')
+    link.href = url
+    const filename = res.headers?.['content-disposition']
+      ?.match(/filename=(.+)/)?.[1] || `arb_master_share_${new Date().toISOString().split('T')[0]}.db`
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    message.success('分享库导出成功')
+  } catch (e: any) {
+    const errData = e?.response?.data
+    if (errData instanceof Blob) {
+      try {
+        const text = await errData.text()
+        const json = JSON.parse(text)
+        if (json?.message) {
+          message.error(`导出失败: ${json.message}`)
+          return
+        }
+      } catch { /* ignore */ }
+    }
+    message.error(`导出失败: ${e?.message || '未知错误'}`)
+  } finally {
+    exportShareDbLoading.value = false
+  }
+}
 
 // 数据源展示顺序与中文名
 const SOURCE_ORDER: { key: string; label: string }[] = [

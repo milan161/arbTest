@@ -9,15 +9,36 @@ class ConfigService:
         self.db = db_manager
 
     def get_data_sources(self, module: str = "realtime_market") -> List[Dict[str, Any]]:
-        """获取数据源配置列表"""
-        configs = self.db.get_data_source_config(module)
-        for cfg in configs:
+        """获取数据源配置列表
+
+        [2026-08-24] 取消实时行情优先级功能：原 db.get_data_source_config 查询会阻塞
+        事件循环导致 /api/config/data_sources 接口超时。改为返回硬编码默认顺序，
+        恢复「通达信 → 新浪/腾讯 → 银河QMT → 国金QMT」，不再由 DB priority 驱动。
+        """
+        if module != "realtime_market":
+            # 历史/其他模块仍走 DB（这些接口未被报告超时）
+            configs = self.db.get_data_source_config(module)
+            for cfg in configs:
+                try:
+                    cfg['config'] = json.loads(cfg['config_json'])
+                except:
+                    cfg['config'] = {}
+            return configs
+        DEFAULT_SOURCES = [
+            {'source_name': 'tdx',    'priority': 1, 'is_active': 1, 'config_json': '{"desc": "通达信内存直连"}'},
+            {'source_name': 'sina',   'priority': 2, 'is_active': 1, 'config_json': '{"desc": "新浪/腾讯行情"}'},
+            {'source_name': 'galaxy', 'priority': 3, 'is_active': 1, 'config_json': '{"desc": "银河QMT (Socket)"}'},
+            {'source_name': 'guojin', 'priority': 4, 'is_active': 1, 'config_json': '{"desc": "国金QMT (xtquant)"}'},
+        ]
+        out = []
+        for cfg in DEFAULT_SOURCES:
+            item = dict(cfg)
             try:
-                # 解析 config_json 方便前端展示
-                cfg['config'] = json.loads(cfg['config_json'])
+                item['config'] = json.loads(cfg['config_json'])
             except:
-                cfg['config'] = {}
-        return configs
+                item['config'] = {}
+            out.append(item)
+        return out
 
     def update_source_config(self, module: str, source_name: str, priority: int = None, is_active: int = None, config: Dict = None):
         """更新数据源配置"""

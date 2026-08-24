@@ -2911,7 +2911,8 @@ async def update_priorities(request: Request):
         module=data.get('module', 'realtime_market'),
         priorities=data.get('priorities', [])
     )
-    market_data_service.restart_realtime_engine()
+    # [2026-08-24] 取消实时行情优先级功能：注释掉引擎重启，避免阻塞事件循环导致请求超时
+    # market_data_service.restart_realtime_engine()
     return res
 
 
@@ -3476,6 +3477,7 @@ def kill_port_owner(port: int):
         logger.error(f"⚠️ [端口防护] 清理端口 {port} 残留进程失败: {e}")
 
 if __name__ == "__main__":
-    if os.environ.get("ARB_KILL_PORT_OWNER") == "1":
-        kill_port_owner(8000)
+    # [AI-2026-08-24] 无条件清理端口：无论从哪里启动（start_dashboard.bat/runback.bat/手动），
+    # 都确保不会有两个后端实例同时竞争 8000 端口。
+    kill_port_owner(8000)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", access_log=False)

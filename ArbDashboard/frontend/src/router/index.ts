@@ -42,6 +42,11 @@ const router = createRouter({
           component: () => import('../views/Ledger.vue')
         },
         {
+          path: 'data',
+          name: 'Data',
+          component: () => import('../views/Data.vue')
+        },
+        {
           path: 'settings',
           name: 'Settings',
           component: () => import('../views/Settings.vue')

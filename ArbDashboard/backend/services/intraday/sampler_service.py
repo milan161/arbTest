@@ -6,6 +6,13 @@ from arbcore.calculators.dynamic_valuation import DynamicValuationCalculator
 
 logger = logging.getLogger(__name__)
 
+def _scalar_level(v):
+    """[AI-2026-08-24] A股实时源(tdx/sina/guojin/galaxy/tencent)的bid/ask为5档list，
+    IB/FUTU分支为标量买一/卖一。统一取首档（list[0]）或原值，避免list>int崩溃。"""
+    if isinstance(v, (list, tuple)) and v:
+        return float(v[0]) if v[0] is not None else 0
+    return v
+
 class IntradaySamplerService:
     """
     分时数据采样服务 (每分钟执行一次)
@@ -19,6 +26,8 @@ class IntradaySamplerService:
         self.running = False
         self._task = None
         self.active_watchlist = []
+        self.lof_prices = {}   # [2026-08-21] LOF买卖一价缓存
+        self.etf_prices = {}   # [2026-08-21] ETF买卖一价缓存
 
     async def start(self):
         if self.running: return
@@ -157,6 +166,13 @@ class IntradaySamplerService:
                 q = self.market_data.get_realtime_quote(symbol)
                 if q and q.get('price'):
                     current_etfs[symbol] = q['price']
+                    # [2026-08-24] 补订 ORDER_BOOK 获取真实买卖一价
+                    futu_code = symbol.lstrip('^')
+                    if hasattr(self.market_data, '_fetch_order_book'):
+                        ob_bid, ob_ask, _, _, _, _ = self.market_data._fetch_order_book(futu_code)
+                        if ob_bid and ob_bid > 0 and ob_ask and ob_ask > 0:
+                            q['bid'] = ob_bid
+                            q['ask'] = ob_ask
                     # [2026-08-21] 保存 ETF 买卖一价
                     if 'etf_prices' not in dir(self):
                         self.etf_prices = {}
@@ -165,7 +181,7 @@ class IntradaySamplerService:
                         'ask': q.get('ask', 0),
                         'price': q['price']
                     }
-                    logger.debug(f"采样获取美股ETF实时价格: {symbol} = {q['price']}, bid={q.get('bid')}, ask={q.get('ask')}")
+                    logger.info(f"📈 采样ETF: {symbol} price={q['price']}, bid={q.get('bid')}, ask={q.get('ask')}")
             
             # 第三步：采集自选LOF基金的实时价格
             for f in funds_to_sample:
@@ -201,8 +217,9 @@ class IntradaySamplerService:
                     if fund is None:  # [修复] 跳过None元素
                         continue
                     code = fund['code']
-                    price = current_etfs.get(code, 0)
-                    if price <= 0: 
+                    # [2026-08-24] 修复：LOF价格从lof_prices获取，不是current_etfs
+                    price = self.lof_prices.get(code, {}).get('price', 0)
+                    if price <= 0:
                         continue
                     
                     # 计算实时估值（传入完整符号格式的current_etfs）
@@ -214,8 +231,8 @@ class IntradaySamplerService:
                         # [2026-08-21] 计算真实开仓/平仓溢价率
                         # open_premium = (LOF_ask1 / backendRtValSafe - 1) * 100  # 买LOF吃卖一
                         # close_premium = (LOF_bid1 / backendRtValPeg - 1) * 100   # 卖LOF吃买一
-                        lof_ask = self.lof_prices.get(code, {}).get('ask', 0)
-                        lof_bid = self.lof_prices.get(code, {}).get('bid', 0)
+                        lof_ask = _scalar_level(self.lof_prices.get(code, {}).get('ask', 0))
+                        lof_bid = _scalar_level(self.lof_prices.get(code, {}).get('bid', 0))
 
                         # backendRtValSafe: 用ETF买一价（bid）计算
                         #   开仓时卖空ETF吃买一（低价），成本保守→估值偏低→溢价偏高
@@ -223,8 +240,8 @@ class IntradaySamplerService:
                         #   平仓时买平ETF吃卖一（高价），成本激进→估值偏高→溢价偏低
                         portfolio = fund.get('valuation_portfolio', []) or fund.get('hedging_portfolio', [])
                         etf_symbol = portfolio[0].get('symbol', '') if portfolio else ''
-                        etf_bid = self.etf_prices.get(etf_symbol, {}).get('bid', 0) if etf_symbol else 0
-                        etf_ask = self.etf_prices.get(etf_symbol, {}).get('ask', 0) if etf_symbol else 0
+                        etf_bid = _scalar_level(self.etf_prices.get(etf_symbol, {}).get('bid', 0)) if etf_symbol else 0
+                        etf_ask = _scalar_level(self.etf_prices.get(etf_symbol, {}).get('ask', 0)) if etf_symbol else 0
 
                         # 构建safe/peg两种估值所需的ETF价格字典
                         etfs_safe = dict(current_etfs)  # 默认用last价
