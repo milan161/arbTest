@@ -30,8 +30,7 @@ arbcore/scripts/
 agents.md
 # 本地代理/VPN 启动脚本（仅本机用，不传）
 Proxy.bat
-# 交易执行层（QMT/IB 下单管理、策略信号、前端下单逻辑，不传）
-arbcore/traders/
+# 交易信号检测 / 前端下单逻辑（不传；traders/ 目录经东哥确认可公开，已解除排除）
 **/signal_detector.py
 **/useOrderLogic.js
 
