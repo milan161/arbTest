@@ -1197,6 +1197,8 @@ class FundService:
         self.market_data_service = market_data_service
         self.config_service = config_service
         self._calculator = None
+        # [AI-2026-08-26] 盘后兜底防并发锁（防 _step4_fetch_prices 子进程风暴）
+        self._ensure_close_lock = threading.Lock()
     
     def _get_calculator(self):
         """懒加载估值计算器"""
@@ -2300,19 +2302,34 @@ class FundService:
     def _ensure_today_close_price(self) -> None:
         """[AI-2026-08-20] 盘后兜底：时间 ≥15:00 且今天 price 仍为 NULL 时，
         调 daily_updater 立刻写今天收盘价。
-        解决主看板盘后显示"昨天收盘"的问题。"""
+        解决主看板盘后显示"昨天收盘"的问题。
+
+        [AI-2026-08-26] 防子进程风暴：dashboard 分分类串行计算时，每个分类都会调用本方法，
+        只要今天仍有 price IS NULL 的行就会 spawn 一个 _step4_fetch_prices 子进程，
+        多个分类并发 = 多个子进程同时抢 SQLite 写锁（WAL 排队），全部变慢/超时后下一轮又起新的，
+        曾实测 8 进程并发拖垮 1 核机器（2026-08-26 22:33）。加非阻塞锁：已有兜底在跑则跳过本轮。
+        """
         if datetime.now().hour < 15:
             return
-        today = datetime.now().strftime('%Y-%m-%d')
-        conn = self.db._get_conn()
+        # [AI-2026-08-26] 非阻塞锁：已有兜底子进程在跑（含 120s 窗口）则本轮跳过
+        if not self._ensure_close_lock.acquire(blocking=False):
+            logger.debug("[盘后兜底] 已有兜底子进程在跑，跳过本轮")
+            return
         try:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM unified_fund_history WHERE date=? AND price IS NULL",
-                (today,)
-            ).fetchone()[0]
-            if count == 0:
-                return
-            conn.close()
+            today = datetime.now().strftime('%Y-%m-%d')
+            conn = self.db._get_conn()
+            try:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM unified_fund_history WHERE date=? AND price IS NULL",
+                    (today,)
+                ).fetchone()[0]
+                if count == 0:
+                    return
+            finally:
+                try:
+                    conn.close()
+                except:
+                    pass
             # [AI-2026-08-20] 调 daily_updater 写今天收盘价（幂等，已写则跳过）
             import subprocess, os
             scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scheduler')
@@ -2330,10 +2347,7 @@ DailyUpdater()._step4_fetch_prices()
         except Exception as e:
             logger.warning(f"⚠️ [盘后兜底] 写入今天收盘价失败: {e}")
         finally:
-            try:
-                conn.close()
-            except:
-                pass
+            self._ensure_close_lock.release()
 
     def get_fund_history(self, fund_code: str) -> List[Dict[str, Any]]:
         """

@@ -115,6 +115,33 @@ class FutuReader:
         
         return result[0]
         
+    @staticmethod
+    def _call_with_timeout(fn, timeout=10):
+        """
+        [AI-2026-08-26] 给富途请求调用加超时，防半开连接挂死。
+        复用 _connect_with_timeout 的线程包装模式：OpenD 半开连接（TCP 挂着但不响应）时，
+        SDK 的 subscribe/get_stock_quote/get_order_book 会无限阻塞且不报错，
+        一旦发生会把整个 get_prices（含估值线程）拖死。这里统一包一层，
+        超时抛 TimeoutError，由调用方清 ctx 走懒重连。
+        """
+        result = {}
+
+        def _do():
+            try:
+                result['value'] = fn()
+            except Exception as e:
+                result['error'] = e
+
+        t = threading.Thread(target=_do, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            raise TimeoutError(f"富途请求超时 ({timeout}s)")
+        if 'error' in result:
+            raise result['error']
+        return result.get('value')
+
     def _try_connect_silent(self):
         """
         静默尝试连接富途 OpenD（不输出 INFO 日志，只在失败时 WARNING）
@@ -150,7 +177,8 @@ class FutuReader:
                     self.disabled = False  # [AI-2026-08-04] 不自永禁，改由懒重连(30s节流)自动恢复
                     self.ctx = None
                     self.connected = False  # [AI-2026-07-15] 与 IB 一致
-                    self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格，避免前端误判为"Ready"
+                    # [AI-2026-08-26] 断连保留最后价格缓存供估值降级（旧实现清空 prices 会导致
+                    # 断连期间估值拿不到任何数据）；"是否有新数据"由上游判断，前端状态以 connected 为准
     
     def reconnect(self):
         """
@@ -200,7 +228,7 @@ class FutuReader:
         
         self.disabled = False  # [AI-2026-08-04] 不自永禁，OpenD 恢复后懒重连自动恢复
         self.connected = False  # [AI-2026-07-15] 与 IB 一致
-        self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
+        # [AI-2026-08-26] 断连保留最后价格缓存供估值降级（不清空 prices）
         logger.warning("[富途] 手动重连失败（已尝试 {} 次），将自动重试，请确认富途 OpenD 已启动".format(self.max_retries))
         return False, f"富途重连失败（已尝试 {self.max_retries} 次），请确认富途 OpenD 已启动"
     
@@ -264,7 +292,7 @@ class FutuReader:
                     # 下次 get_prices 经 30s 节流懒重连自动恢复，免去 H5 手动点"富途"按钮。
                     self.disabled = False
                     self.connected = False  # [AI-2026-07-15] 与 IB 一致
-                    self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
+                    # [AI-2026-08-26] 断连保留最后价格缓存供估值降级（不清空 prices）
                     return False, f"富途OpenD连接失败（已尝试 {self.max_retries} 次），自动重试中", self.prices
             
             # 区分美股和港股，并正确添加前缀
@@ -297,14 +325,40 @@ class FutuReader:
             
             # 订阅新增加的股票，指定 Session.ALL 获取盘前盘后夜盘全时段数据
             if new_codes:
-                # [AI-2026-07-15] 逐个订阅：单个符号失败（如 HSSI 非交易标的）不销毁整条连接
+                # [AI-2026-08-26] 批量订阅优先：OpenD 正常时一次往返，大幅减少重连后的订阅风暴
+                # （34 标的原本 34 次往返 → 1 次）。批量失败再逐个回退，保留 [AI-2026-07-15] 容错：
+                # 单个符号失败（如 HSSI 非交易标的）不销毁整条连接。所有订阅调用走
+                # _call_with_timeout，防半开连接挂死。
                 valid_codes = []
-                for code in new_codes:
-                    ret, data = self.ctx.subscribe([code], [SubType.QUOTE], session=Session.ALL)
-                    if ret == 0:
-                        valid_codes.append(code)
-                    else:
-                        logger.warning(f"[富途] 订阅失败 {code}: {data}，跳过该标的")
+                if len(new_codes) > 1:
+                    try:
+                        ret, data = self._call_with_timeout(
+                            lambda: self.ctx.subscribe(new_codes, [SubType.QUOTE], session=Session.ALL),
+                            timeout=15)
+                        if ret == 0:
+                            valid_codes = list(new_codes)
+                        else:
+                            logger.warning(f"[富途] 批量订阅失败: {data}，逐个回退")
+                    except Exception as e:
+                        # 批量订阅超时/连接异常：连接多半已挂，直接清 ctx 重连，不做逐个回退（避免连环超时）
+                        logger.warning(f"[富途] 批量订阅异常: {e}，清空 ctx 重连")
+                        self.ctx = None
+                        self.connected = False
+                        return False, f"富途订阅异常: {e}", self.prices
+                if not valid_codes:
+                    for code in new_codes:
+                        try:
+                            ret, data = self._call_with_timeout(
+                                lambda c=code: self.ctx.subscribe([c], [SubType.QUOTE], session=Session.ALL),
+                                timeout=10)
+                            if ret == 0:
+                                valid_codes.append(code)
+                            else:
+                                logger.warning(f"[富途] 订阅失败 {code}: {data}，跳过该标的")
+                        except Exception:
+                            # 单个订阅超时说明连接已挂，停止回退直接走重连
+                            logger.warning(f"[富途] 订阅超时 {code}，停止回退并清空 ctx")
+                            break
                 if valid_codes:
                     self.subscribed_codes.update(valid_codes)
                     logger.info(f"[富途] 已订阅: {', '.join(valid_codes)}")
@@ -316,8 +370,12 @@ class FutuReader:
                     return False, "富途所有标的订阅均失败", self.prices
             
             # 获取实时报价
-            ret, data = self.ctx.get_stock_quote(futu_codes)
+            # [AI-2026-08-26] 请求级超时：OpenD 半开连接时 SDK 会无限阻塞，这里 15s 内不返回即
+            # 抛 TimeoutError，由外层 except 清 ctx 走懒重连，避免拖死估值线程。
+            ret, data = self._call_with_timeout(
+                lambda: self.ctx.get_stock_quote(futu_codes), timeout=15)
             if ret == 0:
+                got_any = False  # [AI-2026-08-26] 本轮是否取到真实盘口（区别于 self.prices 旧缓存）
                 for _, row in data.iterrows():
                     futu_code = row['code']
                     code = futu_code.replace('US.', '').replace('HK.', '')
@@ -350,6 +408,7 @@ class FutuReader:
 
                     # 只要有真实盘口或 last 就存，上游决定显示/估值（全 0 视为无数据由门禁处理）
                     if last > 0 or bid > 0 or ask > 0:
+                        got_any = True  # [AI-2026-08-26] 本轮取到数据（与旧缓存区分）
                         self.prices[code] = {
                             'bid': bid,
                             'ask': ask,
@@ -371,8 +430,10 @@ class FutuReader:
                     self.last_log_time = current_time
                 
                 # [V10.13] 如果没有任何标的获取到真实盘口（如非交易时段），返回失败而非成功
-                if not self.prices:
-                    return False, "非交易时段，无真实盘口数据", self.prices
+                # [AI-2026-08-26] 判定基于本轮 got_any 而非 self.prices：断连后缓存保留旧价，
+                # 不能把旧缓存当成"本轮成功"，否则上游会误判行情新鲜。
+                if not got_any:
+                    return False, "本轮未获取到真实盘口数据", self.prices
                 return True, "成功获取富途价格", self.prices
             else:
                 logger.warning(f"[富途] 获取数据失败: {data}，清空 ctx 下次可重连")
@@ -389,7 +450,7 @@ class FutuReader:
                 logger.warning("[富途] OpenD 暂不可达(refused)，将自动重试（每30s），无需手动重连")
                 self.disabled = False
                 self.connected = False  # [AI-2026-07-15] 与 IB 一致
-                self.prices = {}  # [AI-2026-07-15] 禁用时清除缓存价格
+                # [AI-2026-08-26] 断连保留最后价格缓存供估值降级（不清空 prices）
                 return False, "富途OpenD暂不可达，自动重试中", self.prices
             # [AI-2026-07-15] 非"refused"异常（如连接断开）→ 标记断开，让 reconnect 可以重试
             logger.error(f"[富途] 异常: {err_msg} → 标记为断开，下次点击可重连")
@@ -407,12 +468,16 @@ class FutuReader:
             return (None, None, 0, 0, [], [])
         try:
             if futu_code not in self._order_book_subscribed:
-                ret, _ = self.ctx.subscribe([futu_code], [SubType.ORDER_BOOK], session=Session.ALL)
+                # [AI-2026-08-26] 请求级超时，防半开连接挂死
+                ret, _ = self._call_with_timeout(
+                    lambda: self.ctx.subscribe([futu_code], [SubType.ORDER_BOOK], session=Session.ALL),
+                    timeout=10)
                 if ret == 0:
                     self._order_book_subscribed.add(futu_code)
                 else:
                     return (None, None, 0, 0, [], [])
-            ret, ob = self.ctx.get_order_book(futu_code)
+            ret, ob = self._call_with_timeout(
+                lambda: self.ctx.get_order_book(futu_code), timeout=10)
             if ret != 0 or not isinstance(ob, dict):
                 return (None, None, 0, 0, [], [])
             bid_list = ob.get('Bid') or []
@@ -441,6 +506,10 @@ class FutuReader:
             b0 = bid_levels[0]
             a0 = ask_levels[0]
             return (b0[0], a0[0], b0[1], a0[1], bid_levels, ask_levels)
+        except TimeoutError:
+            # [AI-2026-08-26] 请求超时=连接半开，上抛给 get_prices 统一清 ctx 重连，
+            # 避免 34 标的逐个连环超时（10s×34=340s）拖死估值线程。
+            raise
         except Exception as e:
             logger.debug(f"[富途] get_order_book {futu_code} 失败: {e}")
             return (None, None, 0, 0, [], [])
