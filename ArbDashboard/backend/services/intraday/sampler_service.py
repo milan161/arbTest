@@ -70,7 +70,8 @@ class IntradaySamplerService:
         while self.running:
             try:
                 if self.is_market_open():
-                    await self._perform_sample()
+                    # [修复] 同步网络/DB 调用不应跑在事件循环上，整体丢线程池避免 head-of-line 阻塞
+                    await asyncio.to_thread(self._perform_sample_sync)
             except Exception as e:
                 import traceback
                 logger.error(f"🚨 采样循环异常: {e}")
@@ -79,7 +80,7 @@ class IntradaySamplerService:
             # 每 60 秒采样一次
             await asyncio.sleep(60)
 
-    async def _perform_sample(self):
+    def _perform_sample_sync(self):
         try:
             # 加载所有的配置基金
             all_config_funds = []

@@ -25,10 +25,10 @@ set "FRONTEND=%PROJ_DIR%\frontend"
 :: 否则其老版本 defusedxml 会因 PYTHONPATH 在 sys.path 中先于 venv 而覆盖 venv 包，导致导入 V7 报 XMLParser 错误。
 set "PYTHONPATH="
 
-:: Kill leftover backend (8000) and frontend (5173) ports
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
-timeout /t 2 /nobreak > nul
+:: 稳健清理 8000(后端)/5173(前端) 残留进程：PowerShell 精确按端口取 OwningProcess 强杀，规避 netstat 列解析落空
+powershell -NoProfile -Command "foreach($p in @(8000,5173)){ Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } }"
+:: 等待 8000 端口真正释放（最多 10 秒）再启动后端，杜绝旧进程赖着导致新进程绑端口失败
+powershell -NoProfile -Command "for($i=0;$i -lt 10;$i++){ if(-not (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)){ break }; Start-Sleep -Seconds 1 }"
 
 :: Start Backend (STRICTLY project venv — 禁止回退到系统/WorkBuddy python，否则 IB/富途/冻结调度器缺失依赖静默失效)
 echo [1/2] Starting Backend (port 8000)...

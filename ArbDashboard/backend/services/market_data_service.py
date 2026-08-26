@@ -568,32 +568,33 @@ class MarketDataService:
         try:
             headers = {'Referer': 'https://finance.sina.com.cn/'}
 
-            # 尝试取目标合约（微合约可能为空，后续从母合约备用源）
-            targets = [symbol]
-            if symbol in self._MICRO_TO_PARENT:
-                targets.append(self._MICRO_TO_PARENT[symbol])
+            # 尝试取目标合约
+            # [AI-2026-08-26 东哥确认] 新浪从不提供微合约(MGC/MCL/MES/MNQ)，
+            # 原"先试微合约再试母合约"导致每次批量都白带 hf_MGC 等无效标的
+            # （sina_cache 负缓存每次写空）。改为微合约直接映射母合约抓取。
+            targets = [self._MICRO_TO_PARENT.get(symbol, symbol)]
 
             last_price = 0.0
             used_symbol = symbol
+            # [Plan C] 合并批量新浪：所有 targets 一次性批量抓取 + 跨调用 coalesce，
+            # 不再对 targets 逐个调 _throttle_sina_request_mds（N 标的 = N×3 秒的根因）
+            from arbcore.utils.sina_cache import get_sina_quotes
+            _raw_map = get_sina_quotes([f"hf_{t}" for t in targets])
             for t in targets:
-                url = f"http://hq.sinajs.cn/list=hf_{t}"
-                # [AI-2026-08-21] 改用共享 session（已挂 IPv4 adapter），根治 hq.sinajs.cn IPv6 半通 DNS 失败
-                # [AI-2026-08-21] 新浪请求节流：15秒间隔防封IP
-                _throttle_sina_request_mds()
-                r = self._sina_session.get(url, headers=headers, timeout=5.0, proxies={"http": None, "https": None})
-                r.encoding = 'gbk'
-                if r.status_code == 200 and '="' in r.text:
-                    parts = r.text.split('"')[1].split(',')
-                    # [AI-2026-07-23] hf_NK 实际格式（NK连续合约）:
-                    # parts[0]=最新价, parts[1]=今开(空), parts[2]=最高, parts[3]=最低
-                    # parts[5]=成交量, parts[9]=持仓量
-                    # 注意: parts[4] 是最高价，不是最新价！
-                    if len(parts) >= 1:
-                        price = float(parts[0]) if parts[0] else 0.0
-                        if price > 0:
-                            last_price = price
-                            used_symbol = t
-                            break
+                raw = _raw_map.get(f"hf_{t}")
+                if not raw:
+                    continue
+                parts = raw.split(',')
+                # [AI-2026-07-23] hf_NK 实际格式（NK连续合约）:
+                # parts[0]=最新价, parts[1]=今开(空), parts[2]=最高, parts[3]=最低
+                # parts[5]=成交量, parts[9]=持仓量
+                # 注意: parts[4] 是最高价，不是最新价！
+                if len(parts) >= 1:
+                    price = float(parts[0]) if parts[0] else 0.0
+                    if price > 0:
+                        last_price = price
+                        used_symbol = t
+                        break
 
             if last_price > 0:
                 source = '新浪 hf_' if used_symbol == symbol else f'新浪 hf_({used_symbol})'

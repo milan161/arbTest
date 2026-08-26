@@ -28,6 +28,29 @@ from arbcore.utils.sina_throttle import throttle_sina_request as _throttle_sina_
 
 logger = logging.getLogger(__name__)
 
+# [B1+B3-2026-08-26] 新浪 hq.sinajs.cn 强制 IPv4：根治 IPv6 半通导致 29~131s 挂死。
+# 复用项目已验证的正确 adapter（send 内临时覆盖 socket.getaddrinfo 只返回 IPv4，保留域名 SNI），
+# 与 market_data_service._sina_session / 下方 SSE 会话同思路。所有 hq.sinajs.cn 请求统一走本 session。
+import socket as _socket
+from requests.adapters import HTTPAdapter as _HTTPAdapter
+
+class _SinaForceIPv4Adapter(_HTTPAdapter):
+    def send(self, request, **kwargs):
+        _orig = _socket.getaddrinfo
+        def _ipv4_only(*a, **kw):
+            return [r for r in _orig(*a, **kw) if r[0] == _socket.AF_INET]
+        _socket.getaddrinfo = _ipv4_only
+        try:
+            return super().send(request, **kwargs)
+        finally:
+            _socket.getaddrinfo = _orig
+
+_sina_session = requests.Session()
+_sina_session.mount("http://", _SinaForceIPv4Adapter())
+_sina_session.mount("https://", _SinaForceIPv4Adapter())
+# [B1+B3] 强制不走系统/环境代理，直连 hq.sinajs.cn（与原有 requests.get(proxies={...:None}) 行为一致）
+_sina_session.proxies.update({"http": None, "https": None})
+
 # [V11.0] 加载 lof_config.yaml 获取基金配置（rate_type 等字段不在数据库中的）
 _CONFIG_YAML_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'arbcore', 'config', 'lof_config.yaml'))
 _FUNDS_WITH_SPOT_RATE: Set[str] = set()
@@ -153,16 +176,12 @@ def _get_realtime_spot_fx() -> Optional[float]:
     if now - _SPOT_FX_CACHE['time'] < 15 and _SPOT_FX_CACHE['rate'] > 0:
         return _SPOT_FX_CACHE['rate']
     try:
-        _throttle_sina_request()
-        resp = requests.get(
-            "http://hq.sinajs.cn/list=fx_susdcny",
-            headers={"Referer": "https://finance.sina.com.cn/"},
-            timeout=3.0,
-            proxies={"http": None, "https": None}
-        )
-        resp.encoding = 'gbk'
-        if resp.text and '="' in resp.text:
-            parts = resp.text.split('"')[1].split(',')
+        # [Plan C] 合并批量新浪：fx_susdcny 走缓存（自身 15s 缓存仍优先）
+        from arbcore.utils.sina_cache import get_sina_quotes
+        _raw_map = get_sina_quotes(['fx_susdcny'])
+        raw = _raw_map.get('fx_susdcny')
+        if raw:
+            parts = raw.split(',')
             if len(parts) >= 2:
                 rate = float(parts[1])
                 if rate > 0:
@@ -195,16 +214,12 @@ def _get_realtime_jpy_spot_fx() -> Optional[float]:
     if now - _JPY_SPOT_FX_CACHE['time'] < 15 and _JPY_SPOT_FX_CACHE['rate'] > 0:
         return _JPY_SPOT_FX_CACHE['rate']
     try:
-        _throttle_sina_request()
-        resp = requests.get(
-            "http://hq.sinajs.cn/list=fx_sjpycny",
-            headers={"Referer": "https://finance.sina.com.cn/"},
-            timeout=3.0,
-            proxies={"http": None, "https": None}
-        )
-        resp.encoding = 'gbk'
-        if resp.text and '="' in resp.text:
-            parts = resp.text.split('"')[1].split(',')
+        # [Plan C] 合并批量新浪：fx_sjpycny 走缓存（自身 15s 缓存仍优先）
+        from arbcore.utils.sina_cache import get_sina_quotes
+        _raw_map = get_sina_quotes(['fx_sjpycny'])
+        raw = _raw_map.get('fx_sjpycny')
+        if raw:
+            parts = raw.split(',')
             if len(parts) >= 2:
                 # [AI-2026-07-23] 新浪返回每1日元汇率，乘100转每100日元
                 rate = float(parts[1]) * 100.0
@@ -450,12 +465,12 @@ def _get_ag0_future_quote():
         }
     # 补充：新浪 nf_AG0 获取买卖盘口
     try:
-        _throttle_sina_request()
-        import requests
-        r = requests.get('http://hq.sinajs.cn/list=nf_AG0',
-                         headers={'Referer': 'https://finance.sina.com.cn/'}, timeout=3.0)
-        if r.status_code == 200 and '="' in r.text:
-            parts = r.text.split('"')[1].split(',')
+        # [Plan C] 合并批量新浪：nf_AG0 走缓存（同时根治原 requests.get 未挂 IPv4 的挂死）
+        from arbcore.utils.sina_cache import get_sina_quotes
+        _raw_map = get_sina_quotes(['nf_AG0'])
+        raw = _raw_map.get('nf_AG0')
+        if raw:
+            parts = raw.split(',')
             if len(parts) >= 11:
                 sina_price = float(parts[8]) if parts[8] else 0.0
                 sina_settle = float(parts[10]) if parts[10] else 0.0
@@ -510,7 +525,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
         # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
         if 'HSTECH' in clean_sym:
             _throttle_sina_request()
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSTECH", headers=headers_sina, timeout=3.0)
+            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkHSTECH", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
@@ -518,7 +533,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
                     result = float(parts[8])
         elif 'HSCEI' in clean_sym:
             _throttle_sina_request()
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=3.0)
+            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
@@ -526,7 +541,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
                     result = float(parts[8])
         elif 'HSI' in clean_sym:
             _throttle_sina_request()
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=3.0)
+            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
@@ -534,7 +549,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
                     result = float(parts[8])
         elif 'CES300' in clean_sym or 'CES300.HI' in clean_sym:
             _throttle_sina_request()
-            r = requests.get("http://hq.sinajs.cn/list=rt_hkCES300", headers=headers_sina, timeout=3.0)
+            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkCES300", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 9:
@@ -544,7 +559,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
         # [AI-2026-07-09] 日经225(N225) — 新浪全球指数接口 int_nikkei
         elif clean_sym in ('N225', 'NKY', 'NIKKEI'):
             _throttle_sina_request()
-            r = requests.get("http://hq.sinajs.cn/list=int_nikkei", headers=headers_sina, timeout=3.0)
+            r = _sina_session.get("http://hq.sinajs.cn/list=int_nikkei", headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 4:
@@ -560,7 +575,7 @@ def get_index_change_percent(symbol: str) -> Optional[float]:
             else:
                 url = f"http://hq.sinajs.cn/list=s_sh{clean_sym}"
                 
-            r = requests.get(url, headers=headers_sina, timeout=3.0)
+            r = _sina_session.get(url, headers=headers_sina, timeout=3.0)
             if r.status_code == 200 and '="' in r.text:
                 parts = r.text.split('"')[1].split(',')
                 if len(parts) >= 4 and float(parts[3]) != 0.0:
@@ -809,6 +824,7 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
     # ====== Step 1: 判断各交易所今日是否开市 + 盘中/收盘 ======
     db_results = {}
     api_syms = []
+    _t_db_start = time.perf_counter()  # [埋点A] Step1 DB备用源开始
 
     for ex, syms in exchange_syms.items():
         # 1a. 是否交易日？
@@ -847,11 +863,14 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
                     logger.warning(f"[INDEX-DB] {ex} 收盘备用源读取失败: {e}")
         else:
             api_syms.extend(syms)
+    _t_db_end = time.perf_counter()  # [埋点A] Step1 DB备用源结束
 
     # ====== Step 2: 还在交易时段的 → 调 API ======
     api_results = {}
+    _t_api_start = time.perf_counter()  # [埋点A]
     if api_syms:
         api_results = _fetch_realtime_indices(api_syms, now)
+    _t_api_end = time.perf_counter()  # [埋点A]
 
     # [AI-2026-07-09] N225历史存储：每次获取实时数据后写入index_history，供T-1静态估值使用
     # N225历史无法通过TDX回采（新浪/东财均不支持历史K线），必须靠实时抓取积累
@@ -877,6 +896,13 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
             logger.warning(f"写入N225历史数据异常: {e}")
 
     # ====== Step 3: 合并并缓存 ======
+    logger.info(
+        "[INDEX-PROFILE] syms=%d db_backup=%dms api_fetch=%dms total=%dms",
+        len(symbols),
+        int((_t_db_end - _t_db_start) * 1000),
+        int((_t_api_end - _t_api_start) * 1000),
+        int((_t_api_end - _t_db_start) * 1000),
+    )
     res = {**db_results, **api_results}
     if res:
         _prefetch_cache = res
@@ -910,6 +936,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         return code.isdigit() and len(code) == 6 and (code.startswith('930') or code.startswith('931') or code.startswith('932'))
 
     import requests
+    import time  # [埋点A] 性能分段诊断
     headers_tencent = {'Referer': 'https://finance.qq.com/', 'User-Agent': 'Mozilla/5.0'}
     headers_sina = {'Referer': 'https://finance.sina.com.cn/', 'Accept': 'text/event-stream'}
     
@@ -1000,54 +1027,59 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
             else:
                 missing_sina_reqs.add(f"rt_hk{ret_code}")
 
+    _t_sina_start = time.perf_counter()  # [埋点A]
     if missing_sina_reqs:
-        url = f"http://hq.sinajs.cn/list={','.join(missing_sina_reqs)}"
         try:
-            _throttle_sina_request()
-            r = requests.get(url, headers=headers_sina, timeout=3.0)
-            if r.status_code == 200:
-                for line in r.text.splitlines():
-                    if '="' not in line: continue
-                    var_name = line.split('=')[0].strip()
-                    parts = line.split('"')[1].split(',')
-                    if var_name.startswith('var hq_str_s_sh') or var_name.startswith('var hq_str_s_sz'):
-                        code = var_name[-6:]
-                        if len(parts) >= 4 and float(parts[3]) != 0.0:
-                            if code in sina_to_syms:
-                                for original_sym in sina_to_syms[code]:
-                                    if original_sym not in res:
-                                        res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                    elif var_name.startswith('var hq_str_rt_hk'):
-                        code = var_name.split('rt_hk')[1]
-                        if len(parts) >= 9:
-                            if code in sina_to_syms:
-                                for original_sym in sina_to_syms[code]:
-                                    if original_sym not in res:
-                                        res[original_sym] = {"price": float(parts[6]), "pct": float(parts[8])}
-                    elif var_name.startswith('var hq_str_s_sh.'):
-                        # [V10.13] 美股指数新浪格式: var hq_str_s_sh.INX="..."
-                        # 新浪美股指数返回格式: 名称,当前点位,涨跌额,涨跌幅%,最高,最低,昨收,...
-                        code = var_name.replace('var hq_str_s_sh.', '')
-                        if len(parts) >= 4 and float(parts[3]) != 0.0:
-                            if code in sina_to_syms:
-                                for original_sym in sina_to_syms[code]:
-                                    if original_sym not in res:
-                                        res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                        logger.debug(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
-                    elif var_name.startswith('var hq_str_int_'):
-                        # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
-                        code = var_name.replace('var hq_str_', '')
+            # [Plan C] 合并批量新浪：同一节流窗口内多次调用 coalesce 为一次批量 GET
+            from arbcore.utils.sina_cache import get_sina_quotes
+            _sina_raw_map = get_sina_quotes(list(missing_sina_reqs))
+            for req in missing_sina_reqs:
+                raw = _sina_raw_map.get(req)
+                if not raw:
+                    continue
+                line = f"var hq_str_{req}=\"{raw}\""
+                var_name = line.split('=')[0].strip()
+                parts = line.split('"')[1].split(',')
+                if var_name.startswith('var hq_str_s_sh') or var_name.startswith('var hq_str_s_sz'):
+                    code = var_name[-6:]
+                    if len(parts) >= 4 and float(parts[3]) != 0.0:
                         if code in sina_to_syms:
                             for original_sym in sina_to_syms[code]:
                                 if original_sym not in res:
-                                    if len(parts) >= 4:
-                                        res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                        logger.debug(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                    res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
+                elif var_name.startswith('var hq_str_rt_hk'):
+                    code = var_name.split('rt_hk')[1]
+                    if len(parts) >= 9:
+                        if code in sina_to_syms:
+                            for original_sym in sina_to_syms[code]:
+                                if original_sym not in res:
+                                    res[original_sym] = {"price": float(parts[6]), "pct": float(parts[8])}
+                elif var_name.startswith('var hq_str_s_sh.'):
+                    # [V10.13] 美股指数新浪格式: var hq_str_s_sh.INX="..."
+                    # 新浪美股指数返回格式: 名称,当前点位,涨跌额,涨跌幅%,最高,最低,昨收,...
+                    code = var_name.replace('var hq_str_s_sh.', '')
+                    if len(parts) >= 4 and float(parts[3]) != 0.0:
+                        if code in sina_to_syms:
+                            for original_sym in sina_to_syms[code]:
+                                if original_sym not in res:
+                                    res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
+                                    logger.debug(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                elif var_name.startswith('var hq_str_int_'):
+                    # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
+                    code = var_name.replace('var hq_str_', '')
+                    if code in sina_to_syms:
+                        for original_sym in sina_to_syms[code]:
+                            if original_sym not in res:
+                                if len(parts) >= 4:
+                                    res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
+                                    logger.debug(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
         except Exception as e:
             logger.warning(f"预取新浪指数异常: {e}")
+    _t_sina_end = time.perf_counter()  # [埋点A]
 
     # [AI-2026-08-04] 新浪优先后，腾讯仅补充新浪未拿到的指数（非主力源）
     # 1. 腾讯备用源补充
+    _t_tc_start = time.perf_counter()  # [埋点A]
     if tencent_requests:
         url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
         try:
@@ -1067,6 +1099,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                             logger.debug(f"[INDEX-TENCENT] 备用源获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
         except Exception as e:
             logger.warning(f"预取腾讯指数异常: {e}")
+    _t_tc_end = time.perf_counter()  # [埋点A]
 
     # [V10.12] 3. 东财API备用源：港股/CSI非标指数（腾讯/新浪不识别的）
     # 东财 secid 映射规则：
@@ -1105,6 +1138,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         if secid:
             em_requests[sym] = secid
 
+    _t_em_start = time.perf_counter()  # [埋点A]
     if em_requests:
         headers_em = {
             'Referer': 'https://quote.eastmoney.com/',
@@ -1132,6 +1166,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                         logger.info(f"[INDEX-EASTMONEY] 获取指数 {original_sym}({secid}) 价格: {price} 涨跌幅: {pct}%")
             except Exception as e:
                 logger.debug(f"东财获取 {original_sym}({secid}) 失败: {e}")
+    _t_em_end = time.perf_counter()  # [埋点A]
 
     # 4. 增加未获取到的指数 Debug 记录（跳过美股ETF和已映射的非标代码）
     # [V10.13] 美股相关符号（含 S&P 系列、美股指数代理 .INX/.NDX 等）全部跳过，不报 DEBUG
@@ -1148,6 +1183,12 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         if sym not in res:
             logger.debug(f"[INDEX-DEBUG] 指数行情完全缺失: {sym} (未匹配到腾讯/新浪数据)")
 
+    logger.info(
+        "[INDEX-API-PROFILE] sina=%dms tencent=%dms eastmoney=%dms",
+        int((_t_sina_end - _t_sina_start) * 1000),
+        int((_t_tc_end - _t_tc_start) * 1000),
+        int((_t_em_end - _t_em_start) * 1000),
+    )
     return res
 
 class FundService:
@@ -1406,6 +1447,8 @@ class FundService:
         """
         [V8.1] 性能大修：SQL 级过滤 + 5秒缓存 + 批量历史查询
         """
+        import time as _t  # [埋点A] 性能分段诊断
+        _prof = {'start': _t.perf_counter()}
         # ── 缓存 key ──
         cache_key = f"{','.join(sorted(watchlist)) if watchlist else ''}:{category or ''}"
         cached = _dashboard_cache.get(cache_key)
@@ -1502,6 +1545,7 @@ class FundService:
                 logger.debug(f"[INDEX-FILTER] 暂停分类(含豁免) {sorted(paused_set)}，抓取 {len(indices_to_fetch)} 个指数")
             
             index_changes_map = prefetch_index_changes(indices_to_fetch, conn=conn)
+            _prof['prefetch_index'] = _t.perf_counter()  # [埋点A] 指数预取段结束
 
             # 预查哪些基金有完整权重篮子（跳过简化指数估值，直接用计算器）
             funds_with_basket = set()
@@ -1513,25 +1557,39 @@ class FundService:
                     basket_symbols_by_fund.setdefault(r['fund_code'], set()).add(r['underlying_symbol'])
             except:
                 pass
+            _prof['db_read'] = _t.perf_counter()  # [埋点A] DB读取段结束
 
             # [V9.1] 并发预取所有基金的实时行情（解决序列调用 get_realtime_quote ~5s 卡顿）
+            # [B1-2026-08-26] 同时预取篮子成分标的（USO/GLD/XOP/GC/CL/NK/AG…），避免估值循环里
+            # 逐基金、逐成分调用 get_realtime_quote 触发新浪 15s 节流+挂死。预取结果按归一化 symbol
+            # 写入 quotes_dict，估值循环直接复用缓存，不再触发任何新浪请求。
             quotes_dict = {}
+            _prefetch_symbols = list(codes)
+            for _comps in basket_symbols_by_fund.values():
+                for _s in _comps:
+                    if _s and _s not in _prefetch_symbols:
+                        _prefetch_symbols.append(_s)
             if self.market_data_service:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 with ThreadPoolExecutor(max_workers=8) as executor:
-                    fut_map = {executor.submit(self.market_data_service.get_realtime_quote, c): c for c in codes}
+                    fut_map = {executor.submit(self.market_data_service.get_realtime_quote, c): c for c in _prefetch_symbols}
                     for fut in as_completed(fut_map):
                         c = fut_map[fut]
                         try:
                             rt = fut.result()
                             if rt and rt.get('price'):
                                 quotes_dict[c] = rt
+                                _norm = rt.get('symbol') or c
+                                if _norm != c:
+                                    quotes_dict[_norm] = rt
                         except Exception:
                             pass
+            _prof['realtime_quotes'] = _t.perf_counter()  # [埋点A] 实时价线程池段结束
 
             result = []
             for _, fund in funds_df.iterrows():
                 code = fund['fund_code']
+                _vf_start = time.perf_counter()  # [埋点A] 逐基金计时起点
                 category = fund.get('category', '')
 
                 # [AI-2026-07-20] 暂停分类 ❌ 直接跳过，不计算实时估值、不产生 WARNING 日志
@@ -1766,11 +1824,12 @@ class FundService:
                         # [优先级3] 降级：新浪 nf_AG0 接口补充
                         if ag_future_price <= 0 or settlement_price <= 0:
                             try:
-                                _throttle_sina_request()
-                                headers = {'Referer': 'https://finance.sina.com.cn/'}
-                                r = requests.get("http://hq.sinajs.cn/list=nf_AG0", headers=headers, timeout=3.0)
-                                if r.status_code == 200 and '="' in r.text:
-                                    parts = r.text.split('"')[1].split(',')
+                                # [Plan C] 合并批量新浪：nf_AG0 走缓存，不再独立节流
+                                from arbcore.utils.sina_cache import get_sina_quotes
+                                _raw_map = get_sina_quotes(['nf_AG0'])
+                                raw = _raw_map.get('nf_AG0')
+                                if raw:
+                                    parts = raw.split(',')
                                     if len(parts) >= 11:
                                         ag_future_price = float(parts[8])   # 最新价
                                         settlement_price = float(parts[10])  # 昨结算价
@@ -1960,7 +2019,8 @@ class FundService:
                                         if ex and not is_trading_day(ex, now_dt.date()):
                                             logger.debug(f"[{code}] 跳过 {raw_sym}（{ex} 今日休市）")
                                             continue
-                                        q = self.market_data_service.get_realtime_quote(sym_base)
+                                        # [B1-2026-08-26] 优先复用预取的篮子成分价（已含新浪期货路径），绝不再触发新浪请求
+                                        q = quotes_dict.get(sym_base) or self.market_data_service.get_realtime_quote(sym_base)
                                         # [AI-2026-07-20] 实时估值必须用买一价 bid，禁止用成交价 price（见 AGENTS.md 7.3.4）
                                         # [AI-2026-08-17] A股源 bid 为5档list，IB/FUTU 为标量 → 统一取买一价标量（bid[0]）
                                         if q:
@@ -2066,7 +2126,7 @@ class FundService:
                                                         b_position = float(fund.get('pos_ratio') or 0.95)
                                                     # [V11.0] 在岸价基金：用快照在岸价，不降级
                                                     if code in _FUNDS_WITH_SPOT_RATE:
-                                                        spot_fx = _daily_snapshot.get('usd_cny_spot', 0)
+                                                        spot_fx = _daily_snapshot.get('usd_cny_spot') or 0
                                                         fx = spot_fx if spot_fx > 0 else 0
                                                     else:
                                                         # current_fx 可能为空，从 base_data 补充(mid真值)
@@ -2189,9 +2249,21 @@ class FundService:
                     if pd.isna(v):
                         fund_dict[k] = None
 
+                _vf_ms = int((time.perf_counter() - _vf_start) * 1000)  # [埋点A] 逐基金耗时
+                if _vf_ms >= 500:
+                    logger.warning("[VAL-PER-FUND] code=%s cat=%s took=%dms", code, category, _vf_ms)
+                else:
+                    logger.debug("[VAL-PER-FUND] code=%s cat=%s took=%dms", code, category, _vf_ms)
+
                 result.append(fund_dict)
 
             # [2026-07-31] ① 盘中持续缓存最后有效估值 → ② 收盘后冻结/回退覆盖 live 值并标记 rt_frozen
+            # [AI-2026-08-25] 盘后兜底：若今天官方收盘价未入库（price=NULL），先补齐再冻结/缓存，
+            # 防止前端用昨天收盘当"现价"。幂等——已写则 _step4_fetch_prices 内部跳过。
+            try:
+                self._ensure_today_close_price()
+            except Exception as e:
+                logger.warning(f"[盘后兜底] 获取今天收盘价失败(不影响其他): {e}")
             try:
                 update_rt_cache(result)
             except Exception as e:
@@ -2202,6 +2274,18 @@ class FundService:
                 logger.error(f"[FREEZE] 应用冻结值失败: {e}")
 
             logger.debug(f"Dashboard数据生成完成，共 {len(result)} 只基金")
+            _prof['valuation_done'] = _t.perf_counter()  # [埋点A] 估值循环段结束
+            _elapsed = lambda a, b: int((_prof[b] - _prof[a]) * 1000)
+            logger.info(
+                "[DASHBOARD-PROFILE] cat=%s codes=%d total=%dms | "
+                "db_read=%dms prefetch_index=%dms realtime_quotes=%dms valuation_loop=%dms",
+                category or 'watchlist', len(codes),
+                _elapsed('start', 'valuation_done'),
+                _elapsed('start', 'db_read'),
+                _elapsed('db_read', 'prefetch_index'),
+                _elapsed('prefetch_index', 'realtime_quotes'),
+                _elapsed('realtime_quotes', 'valuation_done'),
+            )
             _dashboard_cache.set(cache_key, result)
             return result
         except Exception as e:
@@ -2810,7 +2894,8 @@ DailyUpdater()._step4_fetch_prices()
         try:
             # 计算起始日期
             start_date = (pd.Timestamp(date) - pd.Timedelta(days=days-1)).strftime('%Y-%m-%d')
-            query = """SELECT date, time, price, rt_val, premium, open_premium, close_premium
+            query = """SELECT date, time, price, rt_val, premium, open_premium, close_premium,
+                              lof_bid1, lof_ask1, etf_bid1, etf_ask1
                        FROM fund_intraday_quotes
                        WHERE fund_code = ? AND date >= ?
                        ORDER BY date ASC, time ASC"""
@@ -2819,7 +2904,8 @@ DailyUpdater()._step4_fetch_prices()
                 return []
             # 转换为时间戳X轴格式：MM-DD HH:MM
             df['display_time'] = df['date'] + ' ' + df['time']
-            return df[['display_time', 'price', 'rt_val', 'premium', 'open_premium', 'close_premium']].to_dict(orient='records')
+            return df[['display_time', 'price', 'rt_val', 'premium', 'open_premium', 'close_premium',
+                      'lof_bid1', 'lof_ask1', 'etf_bid1', 'etf_ask1']].to_dict(orient='records')
         finally: conn.close()
 
     def get_fund_basket(self, fund_code: str) -> List[Dict[str, Any]]:

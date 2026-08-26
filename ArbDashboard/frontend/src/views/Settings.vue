@@ -163,11 +163,9 @@
       </div>
     </div>
 
-  </div>
-
-  <!-- ===== 核心基金配置（合并自 Data.vue） ===== -->
-  <div style="margin-top: 20px;">
-    <n-card title="核心基金配置" class="shadow-soft">
+    <!-- ===== 核心基金配置（合并自 Data.vue） ===== -->
+    <div style="margin-top: 20px;">
+      <n-card title="核心基金配置" class="shadow-soft">
       <template #header-extra>
         <n-space>
           <n-button size="tiny" type="primary" secondary @click="showInventory = true">基金大盘点</n-button>
@@ -306,7 +304,7 @@
   </n-modal>
 
   <!-- [AI-2026-07-27] 基金大盘点弹窗：全量基金 分类/估值算法(含兜底)/数据源/对冲方式(含兜底)/关键证据 -->
-  <n-modal v-model:show="showInventory" preset="card" title="基金大盘点（全量配置一览）" style="width: 96%; max-width: 1280px;">
+  <n-modal v-model:show="showInventory" preset="card" title="基金大盘点（全量配置一览）" style="width: 96%; max-width: 1400px;">
     <template #header-extra>
       <n-space>
         <n-button size="small" @click="exportInventoryCsv">
@@ -315,75 +313,80 @@
         <n-button size="small" quaternary @click="showInventory = false">关闭</n-button>
       </n-space>
     </template>
-    <div class="inv-controls">
+    <n-space vertical :size="12">
       <n-space>
         <n-select v-model:value="invFilterCat" :options="invCatOptions" placeholder="全部分类" clearable style="width: 180px;" />
-        <n-input v-model:value="invQuery" placeholder="搜索 代码 / 名称 / 算法..." style="width: 240px;" />
+        <n-input v-model:value="invQuery" placeholder="搜索 代码 / 名称 / 算法..." style="width: 260px;" />
         <n-text depth="3">共 {{ inventoryRows.length }} 只 · 当前显示 {{ invFiltered.length }}</n-text>
       </n-space>
-    </div>
-    <div class="inv-table-wrap">
-      <table class="inv-table">
-        <thead>
-          <tr>
-            <th>分类(TAB)</th>
-            <th>代码</th>
-            <th>名称</th>
-            <th>估值算法（静态 / 实时）</th>
-            <th>数据源（静态 / 实时）</th>
-            <th>对冲方式（主源 → 兜底）</th>
-            <th>关键证据(篮子/ETF/指数)</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in invFiltered" :key="r.code">
-            <td><span class="inv-tag" :style="getCategoryTextColor(r.cat)">{{ r.cat }}</span></td>
-            <td class="inv-code">{{ r.code }}</td>
-            <td>{{ r.name }}</td>
-            <td>
-              <template v-if="r.unified">
-                <div class="inv-algo">{{ r.staticAlgo }}</div>
-              </template>
-              <template v-else>
-                <div class="inv-algo">静态：{{ r.staticAlgo }}</div>
-                <div class="inv-algo">实时：{{ r.dynAlgo }}</div>
-              </template>
-            </td>
-            <td>
-              <template v-if="r.unified">
-                <div class="inv-algo">{{ r.staticSrc }}</div>
-              </template>
-              <template v-else>
-                <div class="inv-algo">静态：{{ r.staticSrc }}</div>
-                <div class="inv-sub">实时：{{ r.dynSrc }}</div>
-              </template>
-            </td>
-            <td>
-              <div class="inv-algo">{{ r.hedge }}</div>
-              <div class="inv-sub">{{ r.hedgeFallback }}</div>
-            </td>
-            <td class="inv-ev">{{ r.evidence }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="inv-note">
-      <strong>估值算法区分「静态估值 / 实时估值」</strong>：静态估值（step4 批量计算）按基金跟踪方式用指数公式或篮子/魔法公式；实时估值（看板推演）按对冲标的走魔法公式（Tier1 用 Woody hedge / Tier2 矩阵公式兜底）或 NK 期货标准公式。
-      hedge = ETF净值×汇率/(基金净值×仓位)，可由公开数据自算（162411 实测与 Woody 值误差 0.000%）；Woody 另提供锚点 ETF 权重（yaml 配置）。
-      Woody 三层链：<strong>VPS文件 → 直接访问API(Palmmicro) → woody网站(爬虫兜底)</strong>。
-      其余数据源：指数点位走新浪/东财/Yahoo；ETF 实时价走 IB→富途→新浪；A股/指数/期货走 TDX→国金/银河QMT→腾讯→新浪。标注「待确认」的请以实际配置为准。
-    </p>
+      <div class="inv-table-wrap">
+        <table class="inv-table">
+          <thead>
+            <tr>
+              <th>分类(TAB)</th>
+              <th>代码</th>
+              <th>名称</th>
+              <th>估值算法（静态 / 实时）</th>
+              <th>数据源（静态 / 实时）</th>
+              <th>对冲方式（主源 → 兜底）</th>
+              <th>关键证据(篮子/ETF/指数)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in invFiltered" :key="r.code">
+              <td><span class="inv-tag" :style="getCategoryTextColor(r.cat)">{{ r.cat }}</span></td>
+              <td class="inv-code">{{ r.code }}</td>
+              <td>{{ r.name }}</td>
+              <td>
+                <template v-if="r.unified">
+                  <div class="inv-algo">{{ r.staticAlgo }}</div>
+                </template>
+                <template v-else>
+                  <div class="inv-algo">静态：{{ r.staticAlgo }}</div>
+                  <div class="inv-sub">实时：{{ r.dynAlgo }}</div>
+                </template>
+              </td>
+              <td>
+                <template v-if="r.unified">
+                  <div class="inv-algo">{{ r.staticSrc }}</div>
+                </template>
+                <template v-else>
+                  <div class="inv-algo">静态：{{ r.staticSrc }}</div>
+                  <div class="inv-sub">实时：{{ r.dynSrc }}</div>
+                </template>
+              </td>
+              <td>
+                <div class="inv-algo">{{ r.hedge }}</div>
+                <div class="inv-sub">{{ r.hedgeFallback }}</div>
+              </td>
+              <td class="inv-ev">{{ r.evidence }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <n-alert type="info" :bordered="false" style="font-size: 11.5px;">
+        <template #icon><n-icon :component="HelpCircle" /></template>
+        估值算法区分「静态估值 / 实时估值」：静态估值（step4 批量计算）按基金跟踪方式用指数公式或篮子/魔法公式；实时估值（看板推演）按对冲标的走魔法公式（Tier1 用 Woody hedge / Tier2 矩阵公式兜底）或 NK 期货标准公式。
+        hedge = ETF净值×汇率/(基金净值×仓位)，可由公开数据自算（162411 实测与 Woody 值误差 0.000%）；Woody 另提供锚点 ETF 权重（yaml 配置）。
+        Woody 三层链：<strong>VPS文件 → 直接访问API(Palmmicro) → woody网站(爬虫兜底)</strong>。
+        其余数据源：指数点位走新浪/东财/Yahoo；ETF 实时价走 IB→富途→新浪；A股/指数/期货走 TDX→国金/银河QMT→腾讯→新浪。标注「待确认」的请以实际配置为准。
+      </n-alert>
+    </n-space>
   </n-modal>
+</div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
-import { useMessage, NIcon } from 'naive-ui';
+import {
+  NCard, NGrid, NGi, NButton, NIcon, NTag, NDivider, NFormItem, NInput, useMessage, NSpace, NText,
+  NList, NListItem, NEmpty, NModal, NForm, NInputNumber, NSelect, NAlert, NUpload
+} from 'naive-ui';
 import { h } from 'vue';
 import { getFundConfigs, upsertFundConfig, deleteFundConfig, exportFundConfig, importFundConfig, getCategories } from '../api';
 import { getIbCoreSymbols, postIbCoreSymbols, getPausedCategories, postPausedCategories } from '../api';
 import client from '../api/client';
-import { Play, FileDown, Database, Trash2, RefreshCw, CheckCircle, Clock } from 'lucide-vue-next';
+import { Play, FileDown, Database, Trash2, RefreshCw, CheckCircle, Clock, HelpCircle } from 'lucide-vue-next';
 
 const message = useMessage();
 
@@ -819,5 +822,86 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 24px;
+}
+
+/* ===== 基金大盘点表格样式 ===== */
+.inv-controls { margin-bottom: 12px; }
+.inv-table-wrap {
+  max-height: 65vh;
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+.inv-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+  table-layout: fixed;
+}
+.inv-table th, .inv-table td {
+  border: 1px solid #e5e7eb;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inv-table thead th {
+  background: linear-gradient(180deg, #374151 0%, #1f2937 100%);
+  color: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  padding: 10px 10px;
+}
+.inv-table tbody tr { transition: background 0.15s; }
+.inv-table tbody tr:nth-child(even) { background: #f9fafb; }
+.inv-table tbody tr:hover { background: #eff6ff !important; }
+.inv-code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #1e293b;
+  letter-spacing: 0.5px;
+}
+.inv-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+.inv-algo { font-weight: 600; color: #1e293b; white-space: nowrap; }
+.inv-sub {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 3px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.inv-ev {
+  color: #475569;
+  font-size: 11.5px;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inv-note {
+  font-size: 11.5px;
+  color: #64748b;
+  line-height: 1.8;
+  margin-top: 14px;
+  background: #f8fafc;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #f1f5f9;
 }
 </style>

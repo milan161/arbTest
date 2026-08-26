@@ -90,9 +90,16 @@ class DashboardSnapshotService:
         logger.info(f"[SNAPSHOT] 暂停分类(含豁免基金): {sorted(self._paused_categories)}")
         logger.info(f"[SNAPSHOT] 全部分类启动快照循环: {active_categories}")
 
-        # 启动时先刷新一次所有活跃分类
-        for cat in active_categories:
-            await self.refresh_once(cat, None, cat)
+        # [AI-2026-08-25] 立即后台启动首次刷新（非阻塞 lifespan）：
+        # 不阻断 uvicorn listen，前端 wait-backend 秒级通过；同时保证
+        # 即使已过 15:00（is_a_share_session=False），首屏也能在 ~几秒内填满。
+        async def _initial_refresh():
+            for cat in active_categories:
+                try:
+                    await self.refresh_once(cat, None, cat)
+                except Exception:
+                    logger.exception("[SNAPSHOT] 初始刷新失败: %s", cat)
+        asyncio.create_task(_initial_refresh())
 
         # watchlist 始终运行
         self._tasks = [
@@ -160,6 +167,8 @@ class DashboardSnapshotService:
         use_db_watchlist: bool = False,
     ) -> Dict[str, Any]:
         started = time.monotonic()
+        with self._lock:
+            first_fill = key not in self._snapshots
 
         def _compute():
             effective_watchlist = self._read_watchlist_from_db() if use_db_watchlist else watchlist
@@ -183,6 +192,9 @@ class DashboardSnapshotService:
             with self._lock:
                 self._snapshots[key] = snapshot
                 self._last_errors.pop(key, None)
+            if first_fill:
+                logger.info("[SNAPSHOT] 首屏填充 key=%s 耗时=%dms 基金数=%d",
+                            key, compute_ms, len(data) if isinstance(data, list) else 0)
             return snapshot
         except Exception as exc:
             compute_ms = int((time.monotonic() - started) * 1000)

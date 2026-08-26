@@ -29,10 +29,10 @@
           <n-button quaternary circle size="tiny" @click="fetchData" style="position: absolute; right: 4px; top: 4px; z-index: 10;">
             <template #icon><n-icon><Zap /></n-icon></template>
           </n-button>
-          <!-- 过期数据指示器 -->
+          <!-- 过期/计算状态指示器 -->
           <div v-if="dashboardMeta.stale || dashboardMeta.error" style="position: absolute; left: 8px; top: 4px; z-index: 10;">
             <n-tag type="warning" size="tiny" round>
-              {{ dashboardMeta.error ? '数据异常' : '数据已延迟' }}
+              {{ dashboardMeta.error ? '数据异常' : (tableData.length === 0 ? '估值计算中…' : '数据已延迟') }}
               <template v-if="dashboardMeta.compute_ms > 0"> ({{ dashboardMeta.compute_ms }}ms)</template>
             </n-tag>
           </div>

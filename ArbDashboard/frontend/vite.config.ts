@@ -22,8 +22,9 @@ export default defineConfig({
             if (err.message?.includes('ECONNREFUSED')) {
               // Send 503 ourselves — prevents Vite's internal logger from printing the error
               if (res && typeof res.writeHead === 'function' && !res.headersSent) {
-                res.writeHead(503);
-                res.end('Backend not ready');
+                // 必须返回 JSON，否则前端 SSE parser 会报 "is not valid JSON"
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ detail: 'Backend not ready' }));
               }
             } else {
               console.warn('[Vite Proxy Error]', err.message);

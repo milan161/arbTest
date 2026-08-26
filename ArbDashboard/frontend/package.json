@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npx kill-port 5173 && vite",
+    "dev": "npx kill-port 5173 && node scripts/wait-backend.mjs && vite",
     "build": "vite build",
     "preview": "vite preview"
   },

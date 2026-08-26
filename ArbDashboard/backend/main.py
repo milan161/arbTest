@@ -1,6 +1,7 @@
 import os
 import sys
 import importlib.util
+import asyncio
 
 # [AI-2026-08-03 / 2026-08-05] 强制唯一启动解释器：后端必须用项目虚拟环境 ArbDashboard/.venv 启动。
 # 机器上存在多个 Python（系统 Python311 / WorkBuddy 内置 3.13），其中只有 .venv 同时装有
@@ -370,14 +371,18 @@ signal_detector = None
 async def lifespan(app: FastAPI):
     logger.info("Starting ArbNext Backend lifespan...")
     try:
-        import asyncio
-        
         # 1. [核心策略] 启动即运行一次 011 数据更新（异步，不需要通达信）
         # 011只读取历史数据并写入数据库，与通达信实时行情不冲突
         async def run_011_first():
             if sys.platform != "win32":
                 logger.info("📊 [Cloud] 云端部署环境，静默跳过 011 本地数据更新任务")
                 system_status.add_milestone("INFO", "云端部署，跳过本地数据同步")
+                # [AI-2026-08-25] ARM 启动时从 YAML 同步基金列表到 DB，保证独立性
+                try:
+                    _sync_config_to_db()
+                    logger.info("✅ [Cloud] YAML→DB 基金列表同步完成")
+                except Exception as e:
+                    logger.error(f"❌ [Cloud] YAML→DB 同步失败: {e}")
                 return
 
             logger.info("📊 启动时自动运行 011 数据更新任务...")
@@ -654,7 +659,7 @@ async def lifespan(app: FastAPI):
                 if _today not in _fz_done and (_n.hour > 15 or (_n.hour == 15 and _n.minute >= 1)):
                     _fz_done.add(_today)
                     try:
-                        snapshot_realtime_freeze(fund_service)
+                        await asyncio.to_thread(snapshot_realtime_freeze, fund_service)
                         logger.info("[FREEZE] 实时估值已冻结快照 (15:00)")
                     except Exception as _e:
                         logger.error(f"[FREEZE] 快照失败: {_e}")
@@ -668,7 +673,7 @@ async def lifespan(app: FastAPI):
         if _now.weekday() not in (5, 6) and _now.hour >= 15:
             _fz = load_realtime_freeze()
             if not _fz or _fz.get('date') != _now.strftime('%Y-%m-%d'):
-                snapshot_realtime_freeze(fund_service)
+                await asyncio.to_thread(snapshot_realtime_freeze, fund_service)
                 logger.info("[FREEZE] 启动备用源：补拍今日冻结快照")
 
     except Exception as e:
@@ -722,6 +727,15 @@ async def lifespan(app: FastAPI):
 
     except Exception as e:
         logger.warning(f"⚠️ [AFTER_HOURS] 盘后收盘价兜底调度器启动失败: {e}")
+
+    # [AI-2026-08-25] 事件循环卡死自曝 watchdog（纯诊断，零业务逻辑）
+    # 背景：IB/银河QMT 手动重连后 ~25s 事件循环被同步调用堵死（HTTP 全超时），进程随后无声崩溃。
+    # 卡死 >15s 时自动把全线程栈写入 logs/watchdog_stall_*.txt，供定位阻塞行号。严禁删除——抓到根因前这是唯一现场取证手段。
+    try:
+        from services.loop_watchdog import loop_watchdog
+        loop_watchdog.start(asyncio.get_running_loop(), logger, logs_dir)
+    except Exception as e:
+        logger.warning(f"⚠️ [loop-watchdog] 启动失败（不影响业务）: {e}")
 
     yield
 
@@ -1038,7 +1052,6 @@ def _fetch_h5_report_via_ssh() -> tuple:
 async def get_maintenance_report():
     """后台维护：本地 vs H5(ARM) 各数据源最新日期 + 程序健康。供前端「后台维护」页使用。"""
     try:
-        import asyncio
         local = _build_freshness_report(root_db_path)
         h5, h5_error = await asyncio.to_thread(_fetch_h5_report_via_ssh)
         return {
@@ -1073,7 +1086,7 @@ async def reconcile_static_val(code: str, days: int = 10):
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/fund/{code}/intraday")
-async def get_fund_intraday(code: str, date: str = None, days: int = 1):
+def get_fund_intraday(code: str, date: str = None, days: int = 1):
     """获取基金的分时数据（曲线图用，支持多日）
     - days: 向前回溯天数（1/3/5），默认1天
     """
@@ -1092,7 +1105,7 @@ async def get_hedge_multipliers():
     return {"status": "ok", "data": list_all_multipliers()}
 
 @app.get("/api/fund/{code}/valuation_meta")
-async def get_fund_valuation_meta(code: str):
+def get_fund_valuation_meta(code: str):
     """估值元数据 — 委托 fund_service.get_valuation_meta() [AI-2026-07-16 消除代码重复]"""
     try:
         return fund_service.get_valuation_meta(code)
@@ -2918,7 +2931,7 @@ async def update_priorities(request: Request):
 
 # --- Market Data APIs ---
 @app.get("/api/market/realtime/{code}")
-async def get_realtime_quote(code: str):
+def get_realtime_quote(code: str):
     quote = market_data_service.get_realtime_quote(code)
     if quote:
         return {"status": "ok", "data": quote}
@@ -2928,7 +2941,7 @@ async def get_realtime_quote(code: str):
 # [AI-2026-08-03] 双源盘口对比（只读，供实时沙盘对比 IB 与富途的时效/准确性）。
 # 估值计算仍只用 IB，本接口仅展示两源的 bid/ask/量，不做任何计算/门禁。
 @app.get("/api/market/realtime_dual")
-async def get_realtime_dual(code: str = None, codes: str = None):
+def get_realtime_dual(code: str = None, codes: str = None):
     syms = []
     if codes:
         syms = [s.strip() for s in codes.split(',') if s.strip()]
@@ -2939,17 +2952,40 @@ async def get_realtime_dual(code: str = None, codes: str = None):
 
 
 @app.get("/api/funds/realtime_est")
-async def get_funds_realtime_est():
-    """批量实时估值快照 —— 与主页主面板同源(fund_service.get_unified_dashboard_data)。
+def get_funds_realtime_est():
+    """批量实时估值快照 —— [AI-2026-08-26] 优先读快照服务缓存（内存合并，毫秒级稳定）。
 
-    直接复用主面板已经算好的 rt_val / rt_premium，不在 VPS 上重算。
-    供本地 push_rt.py 推送到 VPS / H5 使用。
+    旧实现直接调 fund_service.get_unified_dashboard_data() 全量现算：缓存 TTL 仅 5s，
+    push_rt 每 15s 来一次必触发重算，ARM 弱机上 30~60s 算不完 → 25s 超时 → H5 实时估值
+    时有时无（实测 36 只 ↔ 0 只反复横跳）。快照服务交易时段本就按分类持续刷新，
+    这里直接合并其内存快照，与主面板 /api/dashboard 完全同源同新鲜度。
+    快照完全为空（服务刚启动未算完）时才回退现算兜底。
     返回: {status, funds: {code: {price, rt_val, rt_premium, category, name}}}
     """
+    data = None
+    # ── 首选：读快照服务内存缓存（按分类循环持续刷新，纯内存读取） ──
     try:
-        data = fund_service.get_unified_dashboard_data()
+        with dashboard_snapshot_service._lock:
+            snaps = dict(dashboard_snapshot_service._snapshots)
+        merged: list = []
+        seen_codes: set = set()
+        for snap in snaps.values():
+            for r in (snap.get("data") or []):
+                code = r.get("fund_code")
+                if not code or code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                merged.append(r)
+        if merged:
+            data = merged
     except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+        logger.warning(f"[realtime_est] 读快照缓存失败，回退现算: {e}")
+    # ── 兜底：快照为空（刚启动未算完）才现算 ──
+    if data is None:
+        try:
+            data = fund_service.get_unified_dashboard_data()
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
     out = {}
     for r in (data or []):
         code = r.get("fund_code")
@@ -2972,7 +3008,7 @@ async def get_funds_realtime_est():
     return {"status": "ok", "funds": out}
 
 @app.get("/api/funds/realtime_detail")
-async def get_fund_realtime_detail(code: str = Query(..., description="基金代码")):
+def get_fund_realtime_detail(code: str = Query(..., description="基金代码")):
     """单只基金实时估值明细（H5 详情页计算依据）。"""
     try:
         detail = fund_service.get_realtime_valuation_detail(code)
@@ -2986,7 +3022,7 @@ async def get_fund_realtime_detail(code: str = Query(..., description="基金代
 # [AI-2026-08-05] 生产封装入口：单只实时估值（rt_val + premium + 对冲数量），包 analyze_realtime。
 # 供前端 LazyMode / 沙盘估值计算器 替代各自前端的手算估值公式，前后端统一走 canonical 引擎，消除分叉/近似 bug。
 @app.get("/api/funds/realtime_calc")
-async def calc_realtime_valuation(
+def calc_realtime_valuation(
     code: str = Query(..., description="基金代码"),
     lof_price: float = Query(0.0, description="LOF 实时价（默认0→用基准收盘）"),
     fx: float = Query(0.0, description="当前汇率（默认0→用基准汇率）"),
@@ -3021,7 +3057,7 @@ async def calc_realtime_valuation(
 # [AI-2026-08-05] 生产封装入口：期货估值（期货校准 / 纯期货）。包 analyze_realtime_futures /
 # analyze_realtime_pure_futures，消除前端沙盘手算分叉。基准价缺失返回 422（不兜底）。
 @app.get("/api/funds/realtime_futures_calc")
-async def calc_realtime_futures_valuation(
+def calc_realtime_futures_valuation(
     code: str = Query(..., description="基金代码"),
     mode: str = Query("calib", description="calib=期货校准 / pure=纯期货"),
     futures_price: float = Query(..., description="期货合约实时价"),
@@ -3069,25 +3105,25 @@ async def get_hist_price(code: str, start_date: str = None):
 @app.get("/api/etf-rotation/list")
 async def get_etf_rotation_list():
     """获取 ETF 轮动分组配置"""
-    data = etf_rotation_service.get_rotation_list()
+    data = await asyncio.to_thread(etf_rotation_service.get_rotation_list)
     return {"status": "ok", "data": data}
 
 @app.get("/api/etf-rotation/prices")
 async def get_etf_rotation_prices():
     """获取 ETF 轮动实时价格和估值"""
-    data = etf_rotation_service.get_rotation_prices()
+    data = await asyncio.to_thread(etf_rotation_service.get_rotation_prices)
     return {"status": "ok", "data": data}
 
 @app.get("/api/etf-rotation/fx")
 async def get_etf_rotation_fx():
     """获取 USD/CNY 实时在岸价"""
-    rate = etf_rotation_service.get_realtime_fx_spot()
+    rate = await asyncio.to_thread(etf_rotation_service.get_realtime_fx_spot)
     return {"status": "ok", "data": {"fx_spot": rate}}
 
 @app.get("/api/etf-rotation/history/{group_id}")
 async def get_etf_rotation_history(group_id: int):
     """获取某分组的轮动历史数据"""
-    data = etf_rotation_service.get_group_history(group_id)
+    data = await asyncio.to_thread(etf_rotation_service.get_group_history, group_id)
     return {"status": "ok", "data": data}
 
 
@@ -3423,6 +3459,15 @@ async def tokyo_admin_page():
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+# 禁用浏览器缓存前端静态资源，避免重构建后用户仍看到旧 JS/CSS/HTML
+NO_CACHE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, pragma: no-cache"}
+
+class NoCacheStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(NO_CACHE_HEADERS)
+        return response
+
 # 优先查找上一级目录的 frontend/dist
 frontend_dist_path = os.path.join(workspace_root, "frontend", "dist")
 
@@ -3430,7 +3475,7 @@ if os.path.exists(frontend_dist_path):
     assets_dir = os.path.join(frontend_dist_path, "assets")
     if os.path.exists(assets_dir):
         logger.info(f"Detected frontend dist at {frontend_dist_path}, mounting static files.")
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+        app.mount("/assets", NoCacheStaticFiles(directory=assets_dir), name="assets")
     # SPA Fallback: 用 middleware 代替 catch-all 路由，避免拦截 /api/* 请求
     from starlette.middleware.base import BaseHTTPMiddleware
     class SPAMiddleware(BaseHTTPMiddleware):
@@ -3441,7 +3486,7 @@ if os.path.exists(frontend_dist_path):
                 # 静态资源和 API 不做 fallback
                 if path.startswith("/api/") or path.startswith("/assets/"):
                     return response
-                return FileResponse(os.path.join(frontend_dist_path, "index.html"))
+                return FileResponse(os.path.join(frontend_dist_path, "index.html"), headers=NO_CACHE_HEADERS)
             return response
     app.add_middleware(SPAMiddleware)
 
