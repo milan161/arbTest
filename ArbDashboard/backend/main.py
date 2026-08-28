@@ -50,7 +50,7 @@ import pandas as pd
 import logging
 from logging.handlers import RotatingFileHandler
 import uvicorn
-from fastapi import FastAPI, Request, UploadFile, File, Form, Query
+from fastapi import FastAPI, Request, UploadFile, File, Form, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -370,6 +370,12 @@ signal_detector = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting ArbNext Backend lifespan...")
+    # [2026-08-27] 启动即后台同步当日分时（本地不采，ARM/AMD 采后回传；关注基金 162411/164701/161116）
+    try:
+        from services.intraday.arm_sync_service import ensure_synced_today
+        threading.Thread(target=ensure_synced_today, daemon=True).start()
+    except Exception as e:
+        logger.warning(f"启动 ARM 分时同步线程启动失败(忽略): {e}")
     try:
         # 1. [核心策略] 启动即运行一次 011 数据更新（异步，不需要通达信）
         # 011只读取历史数据并写入数据库，与通达信实时行情不冲突
@@ -1090,8 +1096,29 @@ def get_fund_intraday(code: str, date: str = None, days: int = 1):
     """获取基金的分时数据（曲线图用，支持多日）
     - days: 向前回溯天数（1/3/5），默认1天
     """
+    # [2026-08-27] 当日首次请求时后台触发从 ARM 同步当日分时（本地不采，ARM/AMD 采后回传）
+    try:
+        from services.intraday.arm_sync_service import ensure_synced_today
+        threading.Thread(target=ensure_synced_today, daemon=True).start()
+    except Exception as e:
+        logger.warning(f"触发 ARM 分时同步失败(忽略): {e}")
     data = fund_service.get_fund_intraday(code, date, days)
     return {"status": "ok", "data": data}
+
+
+@app.post("/api/sync/arm_intraday")
+async def sync_arm_intraday_api(code: str = Body(default=None)):
+    """手动触发从 ARM 同步当日分时到本地（关注基金 162411/164701/161116）。
+    前端「同步ARM」按钮调用；SCP 在后台线程池执行，不阻塞事件循环。"""
+    try:
+        from services.intraday.arm_sync_service import sync_arm_intraday_to_local
+        fund_codes = [code] if code else None
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: sync_arm_intraday_to_local(fund_codes))
+        return {"status": result.get("status", "error"), "data": result}
+    except Exception as e:
+        logger.error(f"手动同步 ARM 分时失败: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/api/fund/{code}/basket")
 async def get_fund_basket(code: str):

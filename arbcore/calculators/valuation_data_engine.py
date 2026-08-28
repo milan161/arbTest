@@ -159,7 +159,10 @@ def assemble_dynamic_components(
         full_sym = p.get('symbol', '')
         base_sym = resolve_base_symbol(full_sym)
         b_price = base_data.get(full_sym) or base_data.get(base_sym) or 0
-        c_price = current_prices.get(base_sym) or 0
+        # [修复 2026-08-27] 实时价查键同时尝试 base_sym(XOP) 与 full_sym(^XOP)。
+        # 采样器(sampler_service)按 full_sym(^XOP) 存键，主面板按 base_sym(XOP) 存键；
+        # 仅查 base_sym 会查不到 → 退化成冻结基准价 → rt_val 整天恒定(直线)。两键都试即兼容两种口径。
+        c_price = current_prices.get(base_sym) or current_prices.get(full_sym) or 0
         if not c_price or c_price <= 0:
             # [AI-2026-08-04] 实时缺失退化时取市场价(price)，不用 b_price（可能取了 netvalue）。
             # b_price 按 basket_count 分流（矩阵用 price、魔法展示用 netvalue）是计算层设计，

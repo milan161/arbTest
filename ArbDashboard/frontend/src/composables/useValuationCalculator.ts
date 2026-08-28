@@ -461,6 +461,9 @@ export function useValuationCalculator() {
   // ============================================================
   // 6. 数据获取
   // ============================================================
+  // [AI-2026-08-27] 元数据就绪回调：供父页面注册，在 fetchValuationMeta 成功后立即触发（用于依赖 meta.realtime_quotes 的后续计算）
+  let _onMetaReady: (() => void) | null = null
+  const setOnMetaReady = (fn: () => void) => { _onMetaReady = fn }
 
   /** 获取 LOF 实时盘口深度 */
   const fetchRealtimeDepth = async () => {
@@ -584,6 +587,8 @@ export function useValuationCalculator() {
         }
         // [AI-2026-08-05] 元数据就绪后触发后端封装估值重算（首发）
         scheduleRecalc()
+        // [AI-2026-08-27] 通知父页面元数据已就绪（父页面可在此触发依赖 realtime_quotes 的二次计算）
+        _onMetaReady?.()
       }
     } catch (e) {
       console.error('Failed to fetch valuation meta:', e)
@@ -684,6 +689,7 @@ export function useValuationCalculator() {
     // Data fetching
     fetchRealtimeDepth,
     fetchValuationMeta,
+    setOnMetaReady,
     pollRealtime,
     recalcBackend,
     resetInitialized,
