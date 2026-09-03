@@ -100,13 +100,92 @@ file_handler = RotatingFileHandler(
 )
 file_handler.setFormatter(logging.Formatter(log_format))
 
+# [AI-2026-09-03] 先固化原始 stderr 给 console_handler。
+# 下面会把 sys.stdout/sys.stderr 重定向到 Tee（同时写文件），若 handler 用默认 sys.stderr，
+# 重定向后每条 logger 记录会被 Tee 再抄一份进文件 → 日志重复。显式绑定原始流可避免。
+_orig_stdout = sys.stdout
+_orig_stderr = sys.stderr
+
 # Setup Console Handler (with colors)
-console_handler = logging.StreamHandler()
+console_handler = logging.StreamHandler(_orig_stderr)
 console_handler.setFormatter(ColorFormatter(log_format))
 
 # Configure Root Logger
 logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 logger = logging.getLogger("ArbNext")
+
+# ============================================================
+# [AI-2026-09-03] stdout/stderr 落盘（消除 print 诊断盲区）
+# 背景：arbcore/fetchers/ib_reader.py 等模块大量用 print 输出关键信息
+#   （IB 连接端口/ClientId/连接成功失败、Error 错误码、订阅发起、行情农场状态…），
+#   这些内容只进控制台、不进日志文件 → 每次 IB 断连日志里前后一片空白，只能靠猜。
+# 做法：把 sys.stdout / sys.stderr 换成 Tee，原样透传控制台 + 同步写入
+#   logs/stdout_<同时间戳>.log（与主日志同时间戳，便于对照）。
+# 设计要点：
+#   1) 行缓冲 + 锁：print(a, b) 会分多次 write，多线程下不累积整行会交错撕裂。
+#   2) utf-8 + errors='replace'：绝不让编码异常再触发一轮崩溃/重连。
+#   3) 代理 __getattr__ 到原始流：uvicorn/第三方库调 fileno()/isatty() 时行为不变。
+#   4) 任何异常都不得影响主流程，重定向失败只告警、不阻断启动。
+# ============================================================
+class _TeeStream:
+    """原样透传控制台，同时把内容抄写进日志文件。"""
+
+    def __init__(self, primary, secondary, lock, name):
+        self._primary = primary      # 原始 sys.stdout / sys.stderr
+        self._secondary = secondary  # 日志文件对象
+        self._lock = lock
+        self._name = name
+        self._buf = []
+
+    def write(self, data):
+        if not isinstance(data, str):
+            data = str(data)
+        try:
+            with self._lock:
+                self._buf.append(data)
+                if '\n' in data:
+                    line = ''.join(self._buf)
+                    self._buf = []
+                    self._secondary.write(line)
+                    self._secondary.flush()
+        except Exception:
+            pass
+        try:
+            self._primary.write(data)
+        except (UnicodeEncodeError, OSError):
+            pass
+        return len(data)
+
+    def flush(self):
+        try:
+            with self._lock:
+                if self._buf:
+                    self._secondary.write(''.join(self._buf))
+                    self._buf = []
+                self._secondary.flush()
+        except Exception:
+            pass
+        try:
+            self._primary.flush()
+        except Exception:
+            pass
+
+    # 第三方库（uvicorn / ibapi / 各 SDK）可能访问流对象的其它属性，统一代理到原始流
+    def __getattr__(self, item):
+        return getattr(self._primary, item)
+
+
+try:
+    _stdout_log_path = os.path.join(
+        logs_dir, datetime.now().strftime("stdout_%Y-%m-%d_%H%M%S.log")
+    )
+    _stdout_log_fh = open(_stdout_log_path, 'a', encoding='utf-8', errors='replace')
+    _tee_lock = threading.Lock()
+    sys.stdout = _TeeStream(_orig_stdout, _stdout_log_fh, _tee_lock, 'stdout')
+    sys.stderr = _TeeStream(_orig_stderr, _stdout_log_fh, _tee_lock, 'stderr')
+    logger.info(f"📝 stdout/stderr 已同步落盘: {_stdout_log_path}")
+except Exception as _e:
+    logger.warning(f"⚠️ stdout/stderr 落盘初始化失败（不影响主流程）: {_e}")
 
 # [Master-Slave] 检查主交易程序 (LOFarb) 是否运行
 # 强制设为 False，防止 opencode cli 等占用 5000 端口导致误判为 Slave 只读模式
@@ -693,6 +772,19 @@ async def lifespan(app: FastAPI):
     # 每只 12s 超时 × 数十只），导致 uvicorn 全接口超时。改为 _popen_script_once 异步子进程
     # 启动 daily_updater --daily-close（与 15:35 流水线同款，不阻塞事件循环）。
     try:
+        def _count_today_close_prices(_db, _date):
+            """[AI-2026-09-02] 同步 DB 查询，只供 asyncio.to_thread 调用。
+            绝不能在 asyncio 事件循环（MainThread）里直接连 SQLite —— 一旦等锁，
+            整个 uvicorn 全接口超时（loop-watchdog 抓到的 60s 卡死即由此而来）。"""
+            _conn = _db._get_conn()
+            try:
+                return _conn.execute(
+                    "SELECT COUNT(*) FROM unified_fund_history WHERE date=? AND price IS NOT NULL",
+                    (_date,)
+                ).fetchone()[0]
+            finally:
+                _conn.close()
+
         async def _after_hours_close_price_loop():
             """[AI-2026-08-20] 盘后收盘价兜底：15:00后每天自动写今天官方收盘。
             使用DB检查保证幂等（重启/崩溃不重复写）；子进程异步执行不阻塞事件循环。"""
@@ -704,12 +796,8 @@ async def lifespan(app: FastAPI):
                 # 幂等检查：DB中今天是否已有收盘价？
                 _today = _n.strftime('%Y-%m-%d')
                 try:
-                    _conn = db._get_conn()
-                    _count = _conn.execute(
-                        "SELECT COUNT(*) FROM unified_fund_history WHERE date=? AND price IS NOT NULL",
-                        (_today,)
-                    ).fetchone()[0]
-                    _conn.close()
+                    # [AI-2026-09-02] DB 查询放线程，避免阻塞事件循环
+                    _count = await asyncio.to_thread(_count_today_close_prices, db, _today)
                 except Exception as _e:
                     logger.error(f"[AFTER_HOURS] DB检查失败: {_e}")
                     continue
@@ -1247,7 +1335,9 @@ async def import_fund_config(file: UploadFile = File(...)):
 
 # [AI-2026-07-09] 动态 TAB：返回 unified_fund_list 中所有去重的基金分类，供主看板动态生成 TAB
 @app.get("/api/config/categories")
-async def get_fund_categories():
+# [AI-2026-09-02] 改为同步 def：FastAPI 会自动把它丢进线程池执行，
+# 同步 SQLite 调用因此永远不会阻塞 asyncio 事件循环（原 async def 会堵住整个 uvicorn）。
+def get_fund_categories():
     """返回数据库中所有真实存在的基金分类（去重）"""
     try:
         conn = db._get_conn()
@@ -1546,6 +1636,57 @@ async def lazy_calc(fund_code: str = "162411"):
         logger.error(f"[LazyCalc] Error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
+def _resolve_hedge_for_order(fund_code, underlying_symbol):
+    """[AI-2026-09-02] 同步 DB 查询：从 fund_daily_factors 取 hedge，取不到则动态推算。
+    只供 asyncio.to_thread 调用 —— 同步 SQLite 调用不得留在事件循环里。
+    返回 float 或 None（缺失即 None，禁止 1.0 假常量）。"""
+    import pandas as pd
+    conn2 = db._get_conn()
+    try:
+        h_df = pd.read_sql(
+            "SELECT hedge FROM fund_daily_factors "
+            "WHERE fund_code=? AND hedge IS NOT NULL AND hedge > 0 "
+            "ORDER BY date DESC LIMIT 1",
+            conn2, params=[fund_code]
+        )
+        if not h_df.empty:
+            return float(h_df.iloc[0]['hedge'])
+        # 备用源：动态推算
+        pos_df = pd.read_sql(
+            "SELECT position FROM fund_daily_factors "
+            "WHERE fund_code=? AND position IS NOT NULL ORDER BY date DESC LIMIT 1",
+            conn2, params=[fund_code]
+        )
+        position = float(pos_df.iloc[0]['position']) if not pos_df.empty else None  # [AI-2026-08-07] 缺失即 None
+        nav_df = pd.read_sql(
+            "SELECT nav, price FROM unified_fund_history "
+            "WHERE fund_code=? AND nav>0 ORDER BY date DESC LIMIT 1",
+            conn2, params=[fund_code]
+        )
+        nav = float(nav_df.iloc[0]['nav']) if not nav_df.empty else None  # [AI-2026-08-07] 缺失即 None
+        fx_df = pd.read_sql(
+            "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn2
+        )
+        fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else None  # [AI-2026-08-07] 缺失即 None，禁止 7.25 假常量
+        # hedge = (ETF基价 * 汇率) / (净值 * 仓位)
+        # 用 t1 的 etf 收盘价作为基价近似
+        etf_base = 0.0
+        if underlying_symbol:
+            etf_df = pd.read_sql(
+                "SELECT COALESCE(NULLIF(netvalue, 0), price) as price "
+                "FROM usa_etf_daily_prices WHERE symbol LIKE ? "
+                "ORDER BY date DESC LIMIT 1",
+                conn2, params=[f"%{underlying_symbol}%"]
+            )
+            if not etf_df.empty:
+                etf_base = float(etf_df.iloc[0]['price'])
+        if etf_base > 0 and nav is not None and nav > 0 and position is not None and position > 0 and fx is not None:  # [AI-2026-08-07] guard None
+            return (etf_base * fx) / (nav * position)
+        return None  # [AI-2026-08-07] SUPREME：推算所需数据不全，禁止 1.0 假常量，缺失即 None 显 --
+    finally:
+        conn2.close()
+
+
 @app.post("/api/private/lazy_place_order")
 async def lazy_place_order(request: Request):
     """
@@ -1571,51 +1712,10 @@ async def lazy_place_order(request: Request):
         # 从 fund_daily_factors 获取 hedge 值（与 Analysis.vue 实时沙盘一致）
         if etf_quantity <= 0 and lof_quantity > 0:
             try:
-                conn2 = db._get_conn()
-                import pandas as pd
-                h_df = pd.read_sql(
-                    "SELECT hedge FROM fund_daily_factors "
-                    "WHERE fund_code=? AND hedge IS NOT NULL AND hedge > 0 "
-                    "ORDER BY date DESC LIMIT 1",
-                    conn2, params=[fund_code]
+                # [AI-2026-09-02] DB 查询放线程，避免同步 SQLite 阻塞 asyncio 事件循环
+                hedge = await asyncio.to_thread(
+                    _resolve_hedge_for_order, fund_code, underlying_symbol
                 )
-                if not h_df.empty:
-                    hedge = float(h_df.iloc[0]['hedge'])
-                else:
-                    # 备用源：动态推算
-                    pos_df = pd.read_sql(
-                        "SELECT position FROM fund_daily_factors "
-                        "WHERE fund_code=? AND position IS NOT NULL ORDER BY date DESC LIMIT 1",
-                        conn2, params=[fund_code]
-                    )
-                    position = float(pos_df.iloc[0]['position']) if not pos_df.empty else None  # [AI-2026-08-07] 缺失即 None
-                    nav_df = pd.read_sql(
-                        "SELECT nav, price FROM unified_fund_history "
-                        "WHERE fund_code=? AND nav>0 ORDER BY date DESC LIMIT 1",
-                        conn2, params=[fund_code]
-                    )
-                    nav = float(nav_df.iloc[0]['nav']) if not nav_df.empty else None  # [AI-2026-08-07] 缺失即 None
-                    fx_df = pd.read_sql(
-                        "SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1", conn2
-                    )
-                    fx = float(fx_df.iloc[0]['usd_cny_mid']) if not fx_df.empty else None  # [AI-2026-08-07] 缺失即 None，禁止 7.25 假常量
-                    # hedge = (ETF基价 * 汇率) / (净值 * 仓位)
-                    # 用 t1 的 etf 收盘价作为基价近似
-                    etf_base = 0.0
-                    if underlying_symbol:
-                        etf_df = pd.read_sql(
-                            "SELECT COALESCE(NULLIF(netvalue, 0), price) as price "
-                            "FROM usa_etf_daily_prices WHERE symbol LIKE ? "
-                            "ORDER BY date DESC LIMIT 1",
-                            conn2, params=[f"%{underlying_symbol}%"]
-                        )
-                        if not etf_df.empty:
-                            etf_base = float(etf_df.iloc[0]['price'])
-                    if etf_base > 0 and nav is not None and nav > 0 and position is not None and position > 0 and fx is not None:  # [AI-2026-08-07] guard None
-                        hedge = (etf_base * fx) / (nav * position)
-                    else:
-                        hedge = None  # [AI-2026-08-07] SUPREME：推算所需数据不全，禁止 1.0 假常量，缺失即 None 显 --
-                conn2.close()
             except Exception:
                 hedge = None  # [AI-2026-08-07] SUPREME：异常也禁止 1.0 假常量
             # 换算：ETF 股数 = LOF 份数 / hedge（与 Analysis.vue l.1123 完全一致）
@@ -2605,34 +2705,46 @@ async def reconnect_futu():
 
 @app.post("/api/system/reconnect_tdx")
 async def reconnect_tdx():
-    """重连通达信 - 使用 reconnect() 方法，试连 3 次"""
+    """重连通达信 - 使用 reconnect() 方法，试连 3 次。
+    [2026-09-02] 同时按需连接通达信交易通道(tqcenter)：点按键才连，启动时不再硬连（与银河QMT按键模式一致）。"""
     try:
+        # [2026-09-02] 交易通道(tqcenter)按需连接：点「通达信」按键才初始化，启动时不连
+        tm = getattr(_smart_ts, 'trade_manager', None) if _smart_ts else None
+        trade_note = ''
+        if tm and hasattr(tm, '_init_tdx'):
+            try:
+                tm._init_tdx()
+                trade_note = '交易通道已就绪' if tm.tdx_available else '交易通道未就绪(请确认通达信交易软件已开并登录)'
+            except Exception as e:
+                trade_note = f'交易通道初始化异常: {e}'
         if market_data_service.realtime_manager:
             rm = market_data_service.realtime_manager
             tdx = rm.active_fetchers.get('tdx')
             if tdx:
                 # 已在 active_fetchers 中，直接 reconnect
                 success, msg = tdx.reconnect()
+                combined = f"{msg} | {trade_note}"
                 if success:
-                    system_status.add_milestone("SUCCESS", msg)
-                    return {"status": "ok", "message": msg}
+                    system_status.add_milestone("SUCCESS", combined)
+                    return {"status": "ok", "message": combined}
                 else:
-                    system_status.add_milestone("WARNING", msg)
-                    return {"status": "error", "message": msg}
+                    system_status.add_milestone("WARNING", combined)
+                    return {"status": "error", "message": combined}
             else:
                 # V10.0 启动时跳过了客户端源，需要新创建实例并注册
                 from arbcore.fetchers.realtime.tdx import TdxRealtimeFetcher
                 tdx = TdxRealtimeFetcher()
                 success, msg = tdx.reconnect()
+                combined = f"{msg} | {trade_note}"
                 if success:
                     rm.active_fetchers['tdx'] = tdx
                     if rm.symbols:
                         tdx.subscribe(rm.symbols)
-                    system_status.add_milestone("SUCCESS", f"通达信 {msg}")
-                    return {"status": "ok", "message": msg}
+                    system_status.add_milestone("SUCCESS", f"通达信 {combined}")
+                    return {"status": "ok", "message": combined}
                 else:
-                    system_status.add_milestone("WARNING", f"通达信 {msg}")
-                    return {"status": "error", "message": msg}
+                    system_status.add_milestone("WARNING", f"通达信 {combined}")
+                    return {"status": "error", "message": combined}
         else:
             system_status.add_milestone("WARNING", "实时行情管理器未启动")
             return {"status": "error", "message": "实时行情管理器未启动"}
@@ -3155,7 +3267,9 @@ async def get_etf_rotation_history(group_id: int):
 
 
 @app.get("/api/silver/ratio")
-async def get_silver_ratio():
+# [AI-2026-09-02] 改为同步 def：函数体内全是同步 DB/网络调用，交给 FastAPI 线程池执行，
+# 避免阻塞 asyncio 事件循环（原 async def 会把整个 uvicorn 一起堵住）。
+def get_silver_ratio():
     """白银比价数据: (AG_settle / 1000 × 31.1035 / USDCNH) / SI_close
     与 Woody stockhistorycn.php 完全一致的公式
     

@@ -1,8 +1,9 @@
 #encoding:gbk
 # =================================================================
-# Test_Yinhe_qmt_ServerV5.py (QMT策略) v5.3.0
-# 日期: 2026-08-15
+# Test_Yinhe_qmt_ServerV5.py v5.4.0
+# Date: 2026-09-03
 # 变更日志:
+#   v5.4.0 (2026-09-03) - QUERY_ORDERS,code 当日委托查询指令(短连接,回传 ORDER_JSON/ORDERS_END); 修复 query_deals 候选API探测bug
 #   v5.3.0 (2026-08-15) - QUERY_DEALS,start[,end] 历史成交查询指令（主线程 get_trade_detail_data，回传 DEAL_JSON/DEAL_ATTRS/DEALS_END）
 #   v5.2.0 (2026-07-17) - DEAL成交广播 + ORDER状态广播 + QUERY_POSITION命令 + position cache
 #   v5.2.1 (2026-07-21) - CANCEL,sysid 外部撤单命令（SmartMonitor 撤单重下用）
@@ -16,7 +17,7 @@
 #   Main thread drain -> passorder (safe, no message bus blocking)
 #   quote_push timer(1s) -> main thread get_full_tick -> broadcast TICK
 #
-# External protocol (v5.3 — [AI-2026-08-15] added QUERY_DEALS history query):
+# External protocol (v5.4 — [AI-2026-09-03] added QUERY_ORDERS active-order query):
 #   BUY,code,volume,price          -> OK\n                        (下单)
 #   SELL,code,volume,price         -> OK\n                        (卖券)
 #   QUERY_TICK,code                -> TICK_RESULT,code,lastPrice,preClose\n
@@ -42,7 +43,7 @@ import time
 import json
 
 # ==================== 版本 ====================
-SERVER_VERSION = '5.3.0 (2026-08-15)'
+SERVER_VERSION = '5.4.0 (2026-09-03)'
 
 # ==================== 共享状态（builtins）====================
 # QMT对每个回调赋予独立命名空间，模块级全局变量在各空间中不同
@@ -104,6 +105,8 @@ def _drain(ContextInfo):
                 _do_cancel(ContextInfo, act)
             elif kind == 'query_deals':
                 _do_query_deals(ContextInfo, act)
+            elif kind == 'query_orders':
+                _do_query_orders(ContextInfo, act)
         except Exception as e:
             print(f"[QMTv5][drain] EXC: {e}")
 
@@ -152,32 +155,17 @@ def _do_query_deals(ContextInfo, act):
             _safe_send(conn, b"DEALS_END\n")
         print("[QMTv5][query_deals] account not ready")
         return
-    # [AI-2026-08-15] probe ContextInfo for available historical-trade query methods (first-round field alignment)
+    # [2026-09-03 PlanA] call QMT standard get_trade_detail_data directly; old probe loop hit
+    # ContextInfo.__getattr__ placeholder (get_tradedatafromerds) which raises on call.
     end = act.get('end') or time.strftime('%Y%m%d')
-    all_get = [a for a in dir(ContextInfo) if a.startswith('get_')]
-    avail = [m for m in ('get_tradedatafromerds', 'get_history_trade', 'get_history_order', 'get_trade_detail_data', 'get_deals', 'query_stock_trades') if hasattr(ContextInfo, m)]
-    if conn:
-        _safe_send(conn, ("DEAL_ATTRS," + json.dumps({'avail': avail, 'all_get': all_get}, ensure_ascii=False) + "\n").encode('utf-8'))
-    details = None
-    last_err = None
-    # try get_history_trade(4 args) first, fall back to get_trade_detail_data(6 args)
-    probes = [
-        ('get_tradedatafromerds', lambda: ContextInfo.get_tradedatafromerds(acc_type, acc, act['start'], end)),
-        ('get_history_trade', lambda: ContextInfo.get_history_trade(acc, acc_type, act['start'], end)),
-        ('get_trade_detail_data', lambda: ContextInfo.get_trade_detail_data(acc, acc_type, 'stock', 'deal', act['start'], end)),
-    ]
-    for name, call in probes:
-        fn = getattr(ContextInfo, name, None)
-        if fn is None:
-            continue
-        try:
-            details = call()
-            print(f"[QMTv5][query_deals] used {name}")
-            break
-        except Exception as e:
-            last_err = f"{name}: {e}"
-            continue
-    if details is None:
+    try:
+        details = ContextInfo.get_trade_detail_data(acc, acc_type, 'stock', 'deal', act['start'], end)
+    except Exception as e:
+        if conn:
+            _safe_send(conn, ("DEALS_ERR," + str(e) + "\n").encode('utf-8'))
+            _safe_send(conn, b"DEALS_END\n")
+        print(f"[QMTv5][query_deals] get_trade_detail_data failed: {e}")
+        return
         if conn:
             _safe_send(conn, ("DEALS_ERR," + (last_err or 'no candidate method on ContextInfo') + "\n").encode('utf-8'))
             _safe_send(conn, b"DEALS_END\n")
@@ -209,6 +197,58 @@ def _do_query_deals(ContextInfo, act):
     if conn:
         _safe_send(conn, b"DEALS_END\n")
     print(f"[QMTv5][query_deals] 回传 {cnt} 笔成交")
+
+def _do_query_orders(ContextInfo, act):
+    """[2026-09-03 PlanA] query today's orders via short connection, replacing long-conn ORDER broadcast.
+    Calls ContextInfo.get_trade_detail_data(acc, acc_type, 'stock', 'order', start, end); streams
+    ORDER_JSON per order (m_strOrderSysID/m_nOrderStatus/m_strInstrumentID/m_nVolume/m_dPrice),
+    ORDER_ATTRS first, ORDERS_END last."""
+    s = _S()
+    conn = act.get('conn')
+    acc = s['account_id']
+    acc_type = s['account_type']
+    if not acc:
+        if conn:
+            _safe_send(conn, b"ORDERS_ERR,account_not_ready\n")
+            _safe_send(conn, b"ORDERS_END\n")
+        print("[QMTv5][query_orders] account not ready")
+        return
+    end = act.get('end') or time.strftime('%Y%m%d')
+    start = act.get('start') or time.strftime('%Y%m%d')
+    try:
+        details = ContextInfo.get_trade_detail_data(acc, acc_type, 'stock', 'order', start, end)
+    except Exception as e:
+        if conn:
+            _safe_send(conn, ("ORDERS_ERR," + str(e) + "\n").encode('utf-8'))
+            _safe_send(conn, b"ORDERS_END\n")
+        print(f"[QMTv5][query_orders] get_trade_detail_data failed: {e}")
+        return
+    if not details:
+        if conn:
+            _safe_send(conn, b"ORDERS_EMPTY\n")
+            _safe_send(conn, b"ORDERS_END\n")
+        print("[QMTv5][query_orders] 无委托记录")
+        return
+    if isinstance(details, dict):
+        details = [details]
+    cnt = 0
+    for d in details:
+        rec = {}
+        if isinstance(d, dict):
+            rec = d
+        else:
+            for a in [x for x in dir(d) if not x.startswith('_')]:
+                try:
+                    rec[a] = getattr(d, a)
+                except Exception:
+                    pass
+        line = "ORDER_JSON," + json.dumps(rec, default=str, ensure_ascii=False) + "\n"
+        if conn:
+            _safe_send(conn, line.encode('utf-8'))
+        cnt += 1
+    if conn:
+        _safe_send(conn, b"ORDERS_END\n")
+    print(f"[QMTv5][query_orders] 回传 {cnt} 笔委托")
 
 # ==================== SOCKET LAYER ====================
 def _safe_send(conn, data):
@@ -313,6 +353,11 @@ def client_handler(conn, addr):
                     start = parts[1].strip().replace('-', '')
                     end = parts[2].strip().replace('-', '') if len(parts) >= 3 and parts[2].strip() else ''
                     _enqueue({'kind': 'query_deals', 'start': start, 'end': end, 'conn': conn})
+
+                elif action == 'QUERY_ORDERS':
+                    # [2026-09-03 PlanA] today's order query (replaces long-conn ORDER broadcast);
+                    # server always queries today, backend filters by code locally.
+                    _enqueue({'kind': 'query_orders', 'start': '', 'end': '', 'conn': conn})
 
                 else:
                     _safe_send(conn, b'UNKNOWN\n')

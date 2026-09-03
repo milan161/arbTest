@@ -849,17 +849,41 @@ class DataFetcher:
                         symbol = line.split('=')[0].split('_')[-1]
                         parts = line.split('"')[1].split(',')
                         if len(parts) >= 11:
-                            # [AI-2026-08-21] 修复: parts[9]=今日结算价(盘中恒为0), parts[10]=昨结算价(=T-1结算价)
-                            # 估值分母需"最新可用结算价(T-1)", 与美股期货 parts[7] 语义一致, 故优先取 parts[10]
-                            # parts[9] 仅在盘后才有值, 且盘中为0会污染 settle, 故作 fallback 而非首选
                             close_price = float(parts[8]) if len(parts) > 8 and parts[8] else None
                             settle_today = float(parts[9]) if len(parts) > 9 and parts[9] else None
-                            settle_yesterday = float(parts[10]) if len(parts) > 10 and parts[10] else None
-                            settle_price = settle_yesterday if settle_yesterday else settle_today
                             volume = int(float(parts[14])) if len(parts) > 14 and parts[14] else None
-                            if close_price or settle_price:
-                                logger.info(f"{symbol} 收盘价: {close_price}, 结算价: {settle_price}")
-                                futures_data.append({"symbol": symbol, "settle": settle_price, "close": close_price, "volume": volume})
+
+                            # [AI-2026-08-31 修复结算价错位（东哥报 8-27/8-28 结算价错）]
+                            # 新浪 nf_AG0 语义：
+                            #   parts[9] = 盘中动态结算均价(VWAP) —— 盘中供主看板/官方估值决策用（走实时链路
+                            #              fetch_ag0_from_sina / 东财 SSE，与本函数无关）；
+                            #              收盘后即当日官方结算价。
+                            #   parts[10] = 昨结算价（上一交易日官方结算价）—— 实时估值分母用，绝不写入本表。
+                            #
+                            # 入库规则（东哥铁律：绝不兜底，缺失就缺失）：
+                            #   1) 盘后（>=15:00 且 A股交易日）：parts[9] 已是当日官方结算价 → 写今天。
+                            #   2) 盘中（<15:00）：当日官方结算价尚未产生，本表不写 AG0（不写 VWAP 冒充
+                            #      结算价，也不写 parts[10] 到任何日期）。
+                            from datetime import datetime as _dt
+                            from arbcore.utils.market_calendar import is_trading_day
+                            now = _dt.now()
+                            after_close = is_trading_day('A_SHARE', now.date()) and (now.hour * 60 + now.minute) >= 900
+
+                            if after_close:
+                                if settle_today and settle_today > 0:
+                                    today_str = now.strftime('%Y-%m-%d')
+                                    futures_data.append({
+                                        "symbol": symbol,
+                                        "settle": settle_today,
+                                        "close": close_price,
+                                        "volume": volume,
+                                        "date": today_str,
+                                    })
+                                    logger.info(f"{symbol} 当日官方结算价: {settle_today} → 写入 {today_str}（盘后）")
+                                else:
+                                    logger.warning(f"{symbol} 盘后 parts[9] 无官方结算价，按铁律不写入 futures_daily")
+                            else:
+                                logger.info(f"{symbol} 盘中(<15:00)无当日官方结算价，本表不写 AG0（VWAP 走实时链路供主看板决策）")
                     except Exception as e:
                         logger.error(f"解析内盘期货行失败 {line}: {e}")
         except Exception as e:

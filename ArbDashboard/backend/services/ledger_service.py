@@ -312,6 +312,15 @@ class LedgerService:
                 for k, v in list(p.items()):
                     if isinstance(v, float) and (v != v or v in (float('inf'), float('-inf'))):
                         p[k] = None
+            # [AI-2026-08-31] 对 OPEN/unfinished 状态给出剩余持仓（已卖出/买平的部分要扣掉）。
+            # V7 导入的符号约定：buy_volume 正，sell_volume 负；short_volume 负，cover_volume 正。
+            for p in pairs:
+                bv = p.get('buy_volume') or 0
+                sv = p.get('sell_volume') or 0
+                p['remaining_lof_volume'] = round(bv + sv, 2)
+                shv = p.get('short_volume') or 0
+                cv = p.get('cover_volume') or 0
+                p['remaining_hedge_volume'] = round(shv + cv, 2)
             # [AI-2026-08-18] a_share_pnl/pnl_usd 由 V7 导入时按明细 G/S 求和落库，查询直接读列；不再动态反算
             for p in pairs:
                 p['us_pnl'] = p.get('pnl_usd')
@@ -832,8 +841,10 @@ class LedgerService:
           - 仅 Closed 落库；OPEN/unfinished 一律 NULL。
         金额归一：V7 G 列(LOF买入总额)习惯写负数，OPEN/unfinished 行取 abs 存正数(与历史一致)；
         Closed 行 G 为净额，不写入 buy_amount。
-        DB 中存在但 V7 不存在的序号（孤儿行）一律保留不动。
-        返回 {inserted, updated, skipped, errors}。
+        导入即全量同步：DB 中存在但 V7 不存在的序号（孤儿行）一律删除，使 DB 严格等于 V7（V7 为唯一真源）。
+        空导入保护：若解析出 0 组则不删任何行，防误导空文件清空账本。
+        QMT 自动记录的无序号(serial_no 为 NULL)行不会被删除。
+        返回 {inserted, updated, skipped, deleted, errors}。
         """
         groups = self._parse_v7_groups(file_path)
         conn = self.db._get_conn()
@@ -854,6 +865,7 @@ class LedgerService:
             updated = 0
             skipped = 0
             errors = []
+            imported_serials = set()  # [2026-09-01] 本次导入的序号集合，供末尾全量同步删孤儿行
             for g in groups:
                 s = g.get('summary')
                 if not s:
@@ -951,6 +963,8 @@ class LedgerService:
                     skipped += 1
                     continue
                 # [2026-08-18] upsert: 以 serial_no 为主键, 已存在则 UPDATE(同步 V7), 不存在则 INSERT
+                # [2026-09-01] 收集本次导入序号，供末尾全量同步删除孤儿行
+                imported_serials.add(serial)
                 now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 existing = conn.execute(
                     "SELECT id FROM arbitrage_pairs WHERE serial_no=?", (serial,)
@@ -987,13 +1001,24 @@ class LedgerService:
                          buy_notes, open_type, close_type, now, now)
                     )
                     inserted += 1
+            # [2026-09-01] 导入即全量同步：删除库里 serial_no 不在本次 V7 的所有行（保留 QMT 自动记录的无序号行）。
+            # 空导入保护：imported_serials 为空（解析出 0 组）则不删，防误导空文件清空账本。
+            deleted = 0
+            if imported_serials:
+                qmarks = ','.join('?' * len(imported_serials))
+                cur = conn.execute(
+                    f"DELETE FROM arbitrage_pairs WHERE serial_no IS NOT NULL AND serial_no != '' AND serial_no NOT IN ({qmarks})",
+                    list(imported_serials)
+                )
+                deleted = cur.rowcount
+                logger.info(f"[2026-09-01] 全量同步删除孤儿行 {deleted} 条（序号不在 V7 中）")
             conn.commit()
             # [AI-2026-08-18] 汇率回填 V7 汇总行 T 列 + N 列公式（用户 V7 为原始账本/核对基准，免手查汇率）
             try:
                 self._write_back_v7(file_path, rates, groups)
             except Exception as e:
                 logger.error(f"[AI-2026-08-18] 写回 V7（T列汇率/N列公式）失败: {e}")
-            return {'inserted': inserted, 'updated': updated, 'skipped': skipped, 'errors': errors}
+            return {'inserted': inserted, 'updated': updated, 'skipped': skipped, 'deleted': deleted, 'errors': errors}
         except Exception as e:
             logger.error(f"导入 v7 失败: {e}")
             raise
@@ -1059,12 +1084,16 @@ class LedgerService:
                     level, msg = 'critical', f"已到可优惠赎回日（{redeem_d.isoformat()} {wd_cn}），请赎回"
                 else:
                     level, msg = 'warning', f"明天（{redeem_d.isoformat()} {wd_cn}）即可优惠赎回"
+                # [AI-2026-08-31] 提醒里用剩余持仓（已卖出/买平要扣掉）
+                remaining_lof = round((p.get('buy_volume') or 0) + (p.get('sell_volume') or 0), 2)
+                remaining_hedge = round((p.get('short_volume') or 0) + (p.get('cover_volume') or 0), 2)
                 open_alerts.append({
                     'id': p.get('id'), 'fund_code': p.get('fund_code'), 'fund_name': p.get('fund_name'),
                     'buy_date': buy_date, 'redeem_date': redeem_d.isoformat(), 'redeem_weekday': wd_cn,
                     'days_left': days_left, 'level': level, 'message': msg,
                     'short_volume': p.get('short_volume'), 'short_price': p.get('short_price'),
                     'buy_volume': p.get('buy_volume'),
+                    'remaining_lof_volume': remaining_lof, 'remaining_hedge_volume': remaining_hedge,
                     'pnl_rmb': p.get('pnl_rmb'), 'pnl_usd': p.get('pnl_usd'),
                 })
             elif status == 'unfinished':

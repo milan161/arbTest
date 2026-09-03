@@ -62,8 +62,13 @@ class DatabaseManager:
         self.init_db()
         
     def _get_conn(self):
+        # [AI-2026-09-02] 不再每个连接执行 PRAGMA journal_mode=WAL：WAL 是数据库级持久属性，
+        # 设一次即永久生效；重复设在模式需变更时抢瞬时排他锁，遇并发写会把调用方（含 asyncio
+        # 主线程）死死卡住 —— loop-watchdog 抓到的 60s 全接口超时即由此而来。
+        # 改为进程内首次连接时确保一次（见 managers.base.ensure_wal_once）。
+        from .managers.base import ensure_wal_once
+        ensure_wal_once(self.db_path)
         conn = sqlite3.connect(self.db_path, timeout=15.0)
-        conn.execute('PRAGMA journal_mode=WAL;')
         return conn
     
     def init_db(self):
@@ -132,7 +137,7 @@ class DatabaseManager:
                 initial_sources = [
                     ('realtime_market', 'tdx', 1, 1, '{"desc": "通达信内存直连"}'),
                     ('realtime_market', 'guojin', 2, 1, '{"desc": "国金QMT (xtquant)"}'),
-                    ('realtime_market', 'galaxy', 3, 1, '{"desc": "银河QMT (Socket)"}'),
+                    ('realtime_market', 'tencent', 3, 1, '{"desc": "腾讯财经"}'),
                     ('realtime_market', 'sina', 4, 1, '{"desc": "新浪财经轮询"}')
                 ]
                 conn.executemany('''

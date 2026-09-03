@@ -69,6 +69,25 @@ export function useValuationCalculator() {
   /** 是否为白银基金 */
   const isSilver = computed(() => fundCode.value === '161226')
 
+  /** [AI-2026-08-28] 白银参考估值: NAV(T-2) × (AG0实时价 / AG0昨结算) */
+  const ag0Val = computed(() => {
+    if (!isSilver.value) return 0
+    const bd = meta.value?.base_data || {}
+    const fq = meta.value?.future_quote as any
+    const nav = parseFloat(bd.nav) || 0
+    const agPrice = parseFloat(fq?.price || fq?.bid || 0)
+    const agSettle = parseFloat(fq?.settlement || fq?.ask || 0)
+    if (nav <= 0 || agPrice <= 0 || agSettle <= 0) return 0
+    return nav * (agPrice / agSettle)
+  })
+
+  /** [AI-2026-08-28] 白银溢价率 */
+  const ag0Premium = computed(() => {
+    if (!isSilver.value) return 0
+    if (ag0Val.value <= 0 || simLofPrice.value <= 0) return 0
+    return (simLofPrice.value / ag0Val.value - 1) * 100
+  })
+
   /** [AI-2026-07-29] 是否为 QDII日本基金（纯期货估值，无需ETF/NKY盘口）
    *  改读 category（业务分类），与 valuation_method 估值词表(etf/basket/index)解耦，单一真相源 */
   const isQDIIJapan = computed(() => {
@@ -666,6 +685,8 @@ export function useValuationCalculator() {
     isCashManagement,
     isComplexCategory,
     isSilver,
+    ag0Val,
+    ag0Premium,
     isQDIIJapan,
     positionRatio,
     uniqueValuationSymbols,

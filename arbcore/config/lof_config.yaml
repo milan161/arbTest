@@ -1200,7 +1200,7 @@ funds:
   name: 国瑞白银期货
   category: 白银
   trade_etf: ''
-  trade_future: 沪银Ag
+  trade_future: AG0
   holdings:
     equity_ratio: 100.0
     cash_ratio: 0.0
@@ -1230,7 +1230,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160322'
@@ -1290,7 +1289,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501303'
@@ -1434,7 +1432,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161831'
@@ -1494,7 +1491,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501301'
@@ -1694,7 +1690,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '162711'
@@ -1727,7 +1722,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '163113'
@@ -1760,7 +1754,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161811'
@@ -1793,7 +1786,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160615'
@@ -1826,7 +1818,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '162509'
@@ -1859,7 +1850,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '511880'
@@ -1937,7 +1927,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161025'
@@ -1964,7 +1953,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501048'
@@ -1991,7 +1979,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '165522'
@@ -2018,7 +2005,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161029'
@@ -2045,7 +2031,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '165511'
@@ -2072,7 +2057,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '502056'
@@ -2099,7 +2083,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161716'
@@ -2145,7 +2128,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501089'
@@ -2172,7 +2154,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501050'
@@ -2199,7 +2180,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161812'
@@ -2226,7 +2206,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501227'
@@ -2253,7 +2232,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161227'
@@ -2280,7 +2258,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '163109'
@@ -2307,7 +2284,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161032'
@@ -2334,7 +2310,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501043'
@@ -2361,7 +2336,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161715'
@@ -2388,7 +2362,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161631'
@@ -2415,7 +2388,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160225'
@@ -2442,7 +2414,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160643'
@@ -2469,7 +2440,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501007'
@@ -2496,7 +2466,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501058'
@@ -2523,7 +2492,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160925'
@@ -2550,7 +2518,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '163407'
@@ -2577,7 +2544,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '162412'
@@ -2604,7 +2570,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '501057'
@@ -2631,7 +2596,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160639'
@@ -2658,7 +2622,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161217'
@@ -2685,7 +2648,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '502000'
@@ -2712,7 +2674,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '160632'
@@ -2739,7 +2700,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161726'
@@ -2766,7 +2726,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '167301'
@@ -2793,7 +2752,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161725'
@@ -2820,7 +2778,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '161031'
@@ -2847,7 +2804,6 @@ funds:
     source_priority:
     - tdx
     - guojin
-    - galaxy
     - tencent
     - sina
 - code: '159561'
@@ -3414,6 +3370,5 @@ ib_core_symbols:
 realtime_source_priority:
 - tdx
 - guojin
-- galaxy
 - sina
 - tencent

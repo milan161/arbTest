@@ -74,8 +74,10 @@ class RealtimeMarketManager:
             full_config = self.db_manager.get_data_source_config("realtime_market")
 
         if not full_config:
-            # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。新浪优先、腾讯降级备用源。
-            priority_names = self.priority_list or _load_realtime_priority() or ["tdx", "guojin", "galaxy", "sina", "tencent"]
+            # [AI-2026-09-02] 东哥重新拍板：腾讯优先、新浪降级备用源（推翻 2026-08-04 新浪优先口径）。
+            # 与 data_source_config 表 realtime_market 优先级（tencent=3 < sina=4）保持一致，
+            # 避免 DB 清空/新库时 fallback 回退到新浪优先。
+            priority_names = self.priority_list or _load_realtime_priority() or ["tdx", "guojin", "tencent", "sina"]
             full_config = [{"source_name": name, "config_json": "{}"} for name in priority_names]
             self.priority_list = priority_names
         else:
@@ -106,7 +108,8 @@ class RealtimeMarketManager:
             "tdx": "通达信",
             "guojin": "国金QMT",
             "galaxy": "银河QMT",
-            "sina": "新浪财经"
+            "sina": "新浪财经",
+            "tencent": "腾讯财经"
         }
 
         # [AI-2026-08-20 东哥口径] 客户端类数据源（tdx/guojin/galaxy）：本地模式启动
@@ -204,7 +207,10 @@ class RealtimeMarketManager:
 
     def subscribe(self, symbols: List[str]):
         self.symbols = list(set(self.symbols + symbols))
-        for fetcher in self.active_fetchers.values():
+        for name, fetcher in self.active_fetchers.items():
+            # [Y方案 2026-09-03] galaxy 仅下单通道，绝不订阅行情（避免与交易冲突、NKY 等被误发 QMT）
+            if name == 'galaxy':
+                continue
             fetcher.subscribe(symbols)
 
     def set_on_update(self, callback):
@@ -216,8 +222,8 @@ class RealtimeMarketManager:
 
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """按照优先级从活跃源中获取行情，异常熔断保护"""
-        # [AI-2026-08-04] 东哥拍板：新浪优先、腾讯降级备用源（与 start() 默认一致）。
-        for source_name in (self.priority_list or ["tdx", "guojin", "galaxy", "sina", "tencent"]):
+        # [AI-2026-09-02] 东哥重新拍板：腾讯优先、新浪降级备用源（与 start() 默认及 DB 配置一致）
+        for source_name in (self.priority_list or ["tdx", "guojin", "tencent", "sina"]):
             if source_name in self.active_fetchers:
                 try:
                     quote = self.active_fetchers[source_name].get_quote(symbol)

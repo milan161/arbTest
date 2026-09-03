@@ -35,7 +35,7 @@
           >
             <div class="alert-body">
               <span class="alert-msg">{{ a.message }}</span>
-              <span class="alert-meta">赎回 LOF {{ a.buy_volume }} 份 ｜ 买平 ETF {{ a.short_volume }} 股</span>
+              <span class="alert-meta">赎回 LOF {{ a.remaining_lof_volume != null ? a.remaining_lof_volume : a.buy_volume }} 份 ｜ 买平 ETF {{ a.remaining_hedge_volume != null ? a.remaining_hedge_volume : a.short_volume }} 股</span>
             </div>
           </n-alert>
           <div v-if="alerts.open_count === 0" class="alert-empty">暂无即将赎回</div>
@@ -777,7 +777,11 @@ const pairColumns = [
   { title: '开仓价', key: 'buy_price', width: 48, align: 'center' as const,
     render: (r: any) => fmt(r.buy_price, 3) },
   { title: '数量', key: 'buy_volume', width: 48, align: 'center' as const,
-    render: (r: any) => r.buy_volume ? h('span', { style: 'font-size:11px' }, Number(r.buy_volume)) : '-' },
+    render: (r: any) => {
+      // [AI-2026-08-31] 未结项显示剩余 LOF 份数（已卖出要扣掉）；已结项仍显示原始买入量。
+      const v = (r.status !== 'Closed' && r.remaining_lof_volume != null) ? r.remaining_lof_volume : r.buy_volume
+      return (v !== null && v !== undefined) ? h('span', { style: 'font-size:11px' }, Number(v)) : '-'
+    } },
   { title: twoLineTitle('金额', '(RMB)'), key: 'buy_amount', width: 68, align: 'right' as const,
     render: (r: any) => h(NText, { style: (r.buy_amount ? 'color:#e53e3e;' : '') + 'white-space:nowrap' }, { default: () => fmt(r.buy_amount, 0) }) },
   // A股平仓
@@ -793,7 +797,11 @@ const pairColumns = [
   { title: '空单价', key: 'short_price', width: 58, align: 'center' as const,
     render: (r: any) => r.short_price ? `$${fmt(r.short_price)}` : '-' },
   { title: '空单量', key: 'short_volume', width: 44, align: 'center' as const,
-    render: (r: any) => r.short_volume || '-' },
+    render: (r: any) => {
+      // [AI-2026-08-31] 未结项显示剩余对冲股数（已买平要扣掉）；已结项仍显示原始做空量。
+      const v = (r.status !== 'Closed' && r.remaining_hedge_volume != null) ? r.remaining_hedge_volume : r.short_volume
+      return (v !== null && v !== undefined) ? Number(v) : '-'
+    } },
   { title: twoLineTitle('空金额', '(USD)'), key: 'short_amount', width: 66, align: 'right' as const,
     render: (r: any) => h('span', { style: 'white-space:nowrap' }, fmt(r.short_amount)) },
   // 美股买平

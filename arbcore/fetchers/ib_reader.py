@@ -74,7 +74,11 @@ def _ib_thread_excepthook(args):
                 inst.disconnect_from_ib()
             except Exception:
                 pass
-            inst.connected = False  # 让 _polling_loop 的未连接分支发起重连
+            # [AI-2026-08-28] 关键修复：设置防抖标志，防止 _polling_loop 立即重连造成双重 socket
+            # disconnect_from_ib 内部已调 time.sleep(1)，但 polling_loop 可能还在同一 tick 内运行
+            inst._except_hook_set_disconnect = True
+            inst.connected = False
+            logger.info("[IB] EReader 异常已处理，等待 _polling_loop 下一轮重试")
         return
     # 其他线程异常按原样上报，不掩盖未知问题
     if _ORIG_THREAD_EXCEPTHOOK:
@@ -396,6 +400,12 @@ class IBReader(EWrapper, EClient):
                 self.symbols = ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
             
             if not self.connected:
+                # [AI-2026-08-28] 防抖：excepthook 刚处理完 disconnect，等待 2s 让旧 socket 释放
+                # 否则 polling_loop 立即重连会创建双重 socket，导致 Error 326 重连失败
+                if getattr(self, '_except_hook_set_disconnect', False):
+                    self._except_hook_set_disconnect = False
+                    logger.info("[IB] excepthook 已处理 disconnect，等待 2s 防抖后重试...")
+                    time.sleep(2)
                 print(f"[IBReader] 未连接，等待 {self.retry_delay:.1f}s 后重试...")
                 if self.connect_to_ib():
                     self.retry_delay = 1.0
@@ -573,22 +583,37 @@ class IBReader(EWrapper, EClient):
             return
             
         if errorCode in [2103, 2105]:
-            print(f"[IBReader] [WARNING] IB数据农场连接断开 (代码 {errorCode}): {errorString} - 这将导致长连接无数据！")
+            logger.warning(f"[IB] IB数据农场连接断开 (代码 {errorCode}): {errorString} - 这将导致长连接无数据！")
             return
-            
+
         # 智能诊断：拦截典型的“无行情订阅权限”错误码
         if errorCode in [354, 10090, 10167, 10168]:
-            print(f"[IBReader] [INFO] 提示 (代码 {errorCode}): 您的账号无美股实时行情订阅权限，将无法显示实时盘口（前端显示等待数据），需检查 IB 行情订阅。")
+            logger.info(f"[IB] 提示 (代码 {errorCode}): 您的账号无美股实时行情订阅权限，将无法显示实时盘口（前端显示等待数据），需检查 IB 行情订阅。")
             return
-            
-        print(f"[IBReader] [WARNING] Error {errorCode} (ReqId: {reqId}): {errorString}")
-        
+
+        # [AI-2026-09-03] 🔴 关键修复：1101/1102 = "连接已恢复"，是好消息，绝不能当故障处理！
+        # 原实现把 1101/1102 与 504/1100 一并判为故障 → disconnect_from_ib()，造成死循环：
+        #   断连重连成功 → Gateway 广播 1101/1102「已恢复」 → 程序又把自己拆掉 → 再重连 → 再拆…
+        # 实测表现：日志里「2104 农场就绪」后 62ms 立刻「已断开」，12 个订阅永远来不及生效
+        #   → 主看板美股盘口整列空。独立探针(不处理这些码)却能正常收到 tick，即为此证。
+        if errorCode in [1101, 1102]:
+            logger.info(f"[IB] 收到连接已恢复信号({errorCode})，保持订阅不变")
+            if not self.connected:
+                self.connected = True
+            return
+
+        # [AI-2026-09-03] 错误码必须进日志：原实现用 print 输出，不进日志文件，
+        # 导致每次断连都只能看到「已断开」而看不到原因（诊断盲区），无法定性。
+        logger.warning(f"[IB] Error {errorCode} (ReqId: {reqId}): {errorString}")
+
         # 🛡️ 核心修复：如果一个同步请求(如历史数据)发生错误，必须设置其Event，否则主线程会卡死
         if reqId in self.req_events:
-            print(f"[IBReader] [INFO] 提示: 请求 {reqId} 发生错误，已解除其等待锁。")
+            logger.info(f"[IB] 提示: 请求 {reqId} 发生错误，已解除其等待锁。")
             self.req_events[reqId].set()
 
-        if errorCode in [504, 1100, 1101, 1102]:
+        # 只有真·断连才重连：504=Not connected(请求发到死socket)、1100=与TWS连接丢失
+        if errorCode in [504, 1100]:
+            logger.warning(f"[IB] 检测到连接中断(代码 {errorCode})，触发自愈重连")
             self.connected = False
             self.disconnect_from_ib()
             self.mkt_req_ids.clear()

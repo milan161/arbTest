@@ -1423,8 +1423,10 @@ class DailyUpdater(BaseApp):
                 settle = f_data.get('settle')
                 close_price = f_data.get('close')
                 volume = f_data.get('volume')
+                # [AI-2026-08-31] AG0 昨结算价自带归属日期（上一交易日），不得写成今天
+                row_date = f_data.get('date') or today_str
                 if symbol and (settle is not None or close_price is not None):
-                    self.db.upsert_futures_daily(date=today_str, symbol=symbol, settle_price=settle, close_price=close_price, volume=volume)
+                    self.db.upsert_futures_daily(date=row_date, symbol=symbol, settle_price=settle, close_price=close_price, volume=volume)
             self.db.mark_access_synced(today_str, source='futures_data')
             self.logger.info(f"✅ [本地备用源] 今日期货数据获取完成！")
         else:
@@ -1862,6 +1864,12 @@ class DailyUpdater(BaseApp):
             self.logger.info("🚀 [收盘后更新] 仅写当日官方收盘价 + 净值 + 静态估值（公共API，不依赖VPS）...")
             self._step4_fetch_prices()
             self.step4_fetch_lof_market()
+            # [AI-2026-08-31] AG0 官方结算价**只在盘后产生**：盘中(<15:00) futures_daily 不写 AG0
+            # （VWAP 不能当结算价，也不拿昨结算兜底）。故收盘后必须再抓一次期货数据，
+            # 否则当天的官方结算价永远写不进 futures_daily，白银静态估值会长期缺失。
+            # 清掉早晨的 futures_data 标记，防止 step8 被"今日已同步"跳过。
+            self.db.remove_access_sync_status(today_str, 'futures_data')
+            self.step8_fetch_sina_futures_from_vps()
             self._step10_calculate_static_valuation()
             self.step11_simple_static_valuation(recent_days=5)
             self.step12_silver_static_valuation(recent_days=5)

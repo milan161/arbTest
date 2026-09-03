@@ -443,6 +443,67 @@
         </div>
       </div>
 
+      <!-- [AI-2026-08-28] 白银基金专用面板: AG0 盘口 + 参考估值 -->
+      <div
+        v-if="calc.isSilver.value"
+        style="background: #f0fdf4; padding: 8px 14px; border-radius: 8px; border: 1px solid #86efac; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05)"
+      >
+        <div style="display: flex; flex-direction: column; gap: 6px; width: 100%">
+          <!-- Row 1: AG0 盘口数据 -->
+          <div style="display: flex; align-items: center; gap: 12px; width: 100%">
+            <div style="width: 160px; flex-shrink: 0">
+              <span style="font-size: 15px; font-weight: bold; color: #059669">AG0 沪银盘口</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+              <span style="font-size: 12px; color: #64748b">实时价:</span>
+              <span style="font-family:monospace;font-weight:bold;color:#059669;font-size:14px;">
+                {{ calc.meta.value?.future_quote?.price ? Number(calc.meta.value.future_quote.price).toFixed(0) : '-' }}
+              </span>
+              <span style="font-size: 12px; color: #64748b">昨结算:</span>
+              <span style="font-family:monospace;font-weight:bold;color:#059669;font-size:14px;">
+                {{ calc.meta.value?.future_quote?.settlement ? Number(calc.meta.value.future_quote.settlement).toFixed(0) : '-' }}
+              </span>
+              <span style="font-size: 12px; color: #64748b">VWAP:</span>
+              <span style="font-family:monospace;font-weight:bold;color:#059669;font-size:14px;">
+                {{ calc.meta.value?.future_quote?.vwap ? Number(calc.meta.value.future_quote.vwap).toFixed(0) : '-' }}
+              </span>
+              <span style="font-size: 11px; color: #94a3b8; margin-left: 4px">
+                ({{ calc.meta.value?.future_quote?.source || '等待数据' }})
+              </span>
+            </div>
+          </div>
+          <!-- Row 2: LOF价 + 参考估值 + 溢价 -->
+          <div style="display: flex; align-items: center; gap: 12px; width: 100%">
+            <div style="width: 160px; flex-shrink: 0"></div>
+            <div style="display: flex; align-items: center; gap: 6px">
+              <span style="color: #555; font-size: 14px; font-weight: bold">LOF价:</span>
+              <input
+                type="number"
+                :value="calc.simLofPrice.value"
+                @input="onSimLofPriceInput"
+                step="0.001"
+                style="width: 70px; padding: 2px 4px; font-size: 13px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px; color: #d32f2f; font-weight: bold; text-align: center"
+              />
+            </div>
+            <div style="width: 140px; flex-shrink: 0; display: flex; align-items: center; gap: 6px">
+              <span style="color: #555; font-size: 14px; font-weight: bold">参考估值:</span>
+              <span style="font-size: 18px; font-weight: bold; color: #15803d; font-family: monospace">
+                {{ calc.ag0Val.value > 0 ? calc.ag0Val.value.toFixed(4) : '-' }}
+              </span>
+            </div>
+            <div style="width: 140px; flex-shrink: 0; display: flex; align-items: center; gap: 6px">
+              <span style="color: #555; font-size: 14px; font-weight: bold">溢价:</span>
+              <span :style="{ fontSize: '16px', fontWeight: 'bold', fontFamily: 'monospace', color: calc.ag0Premium.value > 0 ? '#d32f2f' : '#388e3c' }">
+                {{ calc.ag0Premium.value > 0 ? (calc.ag0Premium.value > 0 ? '+' : '') + calc.ag0Premium.value.toFixed(3) + '%' : '-' }}
+              </span>
+            </div>
+            <div style="flex: 1; font-size: 11px; color: #888">
+              公式: NAV × (AG0实时价 / AG0昨结算)
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Panel 2: 期货校准估值 + 对冲数量 -->
       <div
         v-if="calc.showFutCalib.value && calc.isComplexCategory.value"

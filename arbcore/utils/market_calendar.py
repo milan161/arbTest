@@ -320,3 +320,27 @@ def filter_closed_markets(symbols: list, d: date = None) -> (list, list):
         else:
             closed.extend(syms)
     return closed, opened
+
+
+# [AI-2026-08-31] 上一交易日 / 下一交易日（A_SHARE 日历，与沪银 AG0 交易日历一致）
+# 用途：新浪 nf_AG0 的 parts[10] 是"昨结算价"= 上一交易日的官方结算价，
+#       入库时必须落到"上一交易日"而不是今天，否则 futures_daily.settle_price
+#       整列向前错一位（历史弹窗"结算价"列显示的是前一天的数字）。
+def get_previous_trading_day(d: date = None) -> date:
+    """返回早于 d 的最近一个 A 股交易日（d 为 None 时以今天为基准，不含今天本身）。"""
+    if d is None:
+        d = date.today()
+    d = d - timedelta(days=1)
+    while not is_trading_day('A_SHARE', d):
+        d = d - timedelta(days=1)
+    return d
+
+
+def get_next_trading_day(d: date = None) -> date:
+    """返回晚于 d 的最近一个 A 股交易日（d 为 None 时以今天为基准，不含今天本身）。"""
+    if d is None:
+        d = date.today()
+    d = d + timedelta(days=1)
+    while not is_trading_day('A_SHARE', d):
+        d = d + timedelta(days=1)
+    return d

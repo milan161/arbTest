@@ -490,117 +490,6 @@ def _get_ag0_future_quote():
         pass
     return quote
 
-# [V10.2] 指数涨跌幅日内缓存：同指数同日只查一次新浪
-_index_pct_cache = {}  # "HSCEI_2026-06-18" -> float
-
-_index_pct_cache_time = {}
-def get_index_change_percent(symbol: str) -> Optional[float]:
-    """
-    [新浪/腾讯指数极速接口] 直接拉取指数日内涨跌幅百分比
-    无感对接国内指数（000xxx, 399xxx）、恒生指数HSI等，无需频繁维护静态基准价
-    """
-    import requests
-    headers_sina = {
-        'Referer': 'https://finance.sina.com.cn/',
-        'Accept': 'text/event-stream'  # [V7.2] 借鉴长连接头部以提高稳定性
-    }
-    headers_tencent = {
-        'Referer': 'https://finance.qq.com/',
-        'User-Agent': 'Mozilla/5.0'
-    }
-    
-    clean_sym = symbol.strip().upper()
-    if clean_sym.endswith('.CSI'):
-        clean_sym = clean_sym[:-4]
-    
-    global _index_pct_cache, _index_pct_cache_time
-    import time
-    cache_key = clean_sym
-    now_ts = time.time()
-    if cache_key in _index_pct_cache_time and now_ts - _index_pct_cache_time[cache_key] < 60 and cache_key in _index_pct_cache:
-        return _index_pct_cache[cache_key]
-
-    result = None
-    try:
-        # 1. 港股常见指数 - 必须先检查更长的字符串 HSTECH/HSCEI，再检查 HSI
-        if 'HSTECH' in clean_sym:
-            _throttle_sina_request()
-            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkHSTECH", headers=headers_sina, timeout=3.0)
-            if r.status_code == 200 and '="' in r.text:
-                parts = r.text.split('"')[1].split(',')
-                if len(parts) >= 9:
-                    logger.info(f"[INDEX-SINA] 获取港股指数 HSTECH 涨跌幅: {parts[8]}%")
-                    result = float(parts[8])
-        elif 'HSCEI' in clean_sym:
-            _throttle_sina_request()
-            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkHSCEI", headers=headers_sina, timeout=3.0)
-            if r.status_code == 200 and '="' in r.text:
-                parts = r.text.split('"')[1].split(',')
-                if len(parts) >= 9:
-                    logger.info(f"[INDEX-SINA] 获取港股指数 HSCEI 涨跌幅: {parts[8]}%")
-                    result = float(parts[8])
-        elif 'HSI' in clean_sym:
-            _throttle_sina_request()
-            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkHSI", headers=headers_sina, timeout=3.0)
-            if r.status_code == 200 and '="' in r.text:
-                parts = r.text.split('"')[1].split(',')
-                if len(parts) >= 9:
-                    logger.info(f"[INDEX-SINA] 获取港股指数 HSI 涨跌幅: {parts[8]}%")
-                    result = float(parts[8])
-        elif 'CES300' in clean_sym or 'CES300.HI' in clean_sym:
-            _throttle_sina_request()
-            r = _sina_session.get("http://hq.sinajs.cn/list=rt_hkCES300", headers=headers_sina, timeout=3.0)
-            if r.status_code == 200 and '="' in r.text:
-                parts = r.text.split('"')[1].split(',')
-                if len(parts) >= 9:
-                    logger.info(f"[INDEX-SINA] 获取港股指数 CES300 涨跌幅: {parts[8]}%")
-                    result = float(parts[8])
-                    
-        # [AI-2026-07-09] 日经225(N225) — 新浪全球指数接口 int_nikkei
-        elif clean_sym in ('N225', 'NKY', 'NIKKEI'):
-            _throttle_sina_request()
-            r = _sina_session.get("http://hq.sinajs.cn/list=int_nikkei", headers=headers_sina, timeout=3.0)
-            if r.status_code == 200 and '="' in r.text:
-                parts = r.text.split('"')[1].split(',')
-                if len(parts) >= 4:
-                    # 新浪全球指数格式: 名称,当前价,涨跌额,涨跌幅%
-                    result = float(parts[3])
-                    logger.info(f"[INDEX-SINA] 获取日经225 {clean_sym} 涨跌幅: {result}%")
-                    
-        # 2. A股指数 (6位代码)
-        elif clean_sym.isdigit() and len(clean_sym) == 6:
-            # 优先尝试新浪接口
-            if clean_sym.startswith('399') or clean_sym.startswith('159') or clean_sym.startswith('3999'):
-                url = f"http://hq.sinajs.cn/list=s_sz{clean_sym}"
-            else:
-                url = f"http://hq.sinajs.cn/list=s_sh{clean_sym}"
-                
-            r = _sina_session.get(url, headers=headers_sina, timeout=3.0)
-            if r.status_code == 200 and '="' in r.text:
-                parts = r.text.split('"')[1].split(',')
-                if len(parts) >= 4 and float(parts[3]) != 0.0:
-                    logger.info(f"[INDEX-SINA] 获取A股指数 {clean_sym} 涨跌幅: {parts[3]}%")
-                    result = float(parts[3])
-                    
-            # [V7.2] 新浪优先、腾讯作为备用源（完美解决新浪没有中证指数的问题）
-            if result == 0.0:
-                prefix = 'sz' if clean_sym.startswith(('399', '159')) else 'sh'
-                url_tencent = f"http://qt.gtimg.cn/q={prefix}{clean_sym}"
-                r_tc = requests.get(url_tencent, headers=headers_tencent, timeout=1.5)
-                if r_tc.status_code == 200 and 'v_' in r_tc.text:
-                    tc_parts = r_tc.text.split('"')[1].split('~')
-                    if len(tc_parts) >= 33:
-                        # [AI-2026-08-07] 腾讯备用源补取属正常行为，降级DEBUG避免刷屏（数据逻辑不变）
-                        logger.debug(f"[INDEX-TENCENT] 备用源获取指数 {clean_sym} 涨跌幅: {tc_parts[32]}%")
-                        result = float(tc_parts[32])
-    except Exception as e:
-        logger.debug(f"Index fetch failed for {symbol}: {e}")
-    # 写入日内缓存
-    if result is not None:
-        _index_pct_cache[cache_key] = result
-        _index_pct_cache_time[cache_key] = time.time()
-    return result
-
 _prefetch_cache = {}
 _prefetch_cache_time = 0
 
@@ -896,7 +785,8 @@ def prefetch_index_changes(symbols: List[str], conn=None) -> Dict[str, Dict[str,
             logger.warning(f"写入N225历史数据异常: {e}")
 
     # ====== Step 3: 合并并缓存 ======
-    logger.info(
+    # [AI-2026-09-02] 首屏卡顿排查已收口（Plan C），埋点降 DEBUG：INFO 不再刷屏，排查时调级别即可复现
+    logger.debug(
         "[INDEX-PROFILE] syms=%d db_backup=%dms api_fetch=%dms total=%dms",
         len(symbols),
         int((_t_db_end - _t_db_start) * 1000),
@@ -1013,9 +903,32 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
             sina_to_syms.setdefault(sina_req, []).append(sym)
 
     res = {}
-    
-    # [AI-2026-08-04] 东哥拍板：A股实时行情非腾讯 qt.gtimg 实时。改为新浪优先、腾讯作为备用源。
-    # 2. 优先从新浪获取（res 为空时全量尝试）
+
+    # [AI-2026-09-02] 东哥重新拍板：指数抓取改腾讯优先（qt.gtimg 实测稳定 94~250ms，
+    # 新浪批量走 3s 节流窗口 p50=3s、38% 超 5s），新浪降级为备用源，仅补腾讯未拿到的指数。
+    # （推翻 2026-08-04 "新浪优先"口径，与 data_source_config 表 realtime_market 优先级一致）
+    # 1. 优先从腾讯获取
+    _t_tc_start = time.perf_counter()  # [埋点A]
+    if tencent_requests:
+        url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
+        try:
+            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
+            if r_tc.status_code == 200:
+                for line in r_tc.text.split(';'):
+                    if 'v_' not in line or '=' not in line: continue
+                    data_str = line.split('=')[1].strip(' "')
+                    tc_parts = data_str.split('~')
+                    if len(tc_parts) >= 33:
+                        code = tc_parts[2]
+                        if code in tc_to_syms:
+                            for original_sym in tc_to_syms[code]:
+                                if original_sym not in res:
+                                    res[original_sym] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
+        except Exception as e:
+            logger.warning(f"预取腾讯指数异常: {e}")
+    _t_tc_end = time.perf_counter()  # [埋点A]
+
+    # 2. 新浪备用源补充（仅请求腾讯未拿到的；经 sina_cache 3s 节流批量合并）
     missing_sina_reqs = set()
     for ret_code, syms in sina_to_syms.items():
         if any(s not in res for s in syms):
@@ -1063,7 +976,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                             for original_sym in sina_to_syms[code]:
                                 if original_sym not in res:
                                     res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                    logger.debug(f"[INDEX-SINA-US] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                    logger.debug(f"[INDEX-SINA-US] 备用源获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
                 elif var_name.startswith('var hq_str_int_'):
                     # [AI-2026-07-09] 新浪全球指数格式（日经225等）: var hq_str_int_nikkei="名称,价格,涨跌,涨跌幅%,日期,..."
                     code = var_name.replace('var hq_str_', '')
@@ -1072,34 +985,10 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
                             if original_sym not in res:
                                 if len(parts) >= 4:
                                     res[original_sym] = {"price": float(parts[1]), "pct": float(parts[3])}
-                                    logger.debug(f"[INDEX-SINA-GLOBAL] 获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
+                                    logger.debug(f"[INDEX-SINA-GLOBAL] 备用源获取指数 {original_sym} 价格: {parts[1]} 涨跌幅: {parts[3]}%")
         except Exception as e:
             logger.warning(f"预取新浪指数异常: {e}")
     _t_sina_end = time.perf_counter()  # [埋点A]
-
-    # [AI-2026-08-04] 新浪优先后，腾讯仅补充新浪未拿到的指数（非主力源）
-    # 1. 腾讯备用源补充
-    _t_tc_start = time.perf_counter()  # [埋点A]
-    if tencent_requests:
-        url_tc = f"http://qt.gtimg.cn/q={','.join(tencent_requests)}"
-        try:
-            r_tc = requests.get(url_tc, headers=headers_tencent, timeout=2.0)
-            if r_tc.status_code == 200:
-                for line in r_tc.text.split(';'):
-                    if 'v_' not in line or '=' not in line: continue
-                    data_str = line.split('=')[1].strip(' "')
-                    tc_parts = data_str.split('~')
-                    if len(tc_parts) >= 33:
-                        code = tc_parts[2]
-                        if code in tc_to_syms:
-                            for original_sym in tc_to_syms[code]:
-                                if original_sym not in res:
-                                    res[original_sym] = {"price": float(tc_parts[3]), "pct": float(tc_parts[32])}
-                            # [AI-2026-08-07] 腾讯备用源补取属正常行为，降级DEBUG避免刷屏（数据逻辑不变）
-                            logger.debug(f"[INDEX-TENCENT] 备用源获取指数 {code} 价格: {tc_parts[3]} 涨跌幅: {tc_parts[32]}%")
-        except Exception as e:
-            logger.warning(f"预取腾讯指数异常: {e}")
-    _t_tc_end = time.perf_counter()  # [埋点A]
 
     # [V10.12] 3. 东财API备用源：港股/CSI非标指数（腾讯/新浪不识别的）
     # 东财 secid 映射规则：
@@ -1183,7 +1072,7 @@ def _fetch_realtime_indices(symbols: List[str], now) -> Dict[str, Dict[str, floa
         if sym not in res:
             logger.debug(f"[INDEX-DEBUG] 指数行情完全缺失: {sym} (未匹配到腾讯/新浪数据)")
 
-    logger.info(
+    logger.debug(
         "[INDEX-API-PROFILE] sina=%dms tencent=%dms eastmoney=%dms",
         int((_t_sina_end - _t_sina_start) * 1000),
         int((_t_tc_end - _t_tc_start) * 1000),
@@ -1840,34 +1729,31 @@ class FundService:
                             except:
                                 pass
 
-                        # [AI-2026-08-21 FIX] 优先级4: SSE/程序1/新浪全部失败 → 回退DB最新收盘价
-                        # 解决DNS失败/SSE未就绪时AG0实时价缺失问题
-                        if ag_future_price <= 0:
-                            try:
-                                _conn = self.db._get_conn()
-                                _row = _conn.execute(
-                                    "SELECT close_price FROM futures_daily WHERE symbol='AG0' AND close_price>0 ORDER BY date DESC LIMIT 1"
-                                ).fetchone()
-                                if _row and _row[0] and float(_row[0]) > 0:
-                                    ag_future_price = float(_row[0])
-                                    logger.debug(f"[{code}] AG0 实时价为0，回退数据库最新收盘={ag_future_price}")
-                            except Exception as _e:
-                                logger.debug(f"[{code}] AG0 收盘DB回退失败: {_e}")
+                        # [AI-2026-08-31 东哥铁律] 删除原"优先级4：DB最新收盘价兜底实时价"。
+                        # 历史收盘价不是实时价，拿它顶实时价=用旧值掩盖缺失（兜底），违反第一原则。
+                        # SSE / 程序1 / 新浪三路真源都拿不到 → 实时价就是没有，rt_val / static_val 留空。
 
-                        # [AI-2026-08-03] 盘中实时结算价可能为 0（今日结算未产生 / 刚启动流未就绪）→ 回退 futures_daily
-                        # 最近一条非零 AG0 结算价（即上一交易日官方结算价，盘中稳定不变，是"昨结算价"的正确基准；
-                        # 实时流的今日结算价盘中恒为 0，不能当昨结算用）。仅在 SHFE 开盘时段有意义——非开盘时下面守卫会清零。
+                        # [AI-2026-08-03] 实时链路(SSE/新浪)未给出 AG0 昨结算价 → 切 DB 备用源（真值，非兜底）。
+                        # [AI-2026-08-31] futures_daily.settle_price 语义 = **该 date 当天**的官方结算价，
+                        #   "昨结算价" = 上一交易日的结算价，故必须精确取 `date = prev_td`；
+                        #   该日没有就是没有（铁律：绝不向更早日期回溯、绝不用旧值顶替）。
                         if settlement_price <= 0:
                             try:
+                                from arbcore.utils.market_calendar import get_previous_trading_day
+                                _prev_td = get_previous_trading_day().strftime('%Y-%m-%d')
                                 _conn = self.db._get_conn()
                                 _row = _conn.execute(
-                                    "SELECT settle_price FROM futures_daily WHERE symbol='AG0' AND settle_price>0 ORDER BY date DESC LIMIT 1"
+                                    "SELECT settle_price FROM futures_daily WHERE symbol='AG0' "
+                                    "AND date=? AND settle_price>0",
+                                    (_prev_td,)
                                 ).fetchone()
                                 if _row and _row[0] and float(_row[0]) > 0:
                                     settlement_price = float(_row[0])
-                                    logger.debug(f"[{code}] AG0 实时结算价为0，回退数据库昨结算={settlement_price}")
+                                    logger.debug(f"[{code}] AG0 昨结算价实时源缺失，改用DB备用源={settlement_price}（上一交易日 {_prev_td}）")
+                                else:
+                                    logger.debug(f"[{code}] AG0 昨结算价：实时源缺失且DB无 {_prev_td} 结算价，按铁律留空")
                             except Exception as _e:
-                                logger.debug(f"[{code}] AG0 昨结算DB回退失败: {_e}")
+                                logger.debug(f"[{code}] AG0 昨结算价DB备用源读取失败: {_e}")
 
                         # [2026-07-30 FIX] 非交易时段丢弃已取到的价格，避免陈旧收盘价当"实时"
                         if not _ag_session_open:
@@ -2095,7 +1981,8 @@ class FundService:
                             if not metrics.get('rt_val'):
                                 trade_etf = fund_cfg.get('trade_etf', '')
                                 if trade_etf and trade_etf != '-' and self.market_data_service:
-                                    # [V10.9] 跳过指数类符号（HSI/HSTECH等），指数走 get_index_change_percent 路径
+                                    # [V10.9] [AI-2026-09-02 注释修正] 跳过指数类符号（HSI/HSTECH等）。
+                                    # 指数实时涨跌统一走 prefetch_index_changes() 批量预取，不走个股路径。
                                     from arbcore.config.source_routing import get_symbol_source
                                     # [AI-2026-08-05] HSCHK25 等未在 symbol_sources 声明的符号会抛 KeyError
                                     # 非兜底——确实无数据源，跳过实时ETF估值，前端显示 --
@@ -2252,7 +2139,9 @@ class FundService:
                         fund_dict[k] = None
 
                 _vf_ms = int((time.perf_counter() - _vf_start) * 1000)  # [埋点A] 逐基金耗时
-                if _vf_ms >= 500:
+                # [AI-2026-09-02] 阈值 500→1500ms：指数改腾讯优先前，新浪 3s 节流等待使盘中
+                # 500ms+ 成为常态（单日刷 3500 条 WARNING），1500ms 才是真异常信号
+                if _vf_ms >= 1500:
                     logger.warning("[VAL-PER-FUND] code=%s cat=%s took=%dms", code, category, _vf_ms)
                 else:
                     logger.debug("[VAL-PER-FUND] code=%s cat=%s took=%dms", code, category, _vf_ms)
@@ -2278,7 +2167,7 @@ class FundService:
             logger.debug(f"Dashboard数据生成完成，共 {len(result)} 只基金")
             _prof['valuation_done'] = _t.perf_counter()  # [埋点A] 估值循环段结束
             _elapsed = lambda a, b: int((_prof[b] - _prof[a]) * 1000)
-            logger.info(
+            logger.debug(
                 "[DASHBOARD-PROFILE] cat=%s codes=%d total=%dms | "
                 "db_read=%dms prefetch_index=%dms realtime_quotes=%dms valuation_loop=%dms",
                 category or 'watchlist', len(codes),

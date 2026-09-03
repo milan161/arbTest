@@ -99,14 +99,10 @@ class GalaxyQmtFetcher(BaseRealtimeFetcher):
         return False, f"银河QMT重连失败（已尝试 {self.max_retries} 次），请确认银河QMT终端已启动"
 
     def subscribe(self, symbols: List[str]):
-        if not self.is_connected: return
-        qmt_codes = [self.normalize_symbol(s) for s in symbols]
-        cmd = f"SUBSCRIBE,{','.join(qmt_codes)}\n"
-        try:
-            self.sock.sendall(cmd.encode('utf-8'))
-            logger.debug(f"✅ 银河QMT 已发送订阅请求: {qmt_codes}")
-        except Exception as e:
-            logger.error(f"银河QMT 订阅失败: {e}")
+        # [Y方案 2026-09-03] galaxy 仅下单通道，绝不订阅行情 symbol。
+        # 订阅行情会与交易冲突（东哥设计口径）；ORDER/DEAL 回执由 ServerV5 主动广播，无需订阅。
+        # 任何上层（realtime_manager / 云端启动 / 手动注入）调 subscribe 都被忽略。
+        return
 
     def unsubscribe(self, symbols: List[str]):
         # QMT Socket 协议通常是增量订阅，暂不支持显式退订
