@@ -1,8 +1,9 @@
 #encoding:gbk
 # =================================================================
-# Test_Yinhe_qmt_ServerV5.py v5.4.0
+# Test_Yinhe_qmt_ServerV5.py v5.4.1
 # Date: 2026-09-03
 # 变更日志:
+#   v5.4.1 (2026-09-03 PlanA-fix) - 修复 QUERY_ORDERS：新版__PyContext无get_trade_detail_data→改读order_callback内存缓存；QUERY_ORDERS改socket线程就地执行(不再enqueue,规避收盘主线程不tick导致队列饿死返回0字节)
 #   v5.4.0 (2026-09-03) - QUERY_ORDERS,code 当日委托查询指令(短连接,回传 ORDER_JSON/ORDERS_END); 修复 query_deals 候选API探测bug
 #   v5.3.0 (2026-08-15) - QUERY_DEALS,start[,end] 历史成交查询指令（主线程 get_trade_detail_data，回传 DEAL_JSON/DEAL_ATTRS/DEALS_END）
 #   v5.2.0 (2026-07-17) - DEAL成交广播 + ORDER状态广播 + QUERY_POSITION命令 + position cache
@@ -43,7 +44,7 @@ import time
 import json
 
 # ==================== 版本 ====================
-SERVER_VERSION = '5.4.0 (2026-09-03)'
+SERVER_VERSION = '5.4.1 (2026-09-03 PlanA-fix)'
 
 # ==================== 共享状态（builtins）====================
 # QMT对每个回调赋予独立命名空间，模块级全局变量在各空间中不同
@@ -70,6 +71,8 @@ def _S():
         'ticks_lock': threading.Lock(),
         'latest_positions': {},       # [AI-2026-07-17] position_callback 缓存，供 QUERY_POSITION 读取
         'positions_lock': threading.Lock(),
+        'latest_orders': {},          # [AI-2026-09-03 PlanA] order_callback 缓存，供 QUERY_ORDERS 读取（绕开失效的 get_trade_detail_data）
+        'orders_lock': threading.Lock(),
         'socket_gen': [0],            # bumped by init(); old threads check gen mismatch and exit
         'push_count': [0],
     }
@@ -105,8 +108,6 @@ def _drain(ContextInfo):
                 _do_cancel(ContextInfo, act)
             elif kind == 'query_deals':
                 _do_query_deals(ContextInfo, act)
-            elif kind == 'query_orders':
-                _do_query_orders(ContextInfo, act)
         except Exception as e:
             print(f"[QMTv5][drain] EXC: {e}")
 
@@ -198,50 +199,33 @@ def _do_query_deals(ContextInfo, act):
         _safe_send(conn, b"DEALS_END\n")
     print(f"[QMTv5][query_deals] 回传 {cnt} 笔成交")
 
-def _do_query_orders(ContextInfo, act):
+def _do_query_orders(act):
     """[2026-09-03 PlanA] query today's orders via short connection, replacing long-conn ORDER broadcast.
-    Calls ContextInfo.get_trade_detail_data(acc, acc_type, 'stock', 'order', start, end); streams
-    ORDER_JSON per order (m_strOrderSysID/m_nOrderStatus/m_strInstrumentID/m_nVolume/m_dPrice),
-    ORDER_ATTRS first, ORDERS_END last."""
+    [AI-2026-09-03 修复] 新版 QMT(__PyContext) 无 get_trade_detail_data 方法，改为读 order_callback
+    内存缓存的委托（与 8888 ORDER 广播同源）；且由 client_handler 在 socket 线程就地调用
+    （不 enqueue 等主线程 _drain，避免收盘后主线程不 tick 导致队列饿死、返回0字节）。
+    streams ORDER_JSON per order（全属性真名 m_strOrderSysID/m_nOrderStatus/m_strInstrumentID/
+    m_dLimitPrice/m_nVolumeTotalOriginal/m_strInsertTime 等），ORDERS_END last."""
     s = _S()
     conn = act.get('conn')
     acc = s['account_id']
-    acc_type = s['account_type']
     if not acc:
         if conn:
             _safe_send(conn, b"ORDERS_ERR,account_not_ready\n")
             _safe_send(conn, b"ORDERS_END\n")
         print("[QMTv5][query_orders] account not ready")
         return
-    end = act.get('end') or time.strftime('%Y%m%d')
-    start = act.get('start') or time.strftime('%Y%m%d')
-    try:
-        details = ContextInfo.get_trade_detail_data(acc, acc_type, 'stock', 'order', start, end)
-    except Exception as e:
-        if conn:
-            _safe_send(conn, ("ORDERS_ERR," + str(e) + "\n").encode('utf-8'))
-            _safe_send(conn, b"ORDERS_END\n")
-        print(f"[QMTv5][query_orders] get_trade_detail_data failed: {e}")
-        return
-    if not details:
+    # [AI-2026-09-03 修复] 读 order_callback 缓存，彻底绕开失效的 ContextInfo.get_trade_detail_data
+    with s['orders_lock']:
+        orders = list(s['latest_orders'].values())
+    if not orders:
         if conn:
             _safe_send(conn, b"ORDERS_EMPTY\n")
             _safe_send(conn, b"ORDERS_END\n")
-        print("[QMTv5][query_orders] 无委托记录")
+        print("[QMTv5][query_orders] 缓存无委托记录(可能 QMT 刚重启/未收到回调)")
         return
-    if isinstance(details, dict):
-        details = [details]
     cnt = 0
-    for d in details:
-        rec = {}
-        if isinstance(d, dict):
-            rec = d
-        else:
-            for a in [x for x in dir(d) if not x.startswith('_')]:
-                try:
-                    rec[a] = getattr(d, a)
-                except Exception:
-                    pass
+    for rec in orders:
         line = "ORDER_JSON," + json.dumps(rec, default=str, ensure_ascii=False) + "\n"
         if conn:
             _safe_send(conn, line.encode('utf-8'))
@@ -355,9 +339,11 @@ def client_handler(conn, addr):
                     _enqueue({'kind': 'query_deals', 'start': start, 'end': end, 'conn': conn})
 
                 elif action == 'QUERY_ORDERS':
-                    # [2026-09-03 PlanA] today's order query (replaces long-conn ORDER broadcast);
-                    # server always queries today, backend filters by code locally.
-                    _enqueue({'kind': 'query_orders', 'start': '', 'end': '', 'conn': conn})
+                    # [AI-2026-09-03 修复] 就地读 order_callback 缓存返回，不 enqueue。
+                    # 原因：原 enqueue→主线程_drain 依赖 QMT run_time tick，收盘后主线程不 tick
+                    # 导致队列饿死、返回0字节。现 _do_query_orders 只读 Python 缓存(无C++调用)，
+                    # 与 QUERY_TICK/QUERY_POSITION 同构，socket 线程就地安全执行。
+                    _do_query_orders({'conn': conn})
 
                 else:
                     _safe_send(conn, b'UNKNOWN\n')
@@ -518,12 +504,28 @@ def handlebar(ContextInfo):
     time.sleep(0.001)
 
 def order_callback(ContextInfo, orderInfo):
-    """order status update — broadcasts ORDER to socket clients"""
+    """order status update — caches full orderInfo + broadcasts ORDER to socket clients"""
     try:
         status = getattr(orderInfo, 'm_nOrderStatus', None)
         sysid = getattr(orderInfo, 'm_strOrderSysID', '') or ''
         code = getattr(orderInfo, 'm_strInstrumentID', '') or ''
         print(f"[QMTv5][order] code={code} sysid={sysid} status={status}")
+        # [AI-2026-09-03 PlanA] 缓存委托全属性供 QUERY_ORDERS 读取（绕开失效的 get_trade_detail_data）。
+        # dir(orderInfo) 全属性 dump → m_strOrderSysID/m_nOrderStatus/m_strInstrumentID/
+        # m_dLimitPrice/m_nVolumeTotalOriginal/m_strInsertTime 等真名全在，与 ORDER 广播同源。
+        rec = {}
+        if isinstance(orderInfo, dict):
+            rec = orderInfo
+        else:
+            for a in [x for x in dir(orderInfo) if not x.startswith('_')]:
+                try:
+                    rec[a] = getattr(orderInfo, a)
+                except Exception:
+                    pass
+        if sysid:
+            s = _S()
+            with s['orders_lock']:
+                s['latest_orders'][sysid] = rec
         # [AI-2026-07-17] 广播订单状态到所有 socket 客户端
         _broadcast(f"ORDER,{code},{sysid},{status}\n")
     except Exception:
