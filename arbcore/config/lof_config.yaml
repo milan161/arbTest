@@ -669,6 +669,7 @@ funds:
   category: QDII欧美
   valuation_method: etf
   trade_etf: XOP
+  trade_broker: tdx   # [2026-09-03] LOF 下单通道：华宝(通达信)佣金折扣大，强制走 tdx；Monitor 按基金自动路由（见 resolve_lof_broker）
   trade_future: ''
   holdings:
     equity_ratio: 95.0

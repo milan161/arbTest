@@ -2703,6 +2703,55 @@ async def reconnect_futu():
         system_status.add_milestone("ERROR", f"富途重连异常: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.post("/api/system/debug_tdx_order")
+async def debug_tdx_order():
+    """[调试保留 2026-09-03] 隔离 Monitor，直接走 tdx 通道下指定单，验证 tdx 下单能力。
+    固定下 162411 买入 100股 @1.001。用于排查「Monitor 走 yinhe_qmt 报错」与 tdx 通道本身是否报错的区别。
+    ★ 调试保留端点（见 docs/012_1）：每次调用会下一笔 162411@1.001 测试单，慎用于正式环境。"""
+    tm = getattr(_smart_ts, 'trade_manager', None) if _smart_ts else None
+    if not tm:
+        return {"status": "error", "message": "trade_manager 不可用"}
+    if not getattr(tm, 'tdx_available', False):
+        return {"status": "error", "message": "通达信接口未就绪(tdx_available=False)，请先点「通达信」按键初始化"}
+    try:
+        ok, msg = tm.send_order(broker='tdx', action='BUY', symbol='162411', volume=100, price=1.001)
+        # 增强：下单后查当日委托，确认委托编号与状态（Monitor 撤单/成交追踪依赖此字段）
+        orders = []
+        if ok and hasattr(tm, 'query_tdx_orders'):
+            try:
+                orders = tm.query_tdx_orders('162411') or []
+            except Exception as e:
+                orders = [f"query_tdx_orders 异常: {e}"]
+        return {
+            "status": "ok" if ok else "fail",
+            "message": msg,
+            "tdx_available": tm.tdx_available,
+            "last_tdx_order_id": getattr(tm, 'last_tdx_order_id', ''),
+            "tdx_orders_162411": orders
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "exception", "message": str(e), "trace": traceback.format_exc()}
+
+
+@app.post("/api/system/debug_tdx_query")
+async def debug_tdx_query(code: str = '162411'):
+    """[调试保留 2026-09-03] 只读查询通达信当日委托，不下一笔新单。
+    用于验证某基金委托编号(Wtbh)/状态（如下单后点「确认」委托编号是否补全）。
+    需先点「通达信」按键初始化 tdx 通道。★ 安全：只读，不触发任何下单。"""
+    tm = getattr(_smart_ts, 'trade_manager', None) if _smart_ts else None
+    if not tm:
+        return {"status": "error", "message": "trade_manager 不可用"}
+    if not getattr(tm, 'tdx_available', False):
+        return {"status": "error", "message": "通达信接口未就绪(tdx_available=False)，请先点「通达信」按键初始化"}
+    try:
+        orders = tm.query_tdx_orders(code) or []
+        return {"status": "ok", "code": code, "tdx_available": tm.tdx_available, "orders": orders}
+    except Exception as e:
+        import traceback
+        return {"status": "exception", "message": str(e), "trace": traceback.format_exc()}
+
+
 @app.post("/api/system/reconnect_tdx")
 async def reconnect_tdx():
     """重连通达信 - 使用 reconnect() 方法，试连 3 次。
