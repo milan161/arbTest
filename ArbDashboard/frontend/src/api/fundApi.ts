@@ -41,6 +41,21 @@ export function getFundValuationMeta(code: string) {
   return client.get(`/api/fund/${code}/valuation_meta`)
 }
 
+/** 季报持仓分析：可用报告期列表 */
+export function getFundHoldingPeriods(code: string) {
+  return client.get(`/api/fund/${code}/holding-periods`)
+}
+
+/** 季报持仓分析：某报告期持仓明细、地区分布、变动 */
+export function getFundHoldings(code: string, period: string) {
+  return client.get(`/api/fund/${code}/holdings`, { params: { period } })
+}
+
+/** 季报持仓分析：季报持仓法实时估值 */
+export function getFundHoldingValuation(code: string, period: string) {
+  return client.get(`/api/fund/${code}/holding-valuation`, { params: { period } })
+}
+
 /** 市场概览（汇率、活跃数据源、统计） */
 export function getMarketOverview() {
   return client.get('/api/market/overview')
@@ -110,6 +125,11 @@ export function clearBpOverride(code: string) {
 /** 白银比价数据（161226 沪银/SI 比价） */
 export function getSilverRatio() {
   return client.get('/api/silver/ratio')
+}
+
+/** 底层资产穿透分析 */
+export function getFundPenetration(code: string, period: string) {
+  return client.get(`/api/penetration/${code}/${period}`)
 }
 
 /**

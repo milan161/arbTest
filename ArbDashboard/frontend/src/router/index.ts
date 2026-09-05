@@ -70,6 +70,16 @@ const router = createRouter({
           path: 'developing',
           name: 'Developing',
           component: () => import('../views/Developing.vue')
+        },
+        {
+          path: 'holding-analysis',
+          name: 'HoldingAnalysis',
+          component: () => import('../views/HoldingAnalysis.vue')
+        },
+        {
+          path: 'penetration',
+          name: 'Penetration',
+          component: () => import('../views/Penetration.vue')
         }
       ]
     }

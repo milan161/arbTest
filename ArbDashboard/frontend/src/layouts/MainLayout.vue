@@ -113,6 +113,7 @@ import {
   Repeat,
   Zap,
   ServerCog,
+  PieChart,
 } from 'lucide-vue-next'
 import { useAppStore, useMarketStore } from '../store'
 
@@ -239,6 +240,11 @@ const menuOptions = [
     label: () => h(RouterLink, { to: '/etf-rotation' }, { default: () => 'ETF轮动' }),
     key: 'etf-rotation',
     icon: renderIcon(Repeat)
+  },
+  {
+    label: () => h(RouterLink, { to: '/penetration' }, { default: () => '穿透分析' }),
+    key: 'penetration',
+    icon: renderIcon(PieChart)
   },
   {
     label: () => h(RouterLink, { to: '/settings' }, { default: () => '系统配置' }),

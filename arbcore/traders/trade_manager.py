@@ -41,13 +41,13 @@ def _enable_tcp_keepalive(sock, idle: int = 5, interval: int = 2) -> None:
         return
     if os.name == 'nt':
         # SIO_KEEPALIVE_VALS = _WSAIOW(IOC_VENDOR, 4) = 0x98000004
-        # tcp_keepalive 结构体: onoff(ULONG), keepalivetime(ms), keepaliveinterval(ms)
+        # ⚠️ Windows socket.ioctl 要的是 3 元组 (onoff, keepalivetime_ms, keepaliveinterval_ms)，
+        #    不是 struct.pack 出来的 bytes（旧写法传 bytes 抛 TypeError，且下面 except 没接住 → 打死 listener）。
         SIO_KEEPALIVE_VALS = 0x98000004
         try:
-            out = struct.pack('LLL', 1, idle * 1000, interval * 1000)
-            sock.ioctl(SIO_KEEPALIVE_VALS, out)
-        except (OSError, AttributeError):
-            pass
+            sock.ioctl(SIO_KEEPALIVE_VALS, (1, idle * 1000, interval * 1000))
+        except Exception:
+            pass   # keepalive 失败绝不致命：兜底用系统默认，异常不外冒
     else:
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
@@ -396,18 +396,24 @@ class TradeManager:
 
     def query_tdx_orders(self, fund_code: str = '') -> list:
         """[2026-09-03 方案H3a] 通达信当日委托轮询兜底（本 tqcenter 无成交推送回调）。
-        返回该基金委托记录列表，每条含已验证字段: Code/Wtbh(委托编号)/Wtsl(委托量)/Wtjg(价格)/
-        Status(0无效 1未成交 2部分成交 3全部成交 4部分撤单 5全部撤单)。未就绪或异常一律返回 []。"""
+        返回该基金委托记录列表，每条含真实字段(诊断确认): Code/Wtbh(委托号)/WtPrice(价)/WtVol(委托量)/
+        Status(0无效 1未成交 2部分成交 3全部成交 4部分撤单 5全部撤单)/CjVol·CjPrice(成交量价)/Time。未就绪或异常一律返回 []。"""
         if not (self.tdx_available and self.tq):
             return []
         try:
-            orders = self.tq.query_stock_orders(account_id=self.tdx_account_id) or []
-            if not isinstance(orders, list):
+            raw = self.tq.query_stock_orders(account_id=self.tdx_account_id) or []
+            logger.debug(f"[TradeManager] query_tdx_orders({fund_code}) 原始返回 type={type(raw).__name__} len={len(raw) if isinstance(raw, list) else 'NA'}")
+            if not isinstance(raw, list):
                 return []
+            orders = raw
             if fund_code:
                 fc = str(fund_code)
                 orders = [o for o in orders
                           if isinstance(o, dict) and str(o.get('Code', '')).split('.')[0] == fc]
+            if orders:
+                logger.debug(f"[TradeManager] query_tdx_orders({fund_code}) 过滤后 {len(orders)} 条，首条字段: {sorted(orders[0].keys())}")
+            else:
+                logger.debug(f"[TradeManager] query_tdx_orders({fund_code}) 过滤后 0 条（Code 前缀未命中或当日无委托）")
             return orders
         except Exception as e:
             logger.warning(f"[TradeManager] query_tdx_orders 异常: {e}")

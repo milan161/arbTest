@@ -343,9 +343,10 @@ const allColumns: DataTableColumns<any> = [
   },
   {
     title: '名称', key: 'fund_name', width: 90, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
+    className: 'col-fund-name',
     render(row: any) {
       return h('span', { class: 'fund-name-cell clickable-cell',
-        onClick: () => { selectedFund.value = row; showHistoryModal.value = true; fundStore.fetchFundHistory(row.fund_code) }
+        onClick: () => { router.push({ path: '/holding-analysis', query: { code: row.fund_code, name: row.fund_name } }) }
       }, cleanFundName(row.fund_name))
     }
   },
@@ -1110,6 +1111,10 @@ const tableScrollX = computed(() => {
 }
 
 /* 整列底色 - 覆盖奇偶行交替背景 */
+:deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-fund-name),
+:deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-fund-name) {
+  background-color: #f0fdf4 !important;
+}
 :deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-rt-val),
 :deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-rt-val) {
   background-color: #f0f9ff !important;
@@ -1121,6 +1126,9 @@ const tableScrollX = computed(() => {
 :deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-si-val),
 :deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-si-val) {
   background-color: #f0fdf4 !important;
+}
+:deep(.n-data-table-th.col-fund-name) {
+  background-color: #dcfce7 !important;
 }
 :deep(.n-data-table-th.col-rt-val) {
   background-color: #e0f2fe !important;

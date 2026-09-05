@@ -1755,23 +1755,30 @@ class FundService:
                             except Exception as _e:
                                 logger.debug(f"[{code}] AG0 昨结算价DB备用源读取失败: {_e}")
 
-                        # [2026-07-30 FIX] 非交易时段丢弃已取到的价格，避免陈旧收盘价当"实时"
+                        # [2026-07-30 FIX → 2026-09-04 修正] 非交易时段丢弃"实时成交价"与"VWAP"，
+                        # 避免陈旧实时价/午间 VWAP 被当实时展示；但**保留"昨结算价"(settlement_price)**——
+                        # 昨结算价 = 上一交易日官方结算，跨交易时段恒定不变，东哥要求主看板始终展示。
+                        # （rt_val 依赖实时成交价、static_val/si_val 依赖 VWAP，休市时仍留空，符合设计）
                         if not _ag_session_open:
-                            logger.debug(f"[{code}] SHFE 当前休市，丢弃 AG0 价(最新价={ag_future_price}/昨结算={settlement_price})，rt_val/si_val 置 None")
-                            ag_future_price, settlement_price, vwap = 0.0, 0.0, 0.0
+                            logger.debug(f"[{code}] SHFE 当前休市，丢弃 AG0 实时成交价/VWAP(最新价={ag_future_price}/VWAP={vwap})，"
+                                         f"保留昨结算价={settlement_price}")
+                            ag_future_price, vwap = 0.0, 0.0
 
                         nav_home = float(metrics.get('nav', 0))
-                        if ag_future_price > 0 and settlement_price > 0 and nav_home > 0:
-                            # 🚀 为了让前端展示 AG0 盘口数据
-                            metrics['ag0_price'] = ag_future_price
+                        # [AI-2026-09-04] 昨结算价独立展示：只要取到真值(>0)就写 ag0_settlement，与是否交易时段无关
+                        if settlement_price > 0:
                             metrics['ag0_settlement'] = settlement_price
-                            
+
+                        if ag_future_price > 0 and settlement_price > 0 and nav_home > 0:
+                            # 🚀 为了让前端展示 AG0 盘口数据（仅实时成交价，休市时为空白）
+                            metrics['ag0_price'] = ag_future_price
+
                             # 参考估值 (rt_val) = 昨天净值 * (实时成交价 / 昨结算价)
                             rt_val = nav_home * (ag_future_price / settlement_price)
                             metrics['rt_val'] = round(rt_val, 4)
                             if metrics.get('price', 0) > 0:
                                 metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
-                                
+
                             # 🚀 官方估值 (static_val) = 昨天净值 * (VWAP / 昨结算价)
                             # [AI-2026-08-21 FIX] 严禁 fallback 到 NAV：官方估值与 NAV 是"对比"关系(数字近但含义不同)，
                             # VWAP 缺失即视为无官方估值，留 None（前端显示"等待数据"），绝不用 NAV 冒充（违反 SUPREME 铁律）。

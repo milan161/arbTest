@@ -669,7 +669,7 @@ funds:
   category: QDII欧美
   valuation_method: etf
   trade_etf: XOP
-  trade_broker: tdx   # [2026-09-03] LOF 下单通道：华宝(通达信)佣金折扣大，强制走 tdx；Monitor 按基金自动路由（见 resolve_lof_broker）
+  trade_broker: tdx
   trade_future: ''
   holdings:
     equity_ratio: 95.0
@@ -3227,7 +3227,8 @@ symbol_sources:
   RSPH: FUTU
   NKY: SINA
   000852: TDX
-  03175.HK: TDX
+  03175.HK: FUTU
+  '03175': FUTU
   930875.CSI: TDX
   UGL: FUTU
   HSMC: FUTU
@@ -3373,3 +3374,170 @@ realtime_source_priority:
 - guojin
 - sina
 - tencent
+penetration_rules:
+  USO:
+    类型: ETF (USCF)
+    结构: 期货 + Swaps + 国债 + 现金
+    期货占比: 0.4386
+    Swaps占比: 0.0741
+    国债现金占比: 0.4873
+    期货合约:
+    - 代码: CLV6
+      名称: WTI CRUDE FUTURE Oct26 (M1)
+      比例: 0.2
+      可平仓: true
+    - 代码: CLX6
+      名称: WTI CRUDE FUTURE Nov26 (M2)
+      比例: 0.8
+      可平仓: true
+    移仓状态: CLV6→CLX6 正在进行（09-03）
+    数据源: uscfinvestments.com/holdings/uso
+    更新日期: '2026-09-05'
+  OILK:
+    类型: ETF (ProShares)
+    结构: 期货 + 货币市场基金保证金
+    期货占比: 0.9996
+    期货合约:
+    - 代码: CLZ6
+      名称: WTI CRUDE FUTURE NOV2026
+      比例: 0.3374
+      可平仓: true
+    - 代码: CLM7
+      名称: WTI CRUDE FUTURE MAY2027
+      比例: 0.3318
+      可平仓: true
+    - 代码: CLZ7
+      名称: WTI CRUDE FUTURE NOV2027
+      比例: 0.3306
+      可平仓: true
+    Swaps占比: 0
+    货基占比: 0.6925
+    OtherAssets: 0.3072
+    移仓状态: 无（远期三层均布：2026-11/2027-05/2027-11）
+    数据源: proshares.com/our-etfs/strategic/oilk
+    更新日期: '2026-09-05'
+  BNO:
+    类型: ETF (USCF)
+    结构: 单一 Brent 期货合约 + 国债 + 现金
+    期货占比: 0.5161
+    期货合约:
+    - 代码: COX6
+      名称: BRENT CRUDE FUTR Nov26
+      比例: 1.0
+      可平仓: true
+    Swaps占比: 0
+    国债现金占比: 0.4839
+    移仓状态: 无（单一合约稳定）
+    数据源: uscfinvestments.com/holdings/bno
+    更新日期: '2026-09-05'
+  CRUD:
+    类型: ETC (WisdomTree)
+    结构: 100% Total Return Swap，无直接期货持仓
+    跟踪指数: BCLMT4T (Bloomberg WTI Multi-Tenor 4W TR)
+    方法论: 永久跳过 M1 最近月，等权持有 M2/M3/M4 三份 CL 合约，各 33.33%；4 周分批滚仓
+    期货占比: 0
+    Swaps占比: 1.0
+    Swaps名称: TRS Bloomberg Sub WTI Crude Oil TR USD
+    当前理论合约:
+    - 代码: CLX26
+      名称: WTI CRUDE FUTURE Nov26 (M2)
+      比例: 0.3333
+      交易所: NYMEX
+    - 代码: CLZ26
+      名称: WTI CRUDE FUTURE Dec26 (M3)
+      比例: 0.3333
+      交易所: NYMEX
+    - 代码: CLF27
+      名称: WTI CRUDE FUTURE Jan27 (M4)
+      比例: 0.3334
+      交易所: NYMEX
+    滚仓规则: 每周卖出前端合约 1/4 仓位，远端加仓下月
+    数据源: 彭博终端 BCLMT4T <Index> COMPOSITION（唯一官方渠道），免费网页查不到
+    更新日期: '2026-09-05'
+    期货合约:
+    - 代码: CLX26
+      名称: WTI CRUDE FUTURE Nov26 (M2)
+      比例: 0.3333
+      可平仓: true
+    - 代码: CLZ26
+      名称: WTI CRUDE FUTURE Dec26 (M3)
+      比例: 0.3333
+      可平仓: true
+    - 代码: CLF27
+      名称: WTI CRUDE FUTURE Jan27 (M4)
+      比例: 0.3334
+      可平仓: true
+  BRNT:
+    类型: ETC (WisdomTree)
+    结构: 100% Total Return Swap，无直接期货持仓
+    跟踪指数: BCBRMT4T (Bloomberg Brent Crude Subindex 4W TR)
+    方法论: 同 CRUD，等权 M2/M3/M4 三份 BZ 合约，各 33.33%；4 周分批滚仓
+    期货占比: 0
+    Swaps占比: 1.0
+    Swaps名称: TRS Bloomberg comm Sub Brent Crude TR USD
+    当前理论合约:
+    - 代码: BX26
+      名称: BRENT CRUDE FUTURE Nov26 (M2)
+      比例: 0.3333
+      交易所: ICE
+    - 代码: BZ26
+      名称: BRENT CRUDE FUTURE Dec26 (M3)
+      比例: 0.3333
+      交易所: ICE
+    - 代码: BF27
+      名称: BRENT CRUDE FUTURE Jan27 (M4)
+      比例: 0.3334
+      交易所: ICE
+    滚仓规则: 同 CRUD
+    数据源: 彭博终端 BCBRMT4T <Index> COMPOSITION
+    更新日期: '2026-09-05'
+    期货合约:
+    - 代码: BX26
+      名称: Brent CRUDE FUTURE Nov26 (M2)
+      比例: 0.3333
+      可平仓: true
+    - 代码: BZ26
+      名称: Brent CRUDE FUTURE Dec26 (M3)
+      比例: 0.3333
+      可平仓: true
+    - 代码: BF27
+      名称: Brent CRUDE FUTURE Jan27 (M4)
+      比例: 0.3334
+      可平仓: true
+  BRNG:
+    类型: ETC (WisdomTree)
+    结构: 100% Total Return Swap，无直接期货持仓（GBP 计价版本）
+    跟踪指数: BCBRMT4T (同 BRNT，Brent 底层相同)
+    方法论: 同 BRNT，等权 M2/M3/M4 三份 BZ 合约，仅计价货币为 GBP
+    期货占比: 0
+    Swaps占比: 1.0
+    Swaps名称: TRS Bloomberg comm Sub Brent Crude TR GBP
+    当前理论合约:
+    - 代码: BX26
+      名称: BRENT CRUDE FUTURE Nov26 (M2)
+      比例: 0.3333
+      交易所: ICE
+    - 代码: BZ26
+      名称: BRENT CRUDE FUTURE Dec26 (M3)
+      比例: 0.3333
+      交易所: ICE
+    - 代码: BF27
+      名称: BRENT CRUDE FUTURE Jan27 (M4)
+      比例: 0.3334
+      交易所: ICE
+    滚仓规则: 同 BRNT
+    数据源: 彭博终端 BCBRMT4T <Index> COMPOSITION
+    更新日期: '2026-09-05'
+    期货合约:
+    - 代码: BX26
+      名称: Brent CRUDE FUTURE Nov26 (M2)
+      比例: 0.3333
+      可平仓: true
+    - 代码: BZ26
+      名称: Brent CRUDE FUTURE Dec26 (M3)
+      比例: 0.3333
+      可平仓: true
+    - 代码: BF27
+      名称: Brent CRUDE FUTURE Jan27 (M4)
+      比例: 0.3334
+      可平仓: true

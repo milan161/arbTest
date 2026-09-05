@@ -244,6 +244,7 @@ try:
     from services.config_manager_service import ConfigManagerService
     from services.ledger_service import LedgerService
     from services.etf_rotation_service import ETFRotationService
+    from services.holding_service import HoldingService
 
     # [AI-2026-08-22] 旧版文件型信号监测引擎已废弃删除（single source of truth = DB 驱动 rule_engine）
     auto_trade_runner = None
@@ -328,6 +329,7 @@ _morning_refreshed_today = False
 _morning_refresh_time = None
 market_data_service = MarketDataService(db)
 fund_service = FundService(db, market_data_service=market_data_service, config_service=config_service)
+holding_service = HoldingService(db, market_data_service=market_data_service)
 sampler_service = IntradaySamplerService(db, market_data_service, config_service)
 sampler_service.active_watchlist = _active_watchlist
 dashboard_snapshot_service = DashboardSnapshotService(
@@ -1212,6 +1214,36 @@ async def sync_arm_intraday_api(code: str = Body(default=None)):
 async def get_fund_basket(code: str):
     data = fund_service.get_fund_basket(code)
     return {"status": "ok", "data": data}
+
+@app.get("/api/fund/{code}/holding-periods")
+async def get_fund_holding_periods(code: str):
+    """基金季报持仓分析：可用报告期列表"""
+    try:
+        data = holding_service.get_periods(code)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Error getting holding periods for {code}: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/fund/{code}/holdings")
+async def get_fund_holdings(code: str, period: str):
+    """基金季报持仓分析：某报告期持仓明细、地区分布、变动"""
+    try:
+        data = holding_service.get_holdings(code, period)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Error getting holdings for {code}/{period}: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/fund/{code}/holding-valuation")
+async def get_fund_holding_valuation(code: str, period: str):
+    """基金季报持仓分析：季报持仓法实时估值"""
+    try:
+        data = holding_service.get_valuation(code, period)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Error getting holding valuation for {code}/{period}: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/api/fund/hedge_multipliers")
 async def get_hedge_multipliers():
@@ -3711,8 +3743,47 @@ def kill_port_owner(port: int):
     except Exception as e:
         logger.error(f"⚠️ [端口防护] 清理端口 {port} 残留进程失败: {e}")
 
+# ==============================================================
+# 穿透分析 API
+# ==============================================================
+@app.get("/api/penetration/{fund_code}/{period}")
+async def get_penetration(fund_code: str, period: str):
+    """
+    获取基金穿透分析数据
+
+    Args:
+        fund_code: 基金代码，如 160723
+        period: 报告期，如 2026Q2
+    """
+    from services.penetration_service import calculate_penetration
+    result = calculate_penetration(fund_code, period)
+
+    if 'error' in result:
+        return JSONResponse(status_code=404, content=result)
+
+    return {"status": "ok", "data": result}
+
+
+@app.get("/api/penetration/funds")
+async def list_penetration_funds():
+    """获取支持穿透分析的基金列表"""
+    from services.penetration_service import load_penetration_rules
+    rules = load_penetration_rules()
+
+    funds = []
+    for symbol in rules.keys():
+        funds.append({
+            'symbol': symbol,
+            'name': symbol,  # 可从其他表获取名称
+            'has_rules': True
+        })
+
+    return {'funds': funds}
+
+
 if __name__ == "__main__":
     # [AI-2026-08-24] 无条件清理端口：无论从哪里启动（start_dashboard.bat/runback.bat/手动），
     # 都确保不会有两个后端实例同时竞争 8000 端口。
     kill_port_owner(8000)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", access_log=False)
+

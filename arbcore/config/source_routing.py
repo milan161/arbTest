@@ -18,7 +18,7 @@ for _k, _v in SYMBOL_SOURCE_MAP.items():
     elif _v in SOURCE_SYMBOL_MAP:
         SOURCE_SYMBOL_MAP[_v].append(_k)
 for _s in SOURCE_SYMBOL_MAP:
-    SOURCE_SYMBOL_MAP[_s] = sorted(set(SOURCE_SYMBOL_MAP[_s]))
+    SOURCE_SYMBOL_MAP[_s] = sorted(set(SOURCE_SYMBOL_MAP[_s]), key=lambda x: str(x))
 
 US_ETF_MAP = {k: v for k, v in SYMBOL_SOURCE_MAP.items() if v == 'IB'}
 
