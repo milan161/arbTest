@@ -325,6 +325,10 @@ onUnmounted(() => {
   if (clockTimer) clearInterval(clockTimer)
 })
 
+// [AI-2026-09-12] 已支持「季报持仓分析」的原油基金白名单（东哥口径：短期只做这三只）。
+// 名单内：名称列显示绿色背景、可点击跳转；名单外：正常底色、不可点击。
+const HOLDING_ANALYSIS_FUNDS = ['160723', '161129', '501018']
+
 const allColumns: DataTableColumns<any> = [
   {
     title: '★', key: 'watchlist', width: 34, fixed: 'left', align: 'center',
@@ -345,8 +349,16 @@ const allColumns: DataTableColumns<any> = [
     title: '名称', key: 'fund_name', width: 90, fixed: 'left', align: 'center', ellipsis: { tooltip: true },
     className: 'col-fund-name',
     render(row: any) {
-      return h('span', { class: 'fund-name-cell clickable-cell',
-        onClick: () => { router.push({ path: '/holding-analysis', query: { code: row.fund_code, name: row.fund_name } }) }
+      const canAnalyze = HOLDING_ANALYSIS_FUNDS.includes(row.fund_code)
+      return h('span', {
+        class: 'fund-name-cell' + (canAnalyze ? ' clickable-cell' : ''),
+        style: canAnalyze
+          ? { background: '#dcfce7', color: '#166534', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }
+          : { cursor: 'default' },
+        onClick: canAnalyze
+          ? () => { router.push({ path: '/holding-analysis', query: { code: row.fund_code, name: row.fund_name } }) }
+          : undefined,
+        title: canAnalyze ? '查看季报持仓分析' : undefined,
       }, cleanFundName(row.fund_name))
     }
   },
@@ -1110,11 +1122,8 @@ const tableScrollX = computed(() => {
   color: #64748b;
 }
 
-/* 整列底色 - 覆盖奇偶行交替背景 */
-:deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-fund-name),
-:deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-fund-name) {
-  background-color: #f0fdf4 !important;
-}
+/* 名称列不再整列着色：仅白名单内原油基金由行内 style 显示绿色（见 allColumns 渲染），
+   其余基金保持与其它列一致的无底色，避免误导"可点击"。 */
 :deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-rt-val),
 :deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-rt-val) {
   background-color: #f0f9ff !important;
@@ -1126,9 +1135,6 @@ const tableScrollX = computed(() => {
 :deep(.n-data-table-tr:nth-child(even) .n-data-table-td.col-si-val),
 :deep(.n-data-table-tr:nth-child(odd) .n-data-table-td.col-si-val) {
   background-color: #f0fdf4 !important;
-}
-:deep(.n-data-table-th.col-fund-name) {
-  background-color: #dcfce7 !important;
 }
 :deep(.n-data-table-th.col-rt-val) {
   background-color: #e0f2fe !important;

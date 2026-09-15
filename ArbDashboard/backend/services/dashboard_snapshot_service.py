@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import sqlite3
 import threading
 import time
 from datetime import datetime
@@ -128,7 +129,14 @@ class DashboardSnapshotService:
         while self._running:
             # [AI-2026-08-16] 交易时段门禁：仅 A 股交易时段(9:30-15:00 交易日,含午休)做实时刷新；
             # 盘后/盘前/周末/节假日跳过重算、保留缓存、长休眠，避免空载实时估值轮询空烧 CPU。
+            # [AI-2026-09-11] 但 NAV 库若已落库比快照更新的净值(step4/定时净值更新)，立即重建一次，
+            # 否则看板净值日期会停在陈旧值（本次 Bug 根因：盘后 step4 更新了库，快照却不再重算）。
             if not is_a_share_session():
+                try:
+                    if self._db_nav_newer_than_snapshot(key):
+                        await self.refresh_once(key, None, category, use_db_watchlist=use_db_watchlist)
+                except Exception as exc:
+                    logger.warning("[SNAPSHOT] 盘后快照重建失败 %s: %s", key, exc)
                 await asyncio.sleep(self.idle_interval)
                 continue
             # [AI-2026-08-05] 不再跳过暂停分类：豁免基金(paused_exempt=1)需要快照循环正常运行。
@@ -159,6 +167,38 @@ class DashboardSnapshotService:
             logger.warning("Failed to read dashboard watchlist: %s", exc)
             return []
 
+    # [AI-2026-09-11] NAV 库新鲜度探针：盘后/周末也能发现 step4 或定时净值更新已落库的新净值，
+    # 触发快照重建，避免看板停在陈旧净值日期（本次 Bug 根因）。
+    def _latest_db_nav_date(self) -> Optional[str]:
+        """返回 unified_fund_history 中最新有效净值日期（ISO 字符串）；失败返回 None。"""
+        try:
+            dbm = getattr(self.fund_service, "db", None)
+            path = getattr(dbm, "db_path", None) if dbm else None
+            if not path:
+                return None
+            conn = sqlite3.connect(path, timeout=5.0)
+            try:
+                row = conn.execute(
+                    "SELECT MAX(date) FROM unified_fund_history WHERE nav IS NOT NULL AND nav > 0"
+                ).fetchone()
+                return row[0] if row and row[0] else None
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.warning("[SNAPSHOT] NAV 日期探针失败: %s", exc)
+            return None
+
+    def _db_nav_newer_than_snapshot(self, key: str) -> bool:
+        """DB 最新净值日期是否比当前快照反映的更新（盘后/周末重建判定）。"""
+        snap = self._snapshots.get(key)
+        snap_nav_date = snap.get("max_nav_date") if snap else None
+        db_nav_date = self._latest_db_nav_date()
+        if not db_nav_date:
+            return False
+        if not snap_nav_date:
+            return True
+        return str(db_nav_date) > str(snap_nav_date)
+
     async def refresh_once(
         self,
         key: str,
@@ -180,6 +220,9 @@ class DashboardSnapshotService:
         try:
             data = await asyncio.to_thread(_compute)
             compute_ms = int((time.monotonic() - started) * 1000)
+            # [AI-2026-09-11] 记录本快照反映的最新净值日期，用于盘后/周末检测 NAV 库是否比快照更新。
+            nav_dates = [str(r.get("nav_date")) for r in (data or []) if r.get("nav_date")]
+            max_nav_date = max(nav_dates) if nav_dates else None
             snapshot = {
                 "data": data,
                 "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -188,6 +231,7 @@ class DashboardSnapshotService:
                 "compute_ms": compute_ms,
                 "error": None,
                 "key": key,
+                "max_nav_date": max_nav_date,
             }
             with self._lock:
                 self._snapshots[key] = snapshot
@@ -305,6 +349,7 @@ class DashboardSnapshotService:
                     "stale": snap.get("stale", False),
                     "compute_ms": snap.get("compute_ms", 0),
                     "rows": len(snap.get("data") or []),
+                    "max_nav_date": snap.get("max_nav_date"),
                     "error": snap.get("error"),
                 }
             return {

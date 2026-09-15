@@ -159,6 +159,7 @@ class IBReader(EWrapper, EClient):
         self.sub_dead_max_retries = 3       # 每 symbol 连续重订上限，超限判定 Gateway 侧推流僵死
         self._dead_resub_count = {}         # sym -> 连续重订次数(收到首 tick 清零)
         self._last_dead_alarm = 0.0         # Gateway 僵死告警限频时间戳
+        self._last_apachmds_disconnect = 0.0  # [AI-2026-09-15] 2105 农场断开时间戳，供自愈判断
         self.connection_ready_fallback = 30  # [AI-2026-08-06] 连上 Gateway 后最多 30s 兜底置 connection_ready；[AI-2026-08-19] 回退：当日误把门禁改严(只认usfarm+180s硬超时)致行情"启动不来/很久才来"，恢复 30s 宽松兜底(东哥"先启IB立刻程序秒到"实测可行)
 
         # [AI-2026-08-04] 注册协议层容错钩子（进程内只注册一次）
@@ -371,6 +372,33 @@ class IBReader(EWrapper, EClient):
                 # [AI-2026-08-07] 情况A（连着但停滞→强制断开重连）已移除：见函数 docstring。
                 # 连接存活但无 tick 交给订阅级"死订阅重订"处理，看门狗只负责真断自愈。
                 # 此处 fall-through 到循环顶部 30s 后再次判定，不执行任何拆连接动作。
+                #
+                # [AI-2026-09-15] 补充：若连接存活但零 tick 超过阈值，用 subscribe_time 最早
+                # 订阅时间 fallback（last_tick_time 为空时 min() 会崩溃）。
+                if self.connected and self.isConnected() and self.is_us_night_session():
+                    now_ts = time.time()
+                    # 优先用 last_tick_time 中最晚更新的时间判陈旧
+                    if self.last_tick_time:
+                        oldest_tick = min(self.last_tick_time.values())
+                    elif self.subscribe_time:
+                        # fallback：last_tick_time 为空（零 tick），用最早订阅时间
+                        oldest_tick = min(self.subscribe_time.values())
+                    else:
+                        oldest_tick = 0
+                    if oldest_tick > 0 and (now_ts - oldest_tick) > self.stale_reconnect_threshold:
+                        if now_ts - self._last_forced_reconnect > self.stale_reconnect_cooldown:
+                            self._last_forced_reconnect = now_ts
+                            logger.warning(
+                                f"[IB] 陈旧数据看门狗触发：已连接但零 tick 持续 {int(now_ts-oldest_tick)}s "
+                                f"(超过 {self.stale_reconnect_threshold}s)，尝试 reconnect() 自愈")
+                            try:
+                                ok, msg = self.reconnect()
+                                if ok:
+                                    logger.info(f"[IB] 陈旧看门狗重连成功: {msg}")
+                                else:
+                                    logger.warning(f"[IB] 陈旧看门狗重连失败: {msg}")
+                            except Exception as e:
+                                logger.warning(f"[IB] 陈旧看门狗重连异常: {e}")
             except Exception as e:
                 logger.warning(f"[IB] 看门狗循环异常: {e}")
 
@@ -472,12 +500,31 @@ class IBReader(EWrapper, EClient):
                 if self.last_tick_time.get(sym) is None and (time.time() - st) > self.sub_dead_threshold:
                     cnt = self._dead_resub_count.get(sym, 0) + 1
                     if cnt > self.sub_dead_max_retries:
-                        # 保留订阅挂着等真实 tick，不再 cancel 重订；仅限频告警，定位根因
+                        # [AI-2026-09-15] 修复盲区1：3次重订上限后，改为触发 reconnect() 强制重建
+                        # Gateway socket 连接，而非只打 ERROR 被动等待。
+                        # 根因：2026-09-15 农场切换卡死事故中，3次重订后程序进入持续ERROR刷屏
+                        # 状态（每5分钟一次），36分钟无法自愈。
                         if time.time() - self._last_dead_alarm > 300:
                             self._last_dead_alarm = time.time()
                             logger.error(
                                 f"[IB] {sym} 连续重订 {cnt} 次仍零 tick(订阅 {int(time.time()-st)}s)："
-                                f"疑似 IB Gateway 侧实时行情推流僵死(非 app 订阅问题)，请重启 IB Gateway(托盘退出重进+重登录)")
+                                f"疑似 IB Gateway 侧实时行情推流僵死(非 app 订阅问题)，"
+                                f"触发 reconnect() 强制重建连接。若仍无效请手动重启 IB Gateway。")
+                        # 触发强制重连：清理订阅池 → 断开 socket → 重新连接 → 重新订阅
+                        self._dead_resub_count[sym] = cnt
+                        rid = self.symbol_req_ids.pop(sym)
+                        self.mkt_req_ids.pop(rid, None)
+                        self.subscribe_time.pop(sym, None)
+                        try:
+                            self.cancelMktData(rid)
+                        except Exception:
+                            pass
+                        logger.warning(f"[IB] 死订阅超限：{sym} 触发强制 reconnect() (第{cnt}次)")
+                        # 异步触发重连（避免阻塞轮询循环）
+                        try:
+                            self.reconnect()
+                        except Exception as e:
+                            logger.warning(f"[IB] 死订阅超限重连异常: {e}")
                         continue
                     self._dead_resub_count[sym] = cnt
                     rid = self.symbol_req_ids.pop(sym)
@@ -583,7 +630,30 @@ class IBReader(EWrapper, EClient):
             return
             
         if errorCode in [2103, 2105]:
-            logger.warning(f"[IB] IB数据农场连接断开 (代码 {errorCode}): {errorString} - 这将导致长连接无数据！")
+            now_ts = time.time()
+            # [AI-2026-09-15] 记录农场断开时间，供后续判断是否需重连
+            if errorCode == 2105:
+                self._last_apachmds_disconnect = now_ts
+            # 若农场断开超过阈值（180s）且距上次重连已冷却，触发自愈
+            if getattr(self, '_last_apachmds_disconnect', 0) > 0:
+                elapsed = now_ts - self._last_apachmds_disconnect
+                if elapsed > 180 and now_ts - self._last_forced_reconnect > self.stale_reconnect_cooldown:
+                    self._last_forced_reconnect = now_ts
+                    logger.warning(
+                        f"[IB] 农场断连 2105 持续 {int(elapsed)}s，触发 reconnect() 自愈")
+                    try:
+                        ok, msg = self.reconnect()
+                        if ok:
+                            logger.info(f"[IB] 农场断连自愈重连成功: {msg}")
+                        else:
+                            logger.warning(f"[IB] 农场断连自愈重连失败: {msg}")
+                    except Exception as e:
+                        logger.warning(f"[IB] 农场断连自愈重连异常: {e}")
+                else:
+                    logger.warning(f"[IB] IB数据农场连接断开 (代码 {errorCode}): {errorString} "
+                                   f"(已 {int(elapsed)}s，{180 - int(elapsed)}s 后触发自愈)")
+            else:
+                logger.warning(f"[IB] IB数据农场连接断开 (代码 {errorCode}): {errorString}")
             return
 
         # 智能诊断：拦截典型的“无行情订阅权限”错误码

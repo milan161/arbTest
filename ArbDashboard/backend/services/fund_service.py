@@ -1813,14 +1813,30 @@ class FundService:
                     rel_idx = fund.get('related_index', '')
                     idx_category, _ = _classify_index_symbol(rel_idx)
                     is_us_etf = (idx_category == 'skip')  # 美股ETF在_classify_index_symbol中返回'skip'
-                    if not metrics.get('rt_val') and code not in funds_with_basket and not is_us_etf and not _YAML_TRADE_ETF.get(code, ''):
+                    # [AI-2026-09-11] 指数价(index_close)独立赋值：不再受 rt_val 是否已算的限制。
+                    # 此前 QDII日本等指数ETF 的 rt_val 先被篮子/SI/trade_etf 路径算出，导致下方 3.2 块被
+                    # `not metrics.get('rt_val')` 跳过，index_close 永不赋值 → 主面板「指数价」恒为空白。
+                    if rel_idx and rel_idx != '-':
+                        idx_data = index_changes_map.get(rel_idx)
+                        if idx_data is not None and isinstance(idx_data, dict):
+                            metrics['index_close'] = idx_data.get('price', 0.0)
+                            metrics['index_pct'] = idx_data.get('pct', 0.0)
+                        else:
+                            # [FIX] 无实时数据时设置为0，前端统一显示 '-'
+                            # 注：index_changes_map 中找不到该指数，可能原因：
+                            # 1. index_history 表没有该指数数据
+                            # 2. related_index 字段值为文本描述而非代码
+                            # 3. 数据源异常
+                            metrics['index_pct'] = 0.0
+                            metrics['index_close'] = 0.0
+                    # 3.2 【普通国内LOF/QDII亚洲极速估值】 - 仅对无权重篮子且无trade_etf的基金使用简化指数估值
+                    # [AI-2026-09-11] rt_val 计算与 index_close 解耦：此处仅在 rt_val 尚未算出且指数源可用时补算。
+                    if not metrics.get('rt_val') and code not in funds_with_basket and not is_us_etf and not _YAML_TRADE_ETF.get(code, '') and rel_idx and rel_idx != '-':
                         nav_home = float(metrics.get('nav', 0))
-                        if rel_idx and rel_idx != '-' and nav_home > 0:
+                        if nav_home > 0:
                             idx_data = index_changes_map.get(rel_idx)
                             if idx_data is not None and isinstance(idx_data, dict):
                                 pct = idx_data.get('pct', 0.0)
-                                metrics['index_close'] = idx_data.get('price', 0.0)
-                                metrics['index_pct'] = pct
                                 # [V10.15] pct!=0：用实时涨跌幅计算 rt_val
                                 # pct==0：指数未变化（收盘后/非交易日/平盘）→ rt_val=最新净值
                                 pos = float(fund.get('pos_ratio') or 0.95)
@@ -1828,14 +1844,6 @@ class FundService:
                                 metrics['rt_val'] = round(rt_val, 4)
                                 if metrics.get('price', 0) > 0:
                                     metrics['rt_premium'] = round((metrics['price'] / rt_val - 1) * 100, 3)
-                            else:
-                                # [FIX] 无实时数据时设置为0，前端统一显示 '-'
-                                # 注：index_changes_map 中找不到该指数，可能原因：
-                                # 1. index_history 表没有该指数数据
-                                # 2. related_index 字段值为文本描述而非代码
-                                # 3. 数据源异常
-                                metrics['index_pct'] = 0.0
-                                metrics['index_close'] = 0.0
 
                     # 3.3 【美股原油/黄金等高价值一篮子基金】 - 保持原有基于 lof_config.yaml 的矩阵公式推演
                     calculator = self._get_calculator() if not metrics.get('rt_val') else None
@@ -2248,7 +2256,9 @@ DailyUpdater()._step4_fetch_prices()
     def get_fund_history(self, fund_code: str) -> List[Dict[str, Any]]:
         """
         历史对账数据（验算用）。
-        - 不使用 bfill 填充净值（防止今天/昨天出现虚假的旧净值）
+        - 净值只取官方净值 h.nav，缺失即返回 NULL（让前端显示 '-'），
+          绝不用 fund_daily_factors.nav 兜底（那是虚假的旧净值，违背"不 bfill"原则，
+          曾导致 9-11 等 T+1 未公布日错误显示成前一交易日净值）。
         - 不过滤当天行（exchange_rate LEFT JOIN 可能带回当天汇率，用于显示）
         - 不将 None 填充为 0（让前端正确显示 '-'）
         """
@@ -2256,10 +2266,11 @@ DailyUpdater()._step4_fetch_prices()
         try:
             today = datetime.now().strftime('%Y-%m-%d')
 
-            # 1. 基础历史数据 (包含静态估值、汇率、并从 fund_daily_factors 回填缺失的净值 + hedge)
+            # 1. 基础历史数据 (包含静态估值、汇率、hedge/position 来自 fund_daily_factors；
+            #    净值 h.nav 缺失即 NULL，不向 f.nav 兜底)
             query_hist = """
             SELECT h.date, h.price,
-                   COALESCE(h.nav, f.nav) as nav,
+                   h.nav as nav,
                    h.static_val, h.premium as static_premium, h.calibration,
                    h.index_close, h.index_pct, h.shares, h.shares_added, h.trade_volume, h.turnover_rate, h.volume,
                    h.valuation_error,

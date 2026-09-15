@@ -56,6 +56,26 @@ export function getFundHoldingValuation(code: string, period: string) {
   return client.get(`/api/fund/${code}/holding-valuation`, { params: { period } })
 }
 
+/** 季报持仓分析：持仓静态估值历史（季报持仓法，全 USD 简化） */
+export function getFundHoldingRecalc(code: string, period: string = '2026H1', start: str = '2026-07-01') {
+  return client.get(`/api/fund/${code}/holding-recalc`, { params: { period, start } })
+}
+
+/** 季报持仓分析：持仓实时估值（Model B，季报持仓法 + CL 期货实时价） */
+export function getFundHoldingRealtime(code: string) {
+  return client.get(`/api/fund/${code}/holding-realtime`)
+}
+
+/** 从 ARM 拉 CL 三时点冻结价到本地（盘前手动触发一次即可） */
+export function syncFuturesFreeze() {
+  return client.post(`/api/fund/sync-freeze`)
+}
+
+/** 从 ARM 拉美股/伦敦/港股 ETF 日 K（usa_etf_daily_prices）全表到本地（手动触发） */
+export function syncUsaEtf() {
+  return client.post(`/api/fund/sync-usa-etf`)
+}
+
 /** 市场概览（汇率、活跃数据源、统计） */
 export function getMarketOverview() {
   return client.get('/api/market/overview')

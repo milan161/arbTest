@@ -3048,6 +3048,15 @@ symbol_sources:
   OIL: FUTU
   BNO: FUTU
   CPER: FUTU
+  BCD: FUTU
+  COMT: FUTU
+  DBA: FUTU
+  DBB: FUTU
+  OIH: FUTU
+  PDBA: FUTU
+  SCO: FUTU
+  TMF: FUTU
+  ZSL: FUTU
   DBC: FUTU
   PDBC: FUTU
   EWA: FUTU
@@ -3072,6 +3081,9 @@ symbol_sources:
   '510310': TDX
   '515000': TDX
   '515880': TDX
+  '512760': TDX
+  '159560': TDX
+  '159995': TDX
   '516160': TDX
   '516150': TDX
   '515790': TDX
@@ -3356,6 +3368,11 @@ symbol_sources:
   '513880': TDX
   '501300': TDX
   AG0: SINA
+  PSI: FUTU
+  SOXQ: FUTU
+  2644.T: FUTU
+  '512760': TDX
+  '159995': TDX
 ib_core_symbols:
 - XOP
 - GLD

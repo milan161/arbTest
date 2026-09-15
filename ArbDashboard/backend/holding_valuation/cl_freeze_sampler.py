@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+原油 LOF 实时估值(Model B) 分母采样器 —— CL(WTI) 合约月三时点冻结价。
+
+背景：
+  Model B 实时估值分母取 5 只 ETF 确定自身净值的时点：
+    CRUD  -> CME WTI 14:30 EDT
+    BRNT  -> ICE Brent 11:30 EDT  (本期按东哥口径统一用 CL，带 Brent 残差)
+    US三  -> NYSE 16:00 EDT
+  本期(2026-09-15 起)改为"有效近月 ±1" 三合约同时采样对比：
+    - 有效近月 = 当月 + 1（USO 持次月合约；如 9 月 → 近月=10 月 CLV26）
+    - 三合约 = [近月, +1月, +2月]（如 9 月 → 2610/2611/2612）
+    - 下月自动滚动（如 10 月 → 2611/2612/2701）
+  每个 NY 时点各抓三个合约价格 → 每天 3 时点 × 3 合约 = 9 个价格。
+
+部署：
+  - 由 systemd timer 在 America/New_York 时区 11:30/14:30/16:00 触发（冬夏令时自动切换）。
+  - 脚本按当前 NY 时间自动判定命中哪个时点（容错 +-10min），非交易时段跳过。
+  - 周末 + 2026 美股假日不采。
+  - 落库 futures_freeze_prices(trade_date, point, symbol, price, src, fetched_at)，
+    symbol 如 'CL2610'/'CL2611'/'CL2612'。
+  - 落库后仅保留当天三个合约的采样，并清掉历史遗留的主力连续 symbol='CL'
+    及过期合约（不在当前活跃列表中的）。
+  - 采样成功经 Hermes 微信通道推送一条给东哥（每天三次，每次带三合约价）。
+
+手动测试：
+  python cl_freeze_sampler.py --point 1430          # 强制写今天 14:30 那一行（三合约）
+  python cl_freeze_sampler.py --point 1430 --dry-run # 只打印不写库
+  python cl_freeze_sampler.py --test-notify          # 只发一条测试微信（不采样不写库）
+  python cl_freeze_sampler.py --db /path/arb_master.db
+"""
+
+import argparse
+import logging
+import os
+import re
+import sqlite3
+import sys
+import time
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+# ---------- 配置 ----------
+DEFAULT_DB = "/home/ubuntu/arbtest/database/arb_master.db"
+LOG_DIR = "/home/ubuntu/arbtest/logs"
+LOG_FILE = os.path.join(LOG_DIR, "cl_freeze.log")
+SINA_BASE = "https://hq.sinajs.cn/list="
+SINA_REF = "https://finance.sina.com.cn"
+
+# 三个 NY 时点（小时, 分钟）
+POINTS = {"1130": (11, 30), "1430": (14, 30), "1600": (16, 0)}
+POINT_LABEL = {"1130": "11:30", "1430": "14:30", "1600": "16:00"}
+
+# 有效近月 ±1 三合约（YYMM），动态计算。
+# 规则：有效近月 = 当月 + 1（USO 持次月合约）。
+# 例: 9 月 → 近月=10 月 → [2610, 2611, 2612]；10 月 → [2611, 2612, 2701]
+def get_active_cl_contracts(as_of_date=None):
+    """返回当前活跃的三个 CL 合约 YYMM 列表 [近月, +1月, +2月]。"""
+    if as_of_date is None:
+        as_of_date = ny_now().date()
+    y, m = as_of_date.year, as_of_date.month
+    front_m = m + 1  # 近月 = 次月
+    front_y = y
+    if front_m > 12:
+        front_m -= 12
+        front_y += 1
+
+    def _yymm(year, month):
+        return f"{year % 100:02d}{month:02d}"
+
+    contracts = []
+    for i in range(3):
+        cm = front_m + i
+        cy = front_y
+        if cm > 12:
+            cm -= 12
+            cy += 1
+        contracts.append(_yymm(cy, cm))
+    return contracts
+
+
+# 运行时合约列表（main() 启动时算一次，当天不变）
+CONTRACTS: list[str] = []
+SRC = "sina"
+
+
+def sina_code(contract: str) -> str:
+    """新浪行情代码，如 'hf_CL2611'。"""
+    return "hf_CL" + contract
+
+
+def symbol_of(contract: str) -> str:
+    """落库 symbol，如 'CL2611'。"""
+    return "CL" + contract
+
+
+# [AI-2026-09-14] 采样成功 → 微信通知（复用 ARM 上 Hermes 的 hermes send，东哥要求）
+HERMES_BIN = "/home/ubuntu/.local/bin/hermes"
+WEIXIN_TARGET = "weixin:o9cq8021-HdL91_oQonp3pWQW0uQ@im.wechat"
+
+# 2026 美股休市日（ equity holidays，作为采样守卫；期货略有差异但不影响快照语义）
+US_HOLIDAYS_2026 = {
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+}
+
+# ---------- NY 时间（优先 zoneinfo，失败回退 DST 手工规则） ----------
+try:
+    from zoneinfo import ZoneInfo
+    _NY = ZoneInfo("America/New_York")
+except Exception:
+    _NY = None
+
+
+def _ny_offset_utc(dt_utc: datetime) -> int:
+    """America/New_York 相对 UTC 的偏移秒数（DST: UTC-4, 否则 UTC-5）。"""
+    year = dt_utc.year
+    # DST 起点：3 月第 2 个周日 02:00 本地 -> 07:00 UTC
+    mar = datetime(year, 3, 1, tzinfo=timezone.utc)
+    d = mar
+    sundays = 0
+    while d.month == 3:
+        if d.weekday() == 6:
+            sundays += 1
+            if sundays == 2:
+                dst_start = d.replace(hour=7)
+                break
+        d += timedelta(days=1)
+    # DST 终点：11 月第 1 个周日 02:00 本地 -> 06:00 UTC
+    nov = datetime(year, 11, 1, tzinfo=timezone.utc)
+    d = nov
+    first_sunday = None
+    while d.month == 11:
+        if d.weekday() == 6:
+            first_sunday = d.replace(hour=6)
+            break
+        d += timedelta(days=1)
+    if dst_start <= dt_utc < first_sunday:
+        return -4 * 3600  # EDT
+    return -5 * 3600  # EST
+
+
+def ny_now() -> datetime:
+    if _NY is not None:
+        return datetime.now(_NY)
+    dt_utc = datetime.now(timezone.utc)
+    off = _ny_offset_utc(dt_utc)
+    return dt_utc.astimezone(timezone(timedelta(seconds=off)))
+
+
+def detect_point(now: datetime, tol_min: int = 10) -> str | None:
+    hhmm = now.hour * 60 + now.minute
+    for p, (h, m) in POINTS.items():
+        if abs(hhmm - (h * 60 + m)) <= tol_min:
+            return p
+    return None
+
+
+def is_trading_day(d: datetime) -> bool:
+    if d.weekday() >= 5:  # 周六/周日
+        return False
+    if d.strftime("%Y-%m-%d") in US_HOLIDAYS_2026:
+        return False
+    return True
+
+
+# ---------- 行情抓取 ----------
+def fetch_cl(contract: str) -> tuple[float, str]:
+    """抓取单个远月合约（如 2611）新浪 hf_CL2611 价格。返回 (price, sina_time)。"""
+    code = sina_code(contract)
+    req = urllib.request.Request(
+        SINA_BASE + code, headers={"Referer": SINA_REF, "User-Agent": "Mozilla/5.0"}
+    )
+    raw = urllib.request.urlopen(req, timeout=15).read().decode("gbk", "ignore")
+    m = re.search(r'var hq_str_' + code + r'="(.*?)"', raw)
+    if not m:
+        raise ValueError(f"新浪返回未匹配到 {code} 行情")
+    fields = m.group(1).split(",")
+    price = None
+    for f in fields:
+        f = f.strip()
+        try:
+            v = float(f)
+            if 1.0 < v < 1000.0:  # WTI 合理区间
+                price = v
+                break
+        except ValueError:
+            continue
+    if price is None:
+        raise ValueError(f"新浪 {code} 未解析出有效价格")
+    t = fields[-1].strip() if fields else ""
+    return price, t
+
+
+# ---------- 落库 ----------
+CREATE_FREEZE_SQL = """
+    CREATE TABLE IF NOT EXISTS futures_freeze_prices (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        trade_date  TEXT NOT NULL,
+        point       TEXT NOT NULL,
+        symbol      TEXT NOT NULL,
+        price       REAL NOT NULL,
+        src         TEXT NOT NULL DEFAULT 'sina',
+        fetched_at  TEXT NOT NULL,
+        UNIQUE(trade_date, point, symbol)
+    )
+"""
+
+
+def write_rows(db_path: str, trade_date: str, point: str,
+               rows: list[tuple[str, float, str, str]], active_symbols: list[str]) -> int:
+    """写入一批合约采样（rows: [(symbol, price, src, fetched_at), ...]），并清理旧数据。
+
+    清理策略：保留最近 7 天（今天及过去 6 天）且 symbol 在活跃列表中的行；
+    删除更早的历史、以及历史遗留的主力连续 symbol='CL' 和过期月合约，避免旧数据污染。
+    （东哥 2026-09-15 拍板：保留 7 天历史用于对比验证，而非每晚只留当天）
+    返回写入行数。
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(CREATE_FREEZE_SQL)
+        for symbol, price, src, fetched_at in rows:
+            conn.execute(
+                """
+                INSERT INTO futures_freeze_prices
+                    (trade_date, point, symbol, price, src, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date, point, symbol) DO UPDATE SET
+                    price=excluded.price, src=excluded.src, fetched_at=excluded.fetched_at
+                """,
+                (trade_date, point, symbol, price, src, fetched_at),
+            )
+        # 清理：保留最近 7 天(今天及过去 6 天) 且 symbol 在活跃列表中的行；
+        # 删除更早历史 + 旧主力连续('CL') + 过期月合约。
+        cutoff = None
+        try:
+            d = datetime.strptime(trade_date, "%Y-%m-%d").date()
+            cutoff = (d - timedelta(days=6)).strftime("%Y-%m-%d")
+        except Exception:
+            cutoff = None
+        cutoff_sql = "trade_date < ? OR " if cutoff else ""
+        cutoff_params = [cutoff] if cutoff else []
+        placeholders = ",".join("?" for _ in active_symbols)
+        del_cur = conn.execute(
+            f"DELETE FROM futures_freeze_prices WHERE {cutoff_sql}symbol NOT IN ({placeholders})",
+            tuple(cutoff_params + active_symbols))
+        if del_cur.rowcount:
+            log = logging.getLogger("cl_freeze")
+            log.info("清理旧冻结价 %d 条（保留最近7天活跃合约），cutoff=%s",
+                     del_cur.rowcount, cutoff or "n/a")
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+# ---------- 微信通知 ----------
+def notify_weixin(trade_date: str, point: str, prices: dict[str, float]) -> None:
+    """采样落库成功后给东哥微信推一条（prices: 合约->价格）。失败绝不影响采样主流程。
+
+    复用 ARM 上 Hermes 的 `hermes send`（无 LLM / 无 agent loop），目标为东哥主号 dm。
+    以 ubuntu 用户运行（与 cl-freeze.service 一致），显式带上 HOME 以读到 ~/.hermes。
+    """
+    import subprocess
+    log = logging.getLogger("cl_freeze")
+    if point == "TEST":
+        msg = ("【CL冻结价采样】通道测试\n"
+               f"发送时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')}\n"
+               "若你收到此条，说明采样成功自动通知已就绪。")
+    else:
+        bj = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M:%S")
+        parts = " ".join(f"{c}={prices[c]:.3f}" for c in sorted(prices))
+        msg = f"{bj} 采样 {trade_date} point={point} {parts} → 落库成功 ✅"
+    env = dict(os.environ)
+    env.setdefault("HOME", "/home/ubuntu")
+    # iLink 微信通道有 ~30s 发送冷却（"sendmessage rate limited; cooldown active for 30.0s"），
+    # 失败即等 60s 重试，最多 3 次；通知失败绝不影响采样主流程。
+    attempts = 3
+    for i in range(attempts):
+        try:
+            r = subprocess.run(
+                [HERMES_BIN, "send", "--to", WEIXIN_TARGET, msg],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+            if r.returncode == 0:
+                log.info("微信通知已发送 point=%s", point)
+                return
+            log.warning("微信通知失败(第%d/%d次) rc=%s err=%s",
+                        i + 1, attempts, r.returncode, (r.stderr or "")[:200])
+        except Exception as e:
+            log.warning("微信通知异常(第%d/%d次): %s", i + 1, attempts, e)
+        if i < attempts - 1:
+            time.sleep(60)
+    log.error("微信通知最终失败(已重试%d次，不影响采样)", attempts)
+
+
+# ---------- 主流程 ----------
+def main() -> int:
+    ap = argparse.ArgumentParser(description="CL 合约月三时点冻结采样器（有效近月±1 三合约）")
+    ap.add_argument("--point", choices=list(POINTS.keys()),
+                    help="手动指定时点(测试用)，不指定则按当前 NY 时间自动判定")
+    ap.add_argument("--db", default=DEFAULT_DB, help="目标 sqlite 路径")
+    ap.add_argument("--dry-run", action="store_true", help="只打印不写库")
+    ap.add_argument("--no-notify", action="store_true", help="落库后不发送微信通知")
+    ap.add_argument("--test-notify", action="store_true",
+                    help="仅发送一条测试微信（不采样不写库）")
+    args = ap.parse_args()
+
+    os.makedirs(LOG_DIR, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+    log = logging.getLogger("cl_freeze")
+
+    if args.test_notify:
+        log.info("[test-notify] 仅发送测试微信通知")
+        notify_weixin(ny_now().strftime("%Y-%m-%d"), "TEST", {})
+        return 0
+
+    now = ny_now()
+    # 动态计算当日活跃三合约
+    global CONTRACTS
+    CONTRACTS = get_active_cl_contracts(now.date())
+    trade_date = now.strftime("%Y-%m-%d")
+    point = args.point or detect_point(now)
+    if point is None:
+        log.info("当前 NY 时间 %s 不命中任一采样点，跳过", now.strftime("%H:%M"))
+        return 0
+    if not args.point and not is_trading_day(now):
+        log.info("%s 非美股交易日，跳过采样", trade_date)
+        return 0
+
+    # 同时抓取两个远月合约
+    prices: dict[str, float] = {}
+    for contract in CONTRACTS:
+        try:
+            price, _sina_time = fetch_cl(contract)
+            prices[contract] = price
+            log.info("采样 trade_date=%s point=%s symbol=%s price=%.3f",
+                     trade_date, point, symbol_of(contract), price)
+        except Exception as e:
+            log.error("抓取 %s 失败: %s", sina_code(contract), e)
+
+    if not prices:
+        log.error("全部合约抓取失败，跳过写库")
+        return 1
+
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if args.dry_run:
+        log.info("[dry-run] 不写库 db=%s active_contracts=%s prices=%s", args.db, CONTRACTS, prices)
+        return 0
+
+    active_syms = [symbol_of(c) for c in CONTRACTS]
+    rows = [(symbol_of(c), prices[c], SRC, fetched_at) for c in sorted(prices)]
+    try:
+        n = write_rows(args.db, trade_date, point, rows, active_syms)
+    except Exception as e:
+        log.error("写库失败 db=%s: %s", args.db, e)
+        return 1
+    log.info("落库成功（%d 个合约）", n)
+
+    if not args.no_notify:
+        notify_weixin(trade_date, point, prices)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

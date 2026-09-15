@@ -631,7 +631,7 @@ class DailyUpdater(BaseApp):
         except Exception as e:
             self.logger.error(f"❌ [Level 1] JPY/CNY 在岸价直连失败: {e}")
 
-    def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None, trade_volume=None):
+    def _safe_save_fund_data(self, date_str, fund_code, price=None, nav=None, trade_volume=None, volume=None):
         """
         [AI-2026-06-28] premium 计算按基金分类分支：
           - QDII欧美 / 黄金原油（美股/期货有时差）→ T价 / T-1净值
@@ -676,13 +676,17 @@ class DailyUpdater(BaseApp):
         # [AI-2026-07-31] 净值日期一并落库：本表约定「行内 nav 即 date 当日净值」
         # （东财 nav_df 每行自带日期，date_str 就是净值日期；此前只写 nav 不写 nav_date 属遗漏）
         self.db.save_unified_history(
-            date_str=date_str, 
-            fund_code=fund_code, 
-            price=new_price, 
-            nav=new_nav, 
+            date_str=date_str,
+            fund_code=fund_code,
+            price=new_price,
+            nav=new_nav,
             nav_date=date_str if new_nav is not None else None,
             premium=premium,
-            trade_volume=trade_volume
+            trade_volume=trade_volume,
+            # [FIX 2026-09-11] 成交额(万元) = 成交量(手)×100×收盘 / 10000 = trade_volume×price/100。
+            # 腾讯 qfq 日K线仅给成交量(手)无成交额字段，故由成交量×收盘反算。此前某次重构把 volume 参数
+            # 整段删掉，导致 2026-08-21 之后每日行的成交额恒为 NULL（主看板盘后空白）。
+            volume=volume
         )
 
     def _step4_fix_holiday_prices(self, codes_to_fix=None):
@@ -846,6 +850,9 @@ class DailyUpdater(BaseApp):
                     k_close = float(it[2]) if len(it) > 2 and it[2] else 0
                     # [2026-07-30] 成交量(手)：1 手 = 100 份；换手率 = 成交量(手) / 份额(万) × 100，与 woody 网页对齐
                     k_volume = float(it[5]) if len(it) > 5 and it[5] else 0
+                    # [FIX 2026-09-11] 成交额(万元) = 成交量(手)×100×收盘 / 10000 = k_volume×k_close/100。
+                    # 腾讯 qfq 日K线无独立成交额字段，由成交量×收盘反算（与 fund_service 盘中 rt['amount'] 万元量纲一致）。
+                    k_amount_wan = (k_volume * k_close / 100.0) if (k_volume and k_close > 0) else 0.0
                     if k_close <= 0:
                         continue
                     if k_date > today_str:
@@ -867,7 +874,7 @@ class DailyUpdater(BaseApp):
                         if q_dec > k_dec:
                             close_to_write = qt_close
                     # 收盘后 / 历史日期：正常写入官方收盘价
-                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=close_to_write, trade_volume=k_volume)
+                    self._safe_save_fund_data(date_str=k_date, fund_code=code, price=close_to_write, trade_volume=k_volume, volume=k_amount_wan)
                     written += 1
 
                 if written > 0:

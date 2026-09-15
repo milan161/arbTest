@@ -1245,6 +1245,68 @@ async def get_fund_holding_valuation(code: str, period: str):
         logger.error(f"Error getting holding valuation for {code}/{period}: {e}")
         return {"status": "error", "message": str(e)}
 
+
+@app.get("/api/fund/{code}/holding-recalc")
+async def get_fund_holding_recalc(code: str, period: str = "2026H1", start: str = "2026-07-01"):
+    """基金季报持仓分析：持仓静态估值历史（季报持仓法，全 USD 简化）"""
+    try:
+        data = holding_service.get_recalc_history(code, period, start)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Error getting holding recalc for {code}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/fund/{code}/holding-realtime")
+async def get_fund_holding_realtime(code: str):
+    """基金季报持仓分析：持仓实时估值（Model B，季报持仓法 + CL 期货实时价）。
+
+    分母读本地 futures_freeze_prices（需先经 /api/fund/sync-freeze 从 ARM 拉取）；
+    分子现抓 CL(WTI) 实时价。分母缺失返回 error/freeze_incomplete，不兜底。
+    """
+    try:
+        data = holding_service.get_realtime_valuation(code)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Error getting holding realtime for {code}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/fund/sync-freeze")
+async def sync_futures_freeze_api():
+    """从 ARM 拉 CL 三时点冻结价到本地（每天上午盘前调一次即可）。
+
+    复用 ssh arm 查询通道，仅拉 futures_freeze_prices 小表，不 scp 全库、不碰 ARM 部署。
+    后台线程执行，不阻塞事件循环。
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: holding_service.sync_futures_freeze_from_arm())
+        return {"status": result.get("status", "error"), "data": result}
+    except Exception as e:
+        logger.error(f"同步 CL 冻结价失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/fund/sync-usa-etf")
+async def sync_usa_etf_from_arm_api():
+    """从 ARM 拉美股/伦敦/港股 ETF 日 K（usa_etf_daily_prices）全表到本地。
+
+    本地程序非每日运行，ARM 上 usa-etf-history.timer 每日增量累积（截至昨日北京时间），
+    本接口仅在用户手动点按钮时把 ARM 整张表拉回本地，因此"停用 N 天后点一次"会补齐
+    这 N 天（及此前任何缺失）的全部历史。后台线程执行，不阻塞事件循环。
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: holding_service.sync_usa_etf_from_arm())
+        return {"status": result.get("status", "error"), "data": result}
+    except Exception as e:
+        logger.error(f"同步美股 ETF 日 K 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/api/fund/hedge_multipliers")
 async def get_hedge_multipliers():
     """获取所有期货乘数配置（前端沙盘可调用）"""
