@@ -517,11 +517,13 @@ class DailyUpdater(BaseApp):
             exchange_rate_data = data_fetcher.fetch_official_exchange_rate()
             if exchange_rate_data:
                 date_info = exchange_rate_data.get('日期')
-                if date_info:
+                usd_val = exchange_rate_data.get('usd_cny_mid')
+                hkd_val = exchange_rate_data.get('hkd_cny_mid')
+                # [A根因修复 2026-09-18] 中间价尚未发布(usd/hkd为空)时，绝不 upsert 今天行
+                # 避免建出"中间价=NULL"的脏行；保留已有最新行，待 9:15 后官方发布再补
+                if date_info and usd_val is not None and hkd_val is not None:
                     try:
                         date_info_str = pd.to_datetime(str(date_info)).strftime('%Y-%m-%d')
-                        usd_val = exchange_rate_data.get('usd_cny_mid')
-                        hkd_val = exchange_rate_data.get('hkd_cny_mid')
                         self.db.upsert_exchange_rate(date_info_str, usd_cny_mid=usd_val, hkd_cny_mid=hkd_val)
                         self.logger.info(f"✅ 人民币中间价入库: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}")
 
@@ -534,6 +536,8 @@ class DailyUpdater(BaseApp):
                             self.logger.warning(f"⚠️ 抓取到的汇率日期为过去日期 ({date_info_str})，未更新到今天，因此不标记今日已同步。")
                     except Exception as e:
                         self.logger.error(f"❌ 本地汇率解析异常: {e}")
+                elif date_info:
+                    self.logger.warning(f"⚠️ 官方中间价今日尚未发布(usd/hkd为空)，跳过 upsert，保留最新已有行；待 9:15 后重试")
 
         # [AI-2026-08-17] 在岸价(USD/JPY spot)——抽成 _fetch_spot_rates，DASHBOARD_MODE 与非 DASHBOARD_MODE 共用
         self._fetch_spot_rates(today_str)

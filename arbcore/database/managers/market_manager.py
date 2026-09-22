@@ -21,7 +21,14 @@ class MarketManager(BaseManager):
             # [AI-2026-08-02] 新增 jpy_cny_spot 列支持
             cursor.execute("SELECT usd_cny_mid, hkd_cny_mid, usd_cnh, usd_cny_spot, jpy_cny_mid, jpy_cny_spot FROM exchange_rate WHERE date = ?", (date,))
             row = cursor.fetchone()
-            
+
+            # [A根因修复 2026-09-18] 若目标行不存在(新建)且本次所有汇率值均为空，
+            # 不建"全 NULL"空行——避免 9:15 前中间价未发布时污染 exchange_rate 表
+            # （正常有值写入路径不受影响：任一值非 None 即正常建/更新行）
+            if row is None and all(v is None for v in (usd_cny_mid, hkd_cny_mid, usd_cnh, usd_cny_spot, jpy_cny_mid, jpy_cny_spot)):
+                conn.close()
+                return
+
             exist_usd = row[0] if row else None
             exist_hkd = row[1] if row else None
             exist_cnh = row[2] if row else None
