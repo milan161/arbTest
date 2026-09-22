@@ -1164,9 +1164,12 @@ class LedgerService:
         return ('US_ETF', s, None, 1)
 
     def _hedge_current_price(self, market_service, htype: str, root_or_sym: str,
-                             contract: Optional[str] = None) -> Optional[float]:
-        """对冲标的现价：期货按持仓合约月逐月取新浪 hf_CL{合约}（WTI 系，与对冲页同源）；
-        无合约月/非 WTI 品种走母合约连续价；美股 ETF 走最近收盘价。"""
+                             contract: Optional[str] = None):
+        """对冲标的现价（带来源标签），返回 (price, tag)：
+        · 期货 MCL/CL 逐合约 → 新浪 hf_CL{合约} 实时，标签 '实时'；
+        · 其他期货(MGC/GC/SI 等) → get_realtime_quote(富途/IB)，标签 '实时'；
+        · 美股 ETF(GLD/XOP 等) → 先取富途/IB 夜盘实时(标签 '夜盘')，拿不到降级最近收盘价(标签 '昨收盘')。
+        [AI-2026-09-22 东哥拍板] 非期货 ETF 必须取此刻夜盘实时价，缺失才降级昨收盘并标注，绝不静默用旧价。"""
         if htype == 'FUTURES':
             # [AI-2026-09-21 东哥指正] MCL 2611/2612 是不同合约，与连续价有跨月基差，
             # 必须逐合约取价：复用对冲页 HoldingService._fetch_cl_realtime（hf_CL{contract} 同源）。
@@ -1174,17 +1177,28 @@ class LedgerService:
                 try:
                     from services.holding_service import HoldingService
                     price, _t = HoldingService._fetch_cl_realtime(contract)
-                    return float(price)
+                    return float(price), '实时'
                 except Exception as e:
                     logger.warning(f"[浮动跟盘] 逐合约实时价失败 CL{contract}: {e}")
-                    return None
+                    return None, None
             try:
                 q = market_service.get_realtime_quote(root_or_sym)
-                return (q or {}).get('price') if q else None
+                p = (q or {}).get('price') if q else None
+                return (float(p), '实时') if p and p > 0 else (None, None)
             except Exception as e:
                 logger.warning(f"[浮动跟盘] 期货实时价失败 {root_or_sym}: {e}")
-                return None
-        return self._get_us_etf_last_close(root_or_sym)
+                return None, None
+        # 非期货 ETF：先取富途/IB 夜盘实时(标"夜盘")；拿不到降级昨收盘(标"昨收盘")
+        try:
+            q = market_service.get_realtime_quote(root_or_sym)
+            if q and q.get('price') and q['price'] > 0:
+                return float(q['price']), '夜盘'
+        except Exception as e:
+            logger.debug(f"[浮动跟盘] ETF实时价失败 {root_or_sym}: {e}")
+        lc = self._get_us_etf_last_close(root_or_sym)
+        if lc is not None:
+            return float(lc), '昨收盘'
+        return None, None
 
     @staticmethod
     def _sanitize(v):
@@ -1242,14 +1256,27 @@ class LedgerService:
             realtime_nav = None
             realtime_premium = None
             redeem_fee = None
-            if in_window and holding_svc is not None and fund_code:
+            # [AI-2026-09-22 东哥拍板·方案B] 实时折溢价双路口径：
+            #  · 原油三基金 → 用持仓估值(HoldingService.get_realtime_valuation, MCL对冲)正确值；
+            #  · 黄金/XOP等非原油 → 回退主看板同款(FundService.get_realtime_valuation_detail, 通用篮子, 准)。
+            # 自动分流：HoldingService 仅对原油(有季报持仓)返回 status=ok，其余返回非 ok → 回退 FundService。
+            if in_window and (holding_svc is not None or fund_svc is not None) and fund_code:
                 try:
-                    rv = holding_svc.get_realtime_valuation(fund_code)
-                    sel = (rv or {}).get('selected_contract')
-                    cinfo = (rv or {}).get('contracts', {}).get(sel) if sel else None
-                    nav = (cinfo or {}).get('realtime_nav') if cinfo else None
-                    if nav is not None and nav > 0 and lof_cur is not None:
-                        realtime_nav = round(float(nav), 6)
+                    if holding_svc is not None:
+                        rv = holding_svc.get_realtime_valuation(fund_code)
+                        if rv and rv.get('status') == 'ok':
+                            sel = (rv or {}).get('selected_contract')
+                            cinfo = (rv.get('contracts') or {}).get(sel) if sel else None
+                            nav = (cinfo or {}).get('realtime_nav') if cinfo else None
+                            if nav is not None and nav > 0:
+                                realtime_nav = float(nav)
+                    if realtime_nav is None and fund_svc is not None:
+                        d = fund_svc.get_realtime_valuation_detail(fund_code)
+                        nav = (d or {}).get('rt_val') if d else None
+                        if nav is not None and nav > 0:
+                            realtime_nav = float(nav)
+                    if realtime_nav is not None and lof_cur is not None and lof_cur > 0:
+                        realtime_nav = round(realtime_nav, 6)
                         realtime_premium = round(lof_cur / realtime_nav - 1.0, 6)
                     # 赎回费率（broker_redemption_fees；查不到默认 0.5%，与 main.py 口径一致）
                     fr = self.get_fee_rate(fund_code, str(p.get('broker_name') or ''))

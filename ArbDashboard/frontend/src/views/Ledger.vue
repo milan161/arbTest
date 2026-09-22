@@ -156,7 +156,7 @@
         bordered
         :row-class-name="pnlRowClass"
         :max-height="400"
-        :scroll-x="1240"
+        :scroll-x="1260"
       />
       <n-empty v-else description="当前无未赎回持仓" />
     </n-card>

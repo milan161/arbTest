@@ -2630,7 +2630,7 @@ async def get_ledger_alerts_api():
 async def get_ledger_floating_api():
     """持仓浮动跟盘：OPEN/unfinished 组实时 LOF + 美股/期货价 → 浮动盈亏。
     [AI-2026-09-21] 沿用 A 股交易时段门禁（is_quote_window），美股 ETF 用最近收盘价（非夜盘盘中价）。"""
-    data = ledger_service.get_floating_pnl(market_data_service, holding_service)
+    data = ledger_service.get_floating_pnl(market_data_service, holding_service, fund_service)
     return {"status": "ok", "data": data}
 
 # --- 自动记录交易（QMT执行回调） ---
