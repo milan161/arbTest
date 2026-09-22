@@ -92,7 +92,7 @@ MARKET_HOLIDAYS: Dict[str, set] = {
     "JP": {
         "2026-01-01", "2026-01-12", "2026-02-11", "2026-03-20",
         "2026-04-29", "2026-05-03", "2026-05-04", "2026-05-05",
-        "2026-07-20", "2026-08-11", "2026-09-21", "2026-09-22",
+        "2026-07-20", "2026-08-11", "2026-09-21", "2026-09-22", "2026-09-23",
         "2026-10-12", "2026-11-03", "2026-11-23",
     },
     "CH": {
@@ -186,20 +186,25 @@ def _tencent_daily_closes(code: str) -> Dict[str, float]:
 # 持仓实时估值（Model B）配置
 # ---------------------------------------------------------------------------
 # 分母 = CL(WTI) 合约月三时点冻结价（来自 ARM futures_freeze_prices，每天上午盘前拉一次）。
-# 自 2026-09-15 起改为"有效近月 ±1"三合约：近月=当月+1（USO 持次月合约）。
-# 例: 9 月 → [2610,2611,2612]；10 月自动滚动为 [2611,2612,2701]。
+# 自 2026-09-17 起改为"两个对冲合约"：有效近月=当月+2（USO 在每月初 5-8 个工作日滚仓，
+# 中下旬实际持有"次次月"合约），只保留近月与 +1 两月。
+# 例: 9 月 → [2611,2612]；10 月自动滚动为 [2612,2701]。2610（主连）底层已滚过，估值对对冲无意义，移除。
 FREEZE_POINTS = ["1130", "1430", "1600"]
 
 
 def get_active_cl_contracts(as_of_date=None):
-    """返回当前活跃的三个 CL 合约 YYMM 列表 [近月, +1月, +2月]。
-    规则：有效近月 = 当月 + 1（USO 持次月合约）。
+    """返回当前活跃的两个 CL 合约 YYMM 列表 [近月, +1月]。
+
+    规则（2026-09-17 东哥拍板）：底层 ETF 已滚过 2610，主连 2610 估值对对冲无意义，
+    只保留两个对冲合约。有效近月 = 当月 + 2（USO 在每月初 5-8 个工作日滚仓，
+    中下旬实际持有"次次月"合约：如 9 月 → 近月=11 月 [2611,2612]）；
+    下月自动滚动（10 月 → [2612,2701]）。
     """
     from datetime import date as _date
     if as_of_date is None:
         as_of_date = _date.today()
     y, m = as_of_date.year, as_of_date.month
-    front_m = m + 1
+    front_m = m + 2  # 有效近月 = 当月 + 2（USO 月中已滚至次次月）
     front_y = y
     if front_m > 12:
         front_m -= 12
@@ -209,7 +214,7 @@ def get_active_cl_contracts(as_of_date=None):
         return f"{year % 100:02d}{month:02d}"
 
     contracts = []
-    for i in range(3):
+    for i in range(2):
         cm = front_m + i
         cy = front_y
         if cm > 12:
@@ -227,6 +232,69 @@ POINT_BY_SYMBOL: Dict[str, str] = {
     "CRUD": "1430",
     "BRNT": "1130",
 }
+
+# ---------------------------------------------------------------------------
+# 对冲穿透配置（etf_contract_exposure）：底层 ETF -> 实际持有合约月
+# ---------------------------------------------------------------------------
+# 用途：对冲页"该空哪个月"。静态估值(013_2, ETC 市价)与对冲(期货月份匹配)是两个独立问题：
+# 估值用 ETC 市价即可，但对冲做空的是期货本身，必须穿透到底层 ETC 实际持有的合约月。
+# 数据来源：ETF 官网持仓快照(USO/OILK/BNO) + 彭博官方日程表(CRUD=BCLMT4T, BRNT/BRNG=BCOMCO4T)。
+# ⚠️ 指数每月滚动，本表需人工按月维护（as_of = 快照日期）：
+#   - USO 每月初(4-8 工作日)滚仓；CRUD(BCLMT4T) 每月重置前移一个月；
+#   - BRNT/BRNG(BCOMCO4T) 奇数月 6-10 工作日滚仓（2026-11 中旬 2701→2703）；
+#   - OILK 三层梯式(Dec/Jun/Dec)基本稳定。
+# 坑：CME 月代码 F/G/H/J/K/M/N/Q/U/V/X/Z —— CLZ6=Dec26（旧 yaml 把它标成 NOV2026 是错的）。
+# ⚠️ futures_ratio 语义 =「名义敞口倍数」= 合同金额(期货+互换名义价值) ÷ 净资产，NOT「期货市值占净值比」！
+#   期货 ETF 买期货只需保证金，剩余资产买国债现金；用「期货市值÷(期货+国债+现金)」算敞口会把合同金额
+#   加进分母、自我稀释 → 敞口算成 ~44%/52%（错，系统性低估、空不够）。USO/BNO 都是 1 倍跟踪油价，
+#   产品定义就接近满仓。USCF 官网 9/4 持仓表：USO 名义敞口 18.10÷17.21≈105%，BNO 6.44÷6.04≈107%
+#   （SEC 10-Q 6/30 独立验证 BNO 108%）。详见已发表纠正文《3-纠正昨天原油基金的底层资产分析》。
+# 种子结构：(etf, weight_pct, futures_ratio, structure, contract_month, inner_ratio, variety, mcl_ok, in_book)
+#   in_book=1 → 计入表2 月份敞口聚合；in_book=0 → 结构特殊（动态单月/曲线分散），仅表1 标注「待核实」，不计入。
+#   futures_ratio =「名义敞口倍数」= 合同金额(期货+互换名义价值) ÷ 净资产（非「期货市值占净值比」）。
+#   weight_pct 单位为「占基金净值%」（季报权重 ×100）。
+ETF_EXPOSURE_SEED = {
+    "160723": [
+        ("CRUD", 18.87, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2611", 1.0 / 3, "WTI", 1, 1),
+        ("CRUD", 18.87, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2612", 1.0 / 3, "WTI", 1, 1),
+        ("CRUD", 18.87, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2701", 1.0 / 3, "WTI", 1, 1),
+        ("USO", 18.78, 1.05, "直接持期货+互换（每月初滚仓；名义敞口≈105%=合同金额÷净资产，非44%）", "2611", 1.0, "WTI", 1, 1),
+        ("OILK", 18.54, 1.0, "直接持期货（官网披露三层梯式均布，全在远月；名义敞口≈满仓）", "2612", 1.0 / 3, "WTI", 0, 1),
+        ("OILK", 18.54, 1.0, "直接持期货（官网披露三层梯式均布，全在远月；名义敞口≈满仓）", "2706", 1.0 / 3, "WTI", 0, 1),
+        ("OILK", 18.54, 1.0, "直接持期货（官网披露三层梯式均布，全在远月；名义敞口≈满仓）", "2712", 1.0 / 3, "WTI", 0, 1),
+        ("BNO", 18.37, 1.067, "直接持Brent近月（名义敞口≈107%=合同金额÷净资产，非52%；SEC 10-Q印证108%）", "2611", 1.0, "Brent", 0, 1),
+        ("BRNT", 14.90, 1.0, "TRS→彭博BCOMCO4T（单合约，双月滚；2026-09-16 已滚至2701）", "2701", 1.0, "Brent", 0, 1),
+        ("BRNG", 3.67, 1.0, "同BRNT（英镑份额）", "2701", 1.0, "Brent", 0, 1),
+    ],
+    # 161129（2026Q2 季报权重）：DBO 为动态单月、OILUSA 无（本基无）；DBO 标待核实
+    "161129": [
+        ("CRUD", 19.75, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2611", 1.0 / 3, "WTI", 1, 1),
+        ("CRUD", 19.75, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2612", 1.0 / 3, "WTI", 1, 1),
+        ("CRUD", 19.75, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2701", 1.0 / 3, "WTI", 1, 1),
+        ("BRNT", 18.57, 1.0, "TRS→彭博BCOMCO4T（单合约，双月滚；2026-09-16 已滚至2701）", "2701", 1.0, "Brent", 0, 1),
+        ("USO", 17.05, 1.05, "直接持期货+互换（每月初滚仓；名义敞口≈105%=合同金额÷净资产，非44%）", "2611", 1.0, "WTI", 1, 1),
+        ("BNO", 12.57, 1.067, "直接持Brent近月（名义敞口≈107%=合同金额÷净资产，非52%；SEC 10-Q印证108%）", "2611", 1.0, "Brent", 0, 1),
+        ("03175", 7.81, 1.0, "三星 S&P GSCI 原油 ER：近月滚动 WTI（韩元计价，结构同 USO 近月）", "2611", 1.0, "WTI", 1, 1),
+        ("DBO", 18.20, 1.0, "DBIQ Optimum Yield：单张WTI，每月初从未来1-13月选滚动收益最优月（动态，需实测当前合约）", "待实测", 1.0, "WTI", 0, 0),
+    ],
+    # 501018（2026Q2 季报权重）：OILUSA 为 CMCI 曲线多期限分散，标待核实
+    "501018": [
+        ("BRNT", 18.79, 1.0, "TRS→彭博BCOMCO4T（单合约，双月滚；2026-09-16 已滚至2701）", "2701", 1.0, "Brent", 0, 1),
+        ("BNO", 18.67, 1.067, "直接持Brent近月（名义敞口≈107%=合同金额÷净资产，非52%；SEC 10-Q印证108%；Nov26约9/30到期，9/18实测50/50滚动中）", "2611", 0.5, "Brent", 0, 1),
+        ("BNO", 18.67, 1.067, "直接持Brent近月（名义敞口≈107%=合同金额÷净资产，非52%；SEC 10-Q印证108%；Nov26约9/30到期，9/18实测50/50滚动中）", "2612", 0.5, "Brent", 0, 1),
+        ("CRUD", 18.66, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2611", 1.0 / 3, "WTI", 1, 1),
+        ("CRUD", 18.66, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2612", 1.0 / 3, "WTI", 1, 1),
+        ("CRUD", 18.66, 1.0, "TRS→彭博BCLMT4T（永久跳过近月，M2/M3/M4等权，每月重置）", "2701", 1.0 / 3, "WTI", 1, 1),
+        ("USO", 18.41, 1.05, "直接持期货+互换（每月初滚仓；名义敞口≈105%=合同金额÷净资产，非44%）", "2611", 1.0, "WTI", 1, 1),
+        ("1699", 5.62, 1.0, "野村 NOMURA 原油多头指数：WTI 2611/2612/2701 各约1/3（实测持仓）", "2611", 1.0 / 3, "WTI", 1, 1),
+        ("1699", 5.62, 1.0, "野村 NOMURA 原油多头指数：WTI 2611/2612/2701 各约1/3（实测持仓）", "2612", 1.0 / 3, "WTI", 1, 1),
+        ("1699", 5.62, 1.0, "野村 NOMURA 原油多头指数：WTI 2611/2612/2701 各约1/3（实测持仓）", "2701", 1.0 / 3, "WTI", 1, 1),
+        ("1671", 5.42, 1.0, "东京 Simplex WTI：NYMEX WTI 近月（日元计价）", "2611", 1.0, "WTI", 1, 1),
+        ("OILUSA", 8.47, 1.0, "UBS CMCI：WTI 曲线多期限分散(3月41%/6月22%/1年19%/2年11%/3年6%)，非单月", "曲线分散", 1.0, "WTI", 0, 0),
+    ],
+}
+ETF_EXPOSURE_AS_OF = "2026-09-17"
+ETF_EXPOSURE_SOURCE = "ETF官网持仓 + 彭博官方日程表 + 东京/韩国ETF招股书(1671/1699/03175) + 东哥纠正文(名义敞口倍数)"
 
 
 class HoldingService:
@@ -758,6 +826,10 @@ class HoldingService:
                     else:
                         note_parts.append(f"⚠️非假期缺价:{s}({md})")
                         fill_warning = True
+            # [AI-2026-09-22] 前填/沿用提示：标的在 T 日(d)无价即视为"沿用上一交易日收盘价"，
+            # 与是否假期无关；区别于 fill_warning(非假期缺价=真缺数据)。供前端琥珀色提醒用户。
+            carried_symbols = [s for s in syms if d not in price_rows.get(s, {})]
+            carried_forward = len(carried_symbols) > 0
             usd_ref = _fill(fx_rows["usd_cny_mid"], d)
             rows.append({
                 "date": d,
@@ -774,6 +846,8 @@ class HoldingService:
                 "fx_detail": fx_detail,
                 "note": "; ".join(note_parts) if note_parts else "",
                 "fill_warning": fill_warning,
+                "carried_forward": carried_forward,
+                "carried_symbols": carried_symbols,
             })
 
             # 仅当当日官方净值存在(可算误差)才计入误差统计
@@ -838,6 +912,49 @@ class HoldingService:
             "rows": list(reversed(rows)),  # 降序：最新在上
         }
 
+    # [AI-2026-09-21] 手喂外盘 ETF 收盘价：写 usa_etf_daily_prices 并重算持仓静态估值。
+    # 红线（东哥 2026-09-18 立规）由调用方（main.py 路由）做 hard 校验：trade_date 必须 < 今天
+    # （已收盘日），当天/未来盘中价绝不入库。这里只负责写入 + 重算落库。
+    def manual_upsert_etf_prices(self, fund_code: str, trade_date: str, prices: list) -> Dict[str, Any]:
+        """手喂外盘 ETF 收盘价并触发持仓静态估值重算落库。
+
+        入参 prices: [{symbol, price}, ...]；trade_date 已由路由校验为已收盘日。
+        写入 usa_etf_daily_prices（INSERT OR REPLACE，覆盖同日同标的），
+        随后调 get_recalc_history 重算并落库 unified_fund_history.holding_static_val，
+        返回更新后的 recalc 数据（与 get_recalc_history 同结构）供前端直接替换。
+        """
+        conn = self._get_conn()
+        try:
+            written = []
+            for p in prices:
+                sym = (p.get("symbol") or "").strip()
+                price = p.get("price")
+                if not sym or price is None:
+                    continue
+                try:
+                    price = float(price)
+                except (TypeError, ValueError):
+                    continue
+                if price <= 0:
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO usa_etf_daily_prices (date, symbol, price, updated_at) "
+                    "VALUES (?, ?, ?, (datetime('now','localtime')))",
+                    (trade_date, sym, price),
+                )
+                written.append({"symbol": sym, "price": price})
+            conn.commit()
+        finally:
+            conn.close()
+
+        if not written:
+            return {"status": "error", "message": "没有有效价格被写入"}
+
+        # 重算并落库（权重按日期自动路由；period 已废弃，传默认即可）
+        recalc = self.get_recalc_history(fund_code, "2026H1", "2026-07-01")
+        recalc["written"] = written
+        return {"status": "ok", "data": recalc}
+
     # ------------------------------------------------------------------
     # 持仓实时估值（Model B）：季报持仓法 + CL 期货实时价
     # ------------------------------------------------------------------
@@ -861,13 +978,11 @@ class HoldingService:
         # [AI-2026-09-15] 共用输入（与合约无关）提到最前：
         # 即便某合约后续走错误分支（冻结缺失/CL 抓取失败），LOF 现价/汇率也能带出，UI 不空白。
         lof_price, lof_price_source = self._fetch_lof_price(fund_code)
-        try:
-            fx_now = self._fetch_usdcny_realtime()
-        except Exception as e:
-            # 汇率失败仍是硬错误（估值无法计算），但带上 LOF 现价便于 UI 显示收盘现价
-            return _rt_err(fund_code, "fx_fetch_failed", today=today,
-                          lof_price=lof_price, lof_price_source=lof_price_source,
-                          message=str(e)[:200])
+        # [AI-2026-09-16] fx_now 改为「今日人民币中间价」(exchange_rate.usd_cny_mid @ today)，
+        # 不再抓取腾讯实时即期价 fxUSDCNY。原因：中间价与即期价天生差约 0.7%(价差非真实变动)，
+        # 用即期价会凭空多塞一层假 FX 波动 → realtime_premium 失真。今日中间价盘前已发布，由 DB 读取
+        # （见下方 conn 块赋值）。此处先置 None 占位，避免 early-return 引用未定义变量。
+        fx_now = None
 
         periods = self._load_period_weights(fund_code)
         if not periods:
@@ -876,6 +991,7 @@ class HoldingService:
                           fx_now=fx_now)
 
         active = get_active_cl_contracts()  # 每次调用重算（跨月安全）
+        brent_months: List[str] = []  # [AI-2026-09-17] Brent 书合约月（同月 CL 跨品种对冲反算用）
 
         conn = self._get_conn()
         self._ensure_freeze_table(conn)
@@ -936,12 +1052,26 @@ class HoldingService:
                 "SELECT usd_cny_mid FROM exchange_rate WHERE date=?",
                 (base_date,)).fetchone()
             fx_point = float(fx_row[0]) if (fx_row and fx_row[0] is not None) else None
+            # [AI-2026-09-16] 今日人民币中间价（估值 FX 项用），DB 直接读取，盘前已发布，不抓实时即期。
+            mid_row = conn.execute(
+                "SELECT usd_cny_mid FROM exchange_rate WHERE date=?",
+                (today,)).fetchone()
+            fx_now = float(mid_row[0]) if (mid_row and mid_row[0] is not None) else None
+            # [AI-2026-09-17] Brent 书合约月（in_book=1 已知单月）：同月 CL 跨品种对冲反算需要其估值，
+            # 但不在 WTI active_contracts 中，单独查出追加进计算合约集（如 2701）。
+            brent_months = [r[0] for r in conn.execute(
+                "SELECT DISTINCT contract_month FROM etf_contract_exposure "
+                "WHERE variety='Brent' AND in_book=1 "
+                "AND contract_month IS NOT NULL AND contract_month != ''"
+            ).fetchall()]
         finally:
             conn.close()
 
         # 逐合约计算估值（分母/分子各自合约严格一致）
+        # [AI-2026-09-17] 计算合约 = WTI active + Brent 书合约月（同月 CL 跨品种对冲反算）
+        compute_contracts: List[str] = list(dict.fromkeys(list(active) + brent_months))
         contracts: Dict[str, Any] = {}
-        for contract in active:
+        for contract in compute_contracts:
             contracts[contract] = self._value_one_contract(
                 fund_code, contract, base_date, base_nav, per, basket,
                 fx_point, fx_now, lof_price, lof_price_source, today)
@@ -1033,8 +1163,14 @@ class HoldingService:
         pos_pct = per["total"]
         r_basket_norm = contrib_sum * 100.0 / pos_pct if pos_pct > 0 else 0.0
         if fx_point is None or fx_point <= 0:
-            fx_point_used = fx_now          # fx_point 缺失：退化为无 FX 项
+            fx_point_used = fx_point
             fx_status = "fx_point_missing"
+            r_fx_rt = 0.0
+        elif fx_now is None or fx_now <= 0:
+            # [AI-2026-09-16] 今日中间价缺失（DB 尚未刷新该日 usd_cny_mid）→ 不做 FX 调整，
+            # 显式标红(fx_status=today_mid_missing) 等补数；绝不退化为实时即期价(会 reintroduce 假 FX)。
+            fx_point_used = fx_point
+            fx_status = "today_mid_missing"
             r_fx_rt = 0.0
         else:
             fx_point_used = fx_point
@@ -1065,8 +1201,8 @@ class HoldingService:
             "total_change_pct": round(total_change, 6),
             "basket_change_pct": round(r_basket_norm, 6),
             "fx_change_pct": round(r_fx_rt, 6),
-            "fx_now": round(fx_now, 4),
-            "fx_point": round(fx_point_used, 4),
+            "fx_now": round(fx_now, 4) if fx_now is not None else None,
+            "fx_point": round(fx_point_used, 4) if fx_point_used is not None else None,
             "fx_status": fx_status,
             "valid_weight_sum": round(valid_weight_pct / 100.0, 4),
             "coverage": round(valid_weight_pct / per["total"], 4) if per["total"] > 0 else 0.0,
@@ -1075,35 +1211,208 @@ class HoldingService:
             "message": None,
         }
 
+    # ------------------------------------------------------------------
+    # 对冲穿透（etf_contract_exposure）：底层 ETF 实际持有合约月 + 归一化 CL 对冲分布
+    # ------------------------------------------------------------------
+    def _ensure_exposure_table(self, conn) -> None:
+        """建表 + 首次种子（各基金仅当无数据时写入；此后 DB 为唯一权威，人工按月维护，代码不再覆盖）。
+        in_book=0 的行（DBO/OILUSA 结构特殊）仅表1 标注「待核实」，不计入表2 月份敞口聚合。
+        """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS etf_contract_exposure (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fund_code TEXT NOT NULL,
+                etf TEXT NOT NULL,
+                weight_pct REAL NOT NULL,
+                futures_ratio REAL NOT NULL,
+                structure TEXT,
+                contract_month TEXT NOT NULL,
+                inner_ratio REAL NOT NULL,
+                variety TEXT NOT NULL,
+                mcl_ok INTEGER NOT NULL DEFAULT 1,
+                in_book INTEGER NOT NULL DEFAULT 1,
+                as_of TEXT NOT NULL,
+                source TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # 兼容已有库：补 in_book 列（2026-09-17 新增）
+        cols = [c[1] for c in conn.execute(
+            "PRAGMA table_info(etf_contract_exposure)").fetchall()]
+        if "in_book" not in cols:
+            conn.execute(
+                "ALTER TABLE etf_contract_exposure ADD COLUMN in_book INTEGER NOT NULL DEFAULT 1")
+        # [2026-09-17 修正] 增量补种：同一基金下 (etf, contract_month) 唯一，
+        # INSERT OR IGNORE 使「旧库已有 WTI 行、本次新增 Brent 行(如2701)」也能自动补入，
+        # 不再因「无数据才播种」而跳过新增月份。人工维护的既有行不受影响（唯一键冲突即忽略）。
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_exp_fund_etf_month "
+            "ON etf_contract_exposure(fund_code, etf, contract_month)")
+        for fund, rows in ETF_EXPOSURE_SEED.items():
+            conn.executemany(
+                "INSERT OR IGNORE INTO etf_contract_exposure "
+                "(fund_code, etf, weight_pct, futures_ratio, structure, contract_month, "
+                "inner_ratio, variety, mcl_ok, in_book, as_of, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(fund, etf, w, fr, struct, month, ir, variety, mcl_ok, in_book,
+                  ETF_EXPOSURE_AS_OF, ETF_EXPOSURE_SOURCE)
+                 for (etf, w, fr, struct, month, ir, variety, mcl_ok, in_book)
+                 in rows],
+            )
+        conn.commit()
+
+    def get_hedge_exposure(self, fund_code: str) -> Dict[str, Any]:
+        """对冲穿透：底层 ETF 实际持有的期货月份 + 归一化 CL 对冲分布。
+
+        占净值% = 季报权重% × futures_ratio(名义敞口倍数=合同金额÷净资产，非「期货市值占净值比」) × inner_ratio(合约内部比例)。
+        WTI 书归一化后给出"该空哪个月"；Brent 书 CME 无 micro、单列（用同月 CL 跨品种近似对冲，见前端表2）。
+        hedge_plan：mcl_ok=1 且敞口最大的两个月份（当前 2611+2612）按敞口比例配比。
+        该基金无配置时返回空列表，前端隐藏两表（不报错、不兜底造数）。
+        """
+        conn = self._get_conn()
+        try:
+            self._ensure_exposure_table(conn)
+            rows = conn.execute(
+                "SELECT etf, weight_pct, futures_ratio, structure, contract_month, "
+                "inner_ratio, variety, mcl_ok, in_book, as_of "
+                "FROM etf_contract_exposure WHERE fund_code=? "
+                "ORDER BY weight_pct DESC, contract_month",
+                (fund_code,)).fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return {
+                "fund_code": fund_code, "as_of": None, "etfs": [],
+                "wti_months": [], "wti_book_nav_pct": 0.0,
+                "brent": {"months": [], "book_nav_pct": 0.0},
+                "hedge_plan": None, "pending_nav_pct": 0.0,
+                "message": "该基金暂无对冲穿透配置（etf_contract_exposure 无数据）",
+            }
+
+        as_of = max(r[9] for r in rows)
+
+        # 表1：按 ETF 分组（保持权重降序）；in_book=0 的 ETF 标 pending（待核实）
+        etf_order: List[str] = []
+        etf_map: Dict[str, Any] = {}
+        for etf, w, fr, struct, month, ir, variety, mcl_ok, in_book, _as in rows:
+            if etf not in etf_map:
+                etf_order.append(etf)
+                etf_map[etf] = {"etf": etf, "weight_pct": round(w, 2),
+                                "futures_ratio": fr, "structure": struct,
+                                "variety": variety, "contracts": [], "pending": False}
+            if not in_book:
+                etf_map[etf]["pending"] = True
+            etf_map[etf]["contracts"].append(
+                {"month": month, "pct": round(ir * 100, 1), "mcl_ok": bool(mcl_ok), "in_book": bool(in_book)})
+        etfs = [etf_map[e] for e in etf_order]
+
+        # 表2：按合约月聚合（仅 in_book=1 的已知单月 ETF；待核实 ETF 不计入，避免兜底假数据）
+        wti_agg: Dict[str, Dict[str, Any]] = {}
+        brent_agg: Dict[str, Dict[str, Any]] = {}
+        wti_total = brent_total = pending_total = 0.0
+        for etf, w, fr, _struct, month, ir, variety, mcl_ok, in_book, _as in rows:
+            if not in_book:
+                pending_total += w * fr * ir
+                continue
+            exp = w * fr * ir  # % of NAV
+            if variety == "WTI":
+                agg = wti_agg.setdefault(month, {"exp": 0.0, "mcl_ok": bool(mcl_ok), "from": []})
+                agg["exp"] += exp
+                agg["from"].append(etf)
+                wti_total += exp
+            else:
+                agg = brent_agg.setdefault(month, {"exp": 0.0, "from": []})
+                agg["exp"] += exp
+                agg["from"].append(etf)
+                brent_total += exp
+
+        wti_months = [
+            {"month": m, "exp_nav_pct": round(v["exp"], 1),
+             "book_pct": round(v["exp"] / wti_total * 100, 1) if wti_total > 0 else 0.0,
+             "from": "+".join(sorted(set(v["from"]))), "mcl_ok": v["mcl_ok"]}
+            for m, v in sorted(wti_agg.items())
+        ]
+        brent_months = [
+            {"month": m, "exp_nav_pct": round(v["exp"], 1),
+             "book_pct": round(v["exp"] / brent_total * 100, 1) if brent_total > 0 else 0.0,
+             "from": "+".join(sorted(set(v["from"])))}
+            for m, v in sorted(brent_agg.items())
+        ]
+
+        # 进阶对冲方案：mcl_ok=1 且敞口最大的两个月份，按敞口比例配比
+        hedge_plan = None
+        plan = sorted([m for m in wti_months if m["mcl_ok"]],
+                      key=lambda m: -m["exp_nav_pct"])[:2]
+        if len(plan) == 2:
+            s = sum(m["exp_nav_pct"] for m in plan)
+            weights = [round(m["exp_nav_pct"] / s * 100) for m in plan]
+            weights[-1] = 100 - weights[0]  # 修正取整误差，保证合计 100
+            hedge_plan = {
+                "months": [m["month"] for m in plan],
+                "weights": weights,
+                "coverage_book_pct": round(s / wti_total * 100, 1) if wti_total > 0 else 0.0,
+                "coverage_nav_pct": round(s, 1),
+            }
+
+        return {
+            "fund_code": fund_code,
+            "as_of": as_of,
+            "etfs": etfs,
+            "wti_months": wti_months,
+            "wti_book_nav_pct": round(wti_total, 1),
+            "brent": {"months": brent_months, "book_nav_pct": round(brent_total, 1)},
+            "hedge_plan": hedge_plan,
+            "pending_nav_pct": round(pending_total, 1),
+            "message": None,
+        }
+
     @staticmethod
-    def _fetch_cl_realtime(contract: str) -> Any:
-        """实时抓指定远月合约 CL(WTI) 价（新浪 hf_CL{contract}，如 hf_CL2611）。与 cl_freeze_sampler.fetch_cl 同源。"""
+    def _fetch_cl_realtime(contract: str, max_retry: int = 3) -> Any:
+        """实时抓指定远月合约 CL(WTI) 价（新浪 hf_CL{contract}，如 hf_CL2611）。与 cl_freeze_sampler.fetch_cl 同源。
+
+        [2026-09-22 加固] 加 3 次重试 + 短退避：美股盘中 Sina hf_ 期货源偶有瞬时抖动，
+        单次超时/空响应不应导致 cl_now=None、估值直接报错。
+        ⚠️ 第一性原理（东哥铁律）：任何情况下绝不回退冻结价（92.027 等历史冻结值）顶替实时价——
+        真正取不到就显式抛错，由上层 status='cl_fetch_failed' 拒绝估值（宁可无估值，绝不用旧价）。
+        """
         import re
+        import time
         import urllib.request
         code = "hf_CL" + contract
-        url = "https://hq.sinajs.cn/list=" + code
-        req = urllib.request.Request(
-            url, headers={"Referer": "https://finance.sina.com.cn",
-                          "User-Agent": "Mozilla/5.0"})
-        raw = urllib.request.urlopen(req, timeout=15).read().decode("gbk", "ignore")
-        m = re.search(r'var hq_str_' + code + r'="(.*?)"', raw)
-        if not m:
-            raise ValueError(f"新浪未匹配 {code}")
-        fields = m.group(1).split(",")
-        price = None
-        for f in fields:
-            f = f.strip()
+        last_err = None
+        for attempt in range(max_retry):
             try:
-                v = float(f)
-                if 1.0 < v < 1000.0:  # WTI 合理区间
-                    price = v
-                    break
-            except ValueError:
-                continue
-        if price is None:
-            raise ValueError(f"新浪 {code} 无有效价格")
-        t = fields[-1].strip() if fields else ""
-        return price, t
+                url = "https://hq.sinajs.cn/list=" + code
+                req = urllib.request.Request(
+                    url, headers={"Referer": "https://finance.sina.com.cn",
+                                  "User-Agent": "Mozilla/5.0"})
+                raw = urllib.request.urlopen(req, timeout=8).read().decode("gbk", "ignore")
+                m = re.search(r'var hq_str_' + code + r'="(.*?)"', raw)
+                if not m:
+                    raise ValueError(f"新浪未匹配 {code}")
+                fields = m.group(1).split(",")
+                price = None
+                for f in fields:
+                    f = f.strip()
+                    try:
+                        v = float(f)
+                        if 1.0 < v < 1000.0:  # WTI 合理区间
+                            price = v
+                            break
+                    except ValueError:
+                        continue
+                if price is None:
+                    raise ValueError(f"新浪 {code} 无有效价格")
+                t = fields[-1].strip() if fields else ""
+                return price, t
+            except Exception as e:
+                last_err = e
+                if attempt < max_retry - 1:
+                    time.sleep(0.3 * (attempt + 1))
+        raise ValueError(f"新浪 {code} 实时价抓取失败(已重试{max_retry}次): {last_err}")
 
     @staticmethod
     def _fetch_usdcny_realtime() -> float:

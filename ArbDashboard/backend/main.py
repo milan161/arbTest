@@ -1255,6 +1255,71 @@ async def get_fund_holding_recalc(code: str, period: str = "2026H1", start: str 
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/fund/{code}/manual-etf-prices")
+async def get_manual_etf_prices(code: str, symbols: str = ""):
+    """返回指定外盘标的在 usa_etf_daily_prices 的最新已录入日期/价格（供前端补录表单定位该补哪天）。
+
+    默认 symbols=1699,1671,OILUSA（501018 篮子里的日股/瑞交所标的，ARM 抓不到，需手动喂）。
+    """
+    try:
+        syms = [s.strip() for s in symbols.split(",") if s.strip()]
+        if not syms:
+            syms = ["1699", "1671", "OILUSA"]
+        conn = holding_service._get_conn()
+        try:
+            out = []
+            for s in syms:
+                r = conn.execute(
+                    "SELECT date, price FROM usa_etf_daily_prices "
+                    "WHERE symbol=? AND price IS NOT NULL AND price>0 ORDER BY date DESC LIMIT 1",
+                    (s,),
+                ).fetchone()
+                out.append({
+                    "symbol": s,
+                    "latest_date": r[0] if r else None,
+                    "latest_price": r[1] if r else None,
+                })
+        finally:
+            conn.close()
+        return {"status": "ok", "data": out}
+    except Exception as e:
+        logger.error(f"获取手动ETF最新价失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/fund/{code}/manual-etf-prices")
+async def post_manual_etf_prices(code: str, request: Request):
+    """手喂外盘 ETF 收盘价并重算持仓静态估值。
+
+    红线（东哥 2026-09-18 立规）：trade_date 必须是已收盘日（< 今天）。
+    填当天/未来（市场未收盘，喂的是盘中价）→ 直接拒回，绝不入库。
+    """
+    try:
+        body = await request.json()
+        trade_date = (body.get("trade_date") or "").strip()
+        prices = body.get("prices") or []
+        if not trade_date:
+            return {"status": "error", "message": "缺少 trade_date"}
+        if not prices:
+            return {"status": "error", "message": "缺少 prices"}
+        today = datetime.now().strftime("%Y-%m-%d")
+        if trade_date >= today:
+            return {
+                "status": "error",
+                "message": f"⚠️ {trade_date} 未收盘（今天 {today}），请用上一交易日的真实收盘价。当天盘中价无效，已拒收。",
+            }
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: holding_service.manual_upsert_etf_prices(code, trade_date, prices)
+        )
+        if result.get("status") == "error":
+            return {"status": "error", "message": result.get("message")}
+        return {"status": "ok", "data": result.get("data")}
+    except Exception as e:
+        logger.error(f"手喂ETF收盘价失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/api/fund/{code}/holding-realtime")
 async def get_fund_holding_realtime(code: str):
     """基金季报持仓分析：持仓实时估值（Model B，季报持仓法 + CL 期货实时价）。
@@ -1267,6 +1332,21 @@ async def get_fund_holding_realtime(code: str):
         return {"status": "ok", "data": data}
     except Exception as e:
         logger.error(f"Error getting holding realtime for {code}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/fund/{code}/hedge-exposure")
+async def get_fund_hedge_exposure(code: str):
+    """对冲穿透：底层 ETF 实际持有合约月 + 归一化 CL 对冲分布（对冲页表1/表2）。
+
+    数据来自 etf_contract_exposure 配置表（人工按月维护；指数每月滚动，as_of 为快照日期）。
+    静态估值用 ETC 市价即可，但对冲做空的是期货本身，月份必须穿透匹配——两个独立问题。
+    """
+    try:
+        data = holding_service.get_hedge_exposure(code)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"Error getting hedge exposure for {code}: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -2544,6 +2624,13 @@ async def delete_ledger_pair(pair_id: int):
 @app.get("/api/ledger/alerts")
 async def get_ledger_alerts_api():
     data = ledger_service.get_ledger_alerts()
+    return {"status": "ok", "data": data}
+
+@app.get("/api/ledger/floating")
+async def get_ledger_floating_api():
+    """持仓浮动跟盘：OPEN/unfinished 组实时 LOF + 美股/期货价 → 浮动盈亏。
+    [AI-2026-09-21] 沿用 A 股交易时段门禁（is_quote_window），美股 ETF 用最近收盘价（非夜盘盘中价）。"""
+    data = ledger_service.get_floating_pnl(market_data_service, holding_service)
     return {"status": "ok", "data": data}
 
 # --- 自动记录交易（QMT执行回调） ---

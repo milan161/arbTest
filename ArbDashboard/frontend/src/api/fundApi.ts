@@ -66,6 +66,11 @@ export function getFundHoldingRealtime(code: string) {
   return client.get(`/api/fund/${code}/holding-realtime`)
 }
 
+/** 对冲穿透：底层 ETF 实际持有合约月 + 归一化 CL 对冲分布（对冲页表1/表2） */
+export function getFundHedgeExposure(code: string) {
+  return client.get(`/api/fund/${code}/hedge-exposure`)
+}
+
 /** 从 ARM 拉 CL 三时点冻结价到本地（盘前手动触发一次即可） */
 export function syncFuturesFreeze() {
   return client.post(`/api/fund/sync-freeze`)
@@ -74,6 +79,14 @@ export function syncFuturesFreeze() {
 /** 从 ARM 拉美股/伦敦/港股 ETF 日 K（usa_etf_daily_prices）全表到本地（手动触发） */
 export function syncUsaEtf() {
   return client.post(`/api/fund/sync-usa-etf`)
+}
+
+// [AI-2026-09-21] 手喂外盘 ETF 收盘价（501018 的 1699/1671/OILUSA 手动补录）
+export function getManualEtfPrices(code: string, symbols: string = '1699,1671,OILUSA') {
+  return client.get(`/api/fund/${code}/manual-etf-prices`, { params: { symbols } })
+}
+export function postManualEtfPrices(code: string, tradeDate: string, prices: { symbol: string; price: number }[]) {
+  return client.post(`/api/fund/${code}/manual-etf-prices`, { trade_date: tradeDate, prices })
 }
 
 /** 市场概览（汇率、活跃数据源、统计） */

@@ -6,6 +6,9 @@ import re, os, glob, csv, json
 import yaml as _yaml
 import shutil
 from typing import List, Dict, Any, Set, Optional
+# [AI-2026-09-21] 浮动跟盘沿用 A 股交易时段门禁（不另开夜盘通道，见东哥口径）
+from arbcore.utils.market_calendar import is_quote_window
+from arbcore.utils import is_a_share_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -1109,5 +1112,204 @@ class LedgerService:
             'unfinished_count': len(unfinished_alerts),
             'open_alerts': open_alerts,
             'unfinished_alerts': unfinished_alerts,
+        }
+
+    # ================================================================
+    # [AI-2026-09-21] 持仓浮动跟盘：OPEN/unfinished 组实时 LOF + 美股/期货价 → 浮动盈亏
+    # 取价口径（东哥 2026-09-21 口述，严格对冲、只看 A 股时段决策）：
+    #   - 仅 A 股交易时段有意义（沿用 is_quote_window 门禁，不另开夜盘通道）；
+    #   - LOF 现价：腾讯实时（RealtimeMarketManager，get_realtime_quote 走 A股）；
+    #   - 美股 ETF 现价：最近一个美股收盘价（usa_etf_daily_prices，做净值/对冲结算用，非夜盘盘中价）；
+    #   - MCL 期货现价：新浪 hf_（微合约映射母合约）。
+    #   缺价一律 None，不兜底（SUPREME 铁律）。
+    # ================================================================
+    _FUTURES_ROOTS = {'MGC', 'MCL', 'MES', 'MNQ', 'GC', 'CL', 'SI', 'HG', 'ES', 'NQ', 'NK'}
+    _MICRO_FUTURES = {'MGC', 'MCL', 'MES', 'MNQ'}
+
+    def _get_us_etf_last_close(self, symbol: str) -> Optional[float]:
+        """美股 ETF 最近收盘价（usa_etf_daily_prices，主库）。无数据返回 None，不兜底。"""
+        if not symbol:
+            return None
+        try:
+            conn = self.db._get_conn()
+            try:
+                m = self._attach_master(conn)
+                cur = conn.execute(
+                    f"SELECT price FROM {m}.usa_etf_daily_prices WHERE symbol=? AND price IS NOT NULL ORDER BY date DESC LIMIT 1",
+                    (symbol.upper(),)
+                )
+                row = cur.fetchone()
+                return float(row[0]) if row else None
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[浮动跟盘] 读美股收盘价失败 {symbol}: {e}")
+            return None
+
+    @staticmethod
+    def _classify_hedge(symbol: str):
+        """分类对冲标的：美股 ETF（乘数1）or 期货（微合约×100 / 大合约×1000）。
+        返回 (type, root_or_symbol, contract_or_None, multiplier)。
+        合约月：'MCL 2612' → ('FUTURES','MCL','2612',100)；'GLD' → ('US_ETF','GLD',None,1)。
+        [AI-2026-09-21 东哥指正] 2611/2612 是不同合约，合约月不能丢——逐月基差直接影响对冲现价。"""
+        if not symbol:
+            return ('US_ETF', '', None, 1)
+        s = symbol.strip().upper()
+        m = re.match(r'^([A-Z]{2,4})(?:\s*(\d{4}))?', s)
+        root = m.group(1) if m else s
+        contract = m.group(2) if m else None
+        if root in LedgerService._FUTURES_ROOTS:
+            mult = 100 if root in LedgerService._MICRO_FUTURES else 1000
+            return ('FUTURES', root, contract, mult)
+        return ('US_ETF', s, None, 1)
+
+    def _hedge_current_price(self, market_service, htype: str, root_or_sym: str,
+                             contract: Optional[str] = None) -> Optional[float]:
+        """对冲标的现价：期货按持仓合约月逐月取新浪 hf_CL{合约}（WTI 系，与对冲页同源）；
+        无合约月/非 WTI 品种走母合约连续价；美股 ETF 走最近收盘价。"""
+        if htype == 'FUTURES':
+            # [AI-2026-09-21 东哥指正] MCL 2611/2612 是不同合约，与连续价有跨月基差，
+            # 必须逐合约取价：复用对冲页 HoldingService._fetch_cl_realtime（hf_CL{contract} 同源）。
+            if contract and root_or_sym in ('CL', 'MCL'):
+                try:
+                    from services.holding_service import HoldingService
+                    price, _t = HoldingService._fetch_cl_realtime(contract)
+                    return float(price)
+                except Exception as e:
+                    logger.warning(f"[浮动跟盘] 逐合约实时价失败 CL{contract}: {e}")
+                    return None
+            try:
+                q = market_service.get_realtime_quote(root_or_sym)
+                return (q or {}).get('price') if q else None
+            except Exception as e:
+                logger.warning(f"[浮动跟盘] 期货实时价失败 {root_or_sym}: {e}")
+                return None
+        return self._get_us_etf_last_close(root_or_sym)
+
+    @staticmethod
+    def _sanitize(v):
+        if v is None:
+            return None
+        if isinstance(v, float) and (v != v or v in (float('inf'), float('-inf'))):
+            return None
+        return v
+
+    def get_floating_pnl(self, market_service, holding_svc=None) -> Dict[str, Any]:
+        """计算 OPEN/unfinished 组的浮动盈亏（持仓未赎回跟盘）。
+        返回 {in_window, usd_rate, updated_at, rows:[...]}。"""
+        try:
+            in_window = bool(is_quote_window()) and bool(is_a_share_trading_day())
+        except Exception:
+            in_window = False
+        usd = self._get_usd_rate()
+        rows: List[Dict[str, Any]] = []
+        try:
+            pairs = self.get_all_pairs()
+        except Exception as e:
+            logger.error(f"[浮动跟盘] 读持仓失败: {e}")
+            pairs = []
+        for p in pairs:
+            status = (p.get('status') or '').strip()
+            if status not in ('OPEN', 'unfinished'):
+                continue
+            lof_rem = round((p.get('buy_volume') or 0) + (p.get('sell_volume') or 0), 2)
+            hedge_rem = round((p.get('short_volume') or 0) + (p.get('cover_volume') or 0), 2)
+            # 两腿都平掉了 → 跳过（已无浮动风险）
+            if not lof_rem and not hedge_rem:
+                continue
+            # [AI-2026-09-21] 待结算：曾开仓 LOF 且已全额赎回(剩余 LOF=0)，仅对冲腿待美股收盘结算，
+            # 净值已确定、不可能再场内平仓，不再跟盘。裸空(buy_volume 为空)不在此列，仍计入。
+            had_lof = p.get('buy_volume') is not None and (p.get('buy_volume') or 0) != 0
+            if had_lof and lof_rem == 0:
+                continue
+            fund_code = str(p.get('fund_code') or '')
+            lof_open = self._sanitize(p.get('buy_price'))
+            # LOF 现价（A股实时）
+            lof_cur = None
+            if fund_code:
+                try:
+                    q = market_service.get_realtime_quote(fund_code)
+                    lof_cur = (q or {}).get('price') if q else None
+                except Exception as e:
+                    logger.debug(f"[浮动跟盘] LOF实时价失败 {fund_code}: {e}")
+                    lof_cur = None
+            lof_pnl = None
+            if lof_cur is not None and lof_open is not None and lof_rem:
+                lof_pnl = (lof_cur - lof_open) * lof_rem
+            # [AI-2026-09-22] 实时折溢价：复用持仓实时估值引擎（与对冲弹窗同源）算 realtime_nav，
+            # 与 LOF 现价对比 → 实时折溢价% = lof_cur / realtime_nav - 1。
+            # 仅 A 股时段（in_window）才估：非时段 Sina CL 价已陈旧，不估即不显，避免误导（铁律：缺价不兜底）。
+            realtime_nav = None
+            realtime_premium = None
+            redeem_fee = None
+            if in_window and holding_svc is not None and fund_code:
+                try:
+                    rv = holding_svc.get_realtime_valuation(fund_code)
+                    sel = (rv or {}).get('selected_contract')
+                    cinfo = (rv or {}).get('contracts', {}).get(sel) if sel else None
+                    nav = (cinfo or {}).get('realtime_nav') if cinfo else None
+                    if nav is not None and nav > 0 and lof_cur is not None:
+                        realtime_nav = round(float(nav), 6)
+                        realtime_premium = round(lof_cur / realtime_nav - 1.0, 6)
+                    # 赎回费率（broker_redemption_fees；查不到默认 0.5%，与 main.py 口径一致）
+                    fr = self.get_fee_rate(fund_code, str(p.get('broker_name') or ''))
+                    redeem_fee = round(float(fr), 4) if fr and fr > 0 else 0.5
+                except Exception as e:
+                    logger.debug(f"[浮动跟盘] 实时估值失败 {fund_code}: {e}")
+                    realtime_nav = None
+                    realtime_premium = None
+                    redeem_fee = None
+            # 对冲腿
+            hedge_symbol = str(p.get('hedge_symbol') or '')
+            htype, hsym, hcontract, mult = self._classify_hedge(hedge_symbol)
+            hedge_open = self._sanitize(p.get('short_price'))
+            # [AI-2026-09-21] 账本约定（东哥 V7 口径）：期货腿 short_price 记每手合约市值
+            # （单价×乘数，如 MCL 9625.48 = 96.2548×100，short_amount=price×|手数| 佐证）；
+            # ETF 腿记单价。跟盘统一折算成单价再对实时价，否则差一个乘数量级。
+            if htype == 'FUTURES' and hedge_open is not None and mult:
+                hedge_open = hedge_open / mult
+            hedge_cur = self._hedge_current_price(market_service, htype, hsym, hcontract) if hedge_symbol else None
+            hedge_pnl = None
+            if hedge_cur is not None and hedge_open is not None and hedge_rem and usd is not None:
+                # 做空：价格跌 → 盈利
+                hedge_pnl = (hedge_open - hedge_cur) * abs(hedge_rem) * mult * usd
+            total = None
+            if lof_pnl is not None and hedge_pnl is not None:
+                total = lof_pnl + hedge_pnl
+            elif lof_pnl is not None:
+                total = lof_pnl
+            elif hedge_pnl is not None:
+                total = hedge_pnl
+            rows.append({
+                'id': p.get('id'),
+                'serial_no': p.get('serial_no'),
+                'fund_code': fund_code,
+                'fund_name': p.get('fund_name'),
+                'status': status,
+                'lof_open': self._sanitize(lof_open),
+                'lof_cur': self._sanitize(lof_cur),
+                'lof_rem': lof_rem,
+                'lof_pnl': self._sanitize(lof_pnl),
+                'realtime_nav': self._sanitize(realtime_nav),
+                'realtime_premium': self._sanitize(realtime_premium),
+                'redeem_fee': self._sanitize(redeem_fee),
+                'hedge_symbol': hedge_symbol,
+                'hedge_type': htype,
+                'hedge_open': self._sanitize(hedge_open),
+                'hedge_cur': self._sanitize(hedge_cur),
+                'hedge_rem': hedge_rem,
+                'hedge_mult': mult,
+                'hedge_pnl': self._sanitize(hedge_pnl),
+                'total_pnl': self._sanitize(total),
+            })
+        # 按序号自然增序（如 9-2 < 9-9 < 9-11）
+        def _serial_key(s):
+            return [int(x) if x.isdigit() else x for x in str(s or '').split('-')]
+        rows.sort(key=lambda x: _serial_key(x['serial_no']))
+        return {
+            'in_window': in_window,
+            'usd_rate': self._sanitize(usd),
+            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'rows': rows,
         }
 

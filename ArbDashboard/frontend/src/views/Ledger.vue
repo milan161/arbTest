@@ -116,21 +116,6 @@
       />
     </n-card>
 
-    <!-- 套利账本（按状态分页签） -->
-    <n-card :bordered="false" class="shadow-soft mb-4">
-      <n-tabs type="line" animated>
-        <n-tab-pane name="open" :tab="`持仓未赎回 (${openPairs.length})`">
-          <n-data-table class="ledger-table" :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
-        </n-tab-pane>
-        <n-tab-pane name="unfinished" :tab="`已退出待结算 (${unfinishedPairs.length})`">
-          <n-data-table class="ledger-table" :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
-        </n-tab-pane>
-        <n-tab-pane name="settled" :tab="`已结项 (${settledPairs.length})`">
-          <n-data-table class="ledger-table" :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
-        </n-tab-pane>
-      </n-tabs>
-    </n-card>
-
     <!-- [AI-2026-08-16] 导入 V7 账本：从 Excel 一键导入（upsert，不影响程序内手动录入） -->
     <n-card class="shadow-soft mb-4">
       <n-space justify="space-between" align="center">
@@ -151,8 +136,33 @@
       <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="onFileChange" />
     </n-card>
 
-    <!-- [AI-2026-08-16] 套利配对对账：直接展示 v7 干净账本数据（按状态着色，可编辑） -->
-    <n-card class="shadow-soft mb-4" title="套利配对对账（全部）">
+    <!-- [AI-2026-09-21] 持仓浮动跟盘：OPEN/unfinished 组实时盈亏 -->
+    <n-card :bordered="false" class="shadow-soft mb-4">
+      <template #header>
+        <span class="text-base font-semibold">持仓浮动跟盘（实时盈亏）</span>
+        <span v-if="floating" style="margin-left:12px;font-size:12px" :style="{ color: floating.in_window ? '#16a34a' : '#94a3b8' }">
+          {{ floating.in_window ? 'A股交易中 · 每30秒刷新' : '非A股交易时段 · 价格未更新' }}
+        </span>
+      </template>
+      <div v-if="floating" class="flex-between mb-2 text-xs" style="color:#64748b">
+        <span>更新时间：{{ floating.updated_at }}</span>
+        <span>汇率(USD→CNY)：{{ floating.usd_rate != null ? floating.usd_rate.toFixed(4) : '—' }}</span>
+      </div>
+      <n-data-table
+        v-if="floating && floating.rows.length"
+        :columns="floatingColumns"
+        :data="floating.rows"
+        size="small"
+        bordered
+        :row-class-name="pnlRowClass"
+        :max-height="400"
+        :scroll-x="1240"
+      />
+      <n-empty v-else description="当前无未赎回持仓" />
+    </n-card>
+
+    <!-- 套利账本（按状态分页签） -->
+    <n-card :bordered="false" class="shadow-soft mb-4">
       <div class="flex-between mb-3 ledger-filter">
         <n-space>
           <n-input v-model:value="searchCode" placeholder="基金代码筛选，如 164701" clearable style="width: 220px" />
@@ -160,17 +170,17 @@
         </n-space>
         <n-text depth="3">共 {{ filteredAllPairs.length }} 条</n-text>
       </div>
-      <n-data-table
-        class="ledger-table"
-        :columns="pairColumns"
-        :data="filteredAllPairs"
-        size="small"
-        bordered
-        :row-class-name="pnlRowClass"
-        :max-height="700"
-        :scroll-x="1200"
-        :pagination="{ pageSize: 20 }"
-      />
+      <n-tabs type="line" animated>
+        <n-tab-pane name="open" :tab="`持仓未赎回 (${openPairs.length})`">
+          <n-data-table class="ledger-table" :columns="pairColumns" :data="openPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
+        </n-tab-pane>
+        <n-tab-pane name="unfinished" :tab="`已退出待结算 (${unfinishedPairs.length})`">
+          <n-data-table class="ledger-table" :columns="pairColumns" :data="unfinishedPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
+        </n-tab-pane>
+        <n-tab-pane name="settled" :tab="`已结项 (${settledPairs.length})`">
+          <n-data-table class="ledger-table" :columns="pairColumns" :data="settledPairs" size="small" bordered :row-class-name="pnlRowClass" :max-height="600" :scroll-x="1200" />
+        </n-tab-pane>
+      </n-tabs>
     </n-card>
 
     <!-- 录入/编辑 弹窗 -->
@@ -373,11 +383,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, h, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, h, watch } from 'vue'
 import {
   NCard, NGrid, NGi, NTag, NButton, NDataTable, NIcon,
   useMessage, NSpace, NText, NTabs, NTabPane, NModal, NForm, NFormItem,
-  NInput, NInputNumber, NDatePicker, NDivider, NSelect, NAlert
+  NInput, NInputNumber, NDatePicker, NDivider, NSelect, NAlert, NEmpty
 } from 'naive-ui'
 import { BookOpen, Settings, Upload } from 'lucide-vue-next'
 import {
@@ -395,7 +405,7 @@ const isEditing = ref(false)
 const editingId = ref<number | null>(null)
 const loading = ref(false)
 
-// [AI-2026-08-16] 全部对账卡筛选：基金代码 + 开仓月份
+// [AI-2026-09-21] 状态分页签卡顶部筛选：基金代码 + 开仓月份（原"套利配对对账(全部)"卡已合并删去）
 const searchCode = ref('')
 const searchMonth = ref<string | null>(null)
 const monthOptions = computed(() => {
@@ -429,6 +439,7 @@ const handleImportResult = (data: any) => {
     const r = data.data || {}
     importResult.value = { ok: true, inserted: r.inserted || 0, updated: r.updated || 0, skipped: r.skipped || 0 }
     fetchPairs()
+    fetchFloating()
     message.success(`导入完成：新增 ${r.inserted} · 更新 ${r.updated} · 跳过 ${r.skipped}`)
   } else {
     importResult.value = { ok: false, inserted: 0, updated: 0, skipped: 0 }
@@ -475,9 +486,10 @@ const onFileChange = async (e: Event) => {
 const alerts = ref<any>(null)
 
 // ===== Computed（按新状态分类：OPEN / unfinished / Closed / Final）=====
-const openPairs = computed(() => allPairs.value.filter(p => p.status === 'OPEN'))
-const unfinishedPairs = computed(() => allPairs.value.filter(p => p.status === 'unfinished'))
-const settledPairs = computed(() => allPairs.value.filter(p => p.status === 'Closed'))
+// [AI-2026-09-21] 分页签数据走筛选后集合，使状态卡顶部的代码/月份筛选对三个页签同时生效
+const openPairs = computed(() => filteredAllPairs.value.filter(p => p.status === 'OPEN'))
+const unfinishedPairs = computed(() => filteredAllPairs.value.filter(p => p.status === 'unfinished'))
+const settledPairs = computed(() => filteredAllPairs.value.filter(p => p.status === 'Closed'))
 const settledCount = computed(() => settledPairs.value.length)
 
 const totalPnl = computed(() => settledPairs.value.reduce((s, p) => s + (p.pnl_rmb || 0), 0))
@@ -521,6 +533,77 @@ const monthlyColumns = [
       { default: () => (r.pnl_usd >= 0 ? '+' : '') + r.pnl_usd.toFixed(2) })
   },
 ]
+
+// ===== [AI-2026-09-21] 持仓浮动跟盘（OPEN/unfinished 组实时盈亏）=====
+const floating = ref<any>(null)
+let floatingTimer: any = null
+
+const fmtPrice = (v: any, dec = 4) => (v == null ? '—' : Number(v).toFixed(dec))
+const fmtRmb = (v: any) => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2))
+const rmbColor = (v: any) => (v == null ? '#94a3b8' : (v >= 0 ? '#e53e3e' : '#16a34a'))
+
+const floatingColumns = [
+  {
+    title: '序号', key: 'serial_no', width: 64, align: 'center' as const, fixed: 'left' as const,
+    render: (r: any) => h(NText, { strong: true }, { default: () => r.serial_no || '-' })
+  },
+  {
+    title: '基金', key: 'fund_code', width: 120, fixed: 'left' as const,
+    render: (r: any) => h('div', {}, [
+      h(NText, { strong: true }, { default: () => r.fund_code }),
+      h('div', { style: 'font-size:11px;color:#94a3b8' }, { default: () => r.fund_name || '' }),
+    ])
+  },
+  {
+    title: '状态', key: 'status', width: 64, align: 'center' as const,
+    render: (r: any) => h(NTag, { size: 'small', type: r.status === 'OPEN' ? 'warning' : 'info' },
+      { default: () => r.status === 'OPEN' ? '未赎回' : '待结算' })
+  },
+  { title: 'LOF开仓', key: 'lof_open', width: 78, align: 'right' as const, render: (r: any) => h(NText, {}, { default: () => fmtPrice(r.lof_open, 4) }) },
+  { title: 'LOF现价', key: 'lof_cur', width: 78, align: 'right' as const, render: (r: any) => h(NText, {}, { default: () => fmtPrice(r.lof_cur, 4) }) },
+  { title: 'LOF余量', key: 'lof_rem', width: 82, align: 'right' as const, render: (r: any) => h(NText, {}, { default: () => fmtPrice(r.lof_rem, 0) }) },
+  {
+    title: 'LOF浮盈', key: 'lof_pnl', width: 100, align: 'right' as const,
+    render: (r: any) => h(NText, { style: { color: rmbColor(r.lof_pnl), fontWeight: 600 } }, { default: () => fmtRmb(r.lof_pnl) })
+  },
+  {
+    title: '实时折溢价', key: 'realtime_premium', width: 132, align: 'right' as const,
+    render: (r: any) => {
+      const rp = r.realtime_premium
+      const fee = r.redeem_fee
+      if (rp == null || fee == null) return h(NText, { style: { color: '#94a3b8' } }, { default: () => '—' })
+      const pct = rp * 100
+      // 翻转线：实时折溢价 >= -赎回费率(如 -0.5%) → 场内卖出比赎回划算（折价已收敛到小于费率）
+      const inMarketBetter = rp >= (-fee / 100)
+      return h('div', { style: 'line-height:1.3;text-align:right' }, [
+        h(NText, { style: { color: inMarketBetter ? '#16a34a' : '#ea580c', fontWeight: 800 } },
+          { default: () => (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' }),
+        h('div', { style: 'font-size:10px;color:#94a3b8' }, { default: () => '估值 ' + (r.realtime_nav != null ? Number(r.realtime_nav).toFixed(4) : '—') }),
+        h(NTag, { size: 'small', type: inMarketBetter ? 'success' : 'warning', style: 'margin-top:2px' },
+          { default: () => inMarketBetter ? '场内更优' : '赎回更优' }),
+      ])
+    }
+  },
+  { title: '对冲标的', key: 'hedge_symbol', width: 78, align: 'center' as const, render: (r: any) => h(NText, {}, { default: () => r.hedge_symbol || '—' }) },
+  { title: '对冲开仓', key: 'hedge_open', width: 84, align: 'right' as const, render: (r: any) => h(NText, {}, { default: () => fmtPrice(r.hedge_open, 2) }) },
+  { title: '对冲现价', key: 'hedge_cur', width: 84, align: 'right' as const, render: (r: any) => h(NText, {}, { default: () => fmtPrice(r.hedge_cur, 2) }) },
+  { title: '对冲余量', key: 'hedge_rem', width: 76, align: 'right' as const, render: (r: any) => h(NText, {}, { default: () => fmtPrice(r.hedge_rem, 0) }) },
+  {
+    title: '对冲浮盈', key: 'hedge_pnl', width: 110, align: 'right' as const,
+    render: (r: any) => h(NText, { style: { color: rmbColor(r.hedge_pnl), fontWeight: 600 } }, { default: () => fmtRmb(r.hedge_pnl) })
+  },
+  {
+    title: '合计浮动', key: 'total_pnl', width: 120, align: 'right' as const, fixed: 'right' as const,
+    render: (r: any) => h(NText, { style: { color: rmbColor(r.total_pnl), fontWeight: 800 } }, { default: () => fmtRmb(r.total_pnl) })
+  },
+]
+
+const fetchFloating = async () => {
+  try {
+    const res = await client.get('/api/ledger/floating')
+    if (res.data?.status === 'ok') floating.value = res.data.data
+  } catch (e) { /* 浮动跟盘失败不影响主流程 */ }
+}
 
 // ===== Fund options for select =====
 const fundList = [
@@ -907,6 +990,13 @@ onMounted(() => {
   fetchFees()
   loadAlerts()
   fetchUsdRate()
+  fetchFloating()
+  // [AI-2026-09-21] 配对卡与浮动卡同源(get_all_pairs)；浮动卡 30s 自动刷，
+  // 配对卡同步刷新，避免"页面加载后新导入的序号(如瘸腿裸空)在配对卡滞后"的错觉。
+  floatingTimer = setInterval(() => { fetchFloating(); fetchPairs() }, 30000)
+})
+onUnmounted(() => {
+  if (floatingTimer) clearInterval(floatingTimer)
 })
 </script>
 
