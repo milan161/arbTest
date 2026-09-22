@@ -68,6 +68,11 @@ class MarketDataService:
             futu_host = os.environ.get('FUTU_HOST', '127.0.0.1')
             self.futu_reader = FutuReader(host=futu_host)
             logger.info("富途 Reader 已初始化，待用户手动连接")
+            # [AI-2026-09-22] 注入订阅白名单（DB 权威篮子 ∪ IB 核心池），从源头收口正股额度。
+            # 白名单为空时不注入（FutuReader 内部按"不限制"处理），避免 DB 异常时把订阅全禁掉。
+            _allow = self._get_futu_symbols()
+            if _allow:
+                self.futu_reader.set_subscription_allowlist(_allow)
         except Exception as e:
             logger.warning(f"富途 Reader 初始化失败: {e}")
             self.futu_reader = None
@@ -115,23 +120,52 @@ class MarketDataService:
     FUTU_AUTOCONNECT_MAX_BACKOFF = 300   # 重连失败最大退避（秒）
 
     def _get_futu_symbols(self) -> List[str]:
-        """收集富途需要订阅的美股/港股 ETF 代码（与启动播种一致）"""
+        """收集富途需要订阅的美股/港股代码 = DB 权威篮子 ∪ IB 核心池（订阅白名单唯一来源）。
+
+        [AI-2026-09-22] 两处修复，本函数同时升级为「订阅白名单」构建器：
+          1) 原 SQL 写 `SELECT DISTINCT symbol FROM fund_basket_weights`，而表内真实列名为
+             `underlying_symbol` → 抛异常被 `except Exception: return []` 吞掉 → 恒返回空。
+             静默失效客观上起了"止血"作用（正好挡住超额订阅），但并非设计意图；
+             现在改回真实列名，并把 except 改为告警，不再静默。
+          2) 篮子取「每只基金自身最新日期」，不吃历史调仓标的（全表 DISTINCT 含已调出成分，
+             会把订阅清单撑大）。
+
+        调用方必须在注入前清楚：本结果会作为**订阅白名单**下发给 FutuReader，
+        未列入者一律不订阅（含 QUOTE 与 ORDER_BOOK，1 标的 = 2 额度）。
+        """
         try:
-            import json
             syms: List[str] = []
-            _con = self.db.get_connection() if hasattr(self.db, 'get_connection') else None
-            if _con is None:
-                return syms
+            # [AI-2026-09-22] 取连接必须用 DatabaseManager._get_conn()：该类**没有** get_connection()，
+            # 旧写法 `self.db.get_connection() if hasattr(...) else None` 会静默拿到 None → 本方法恒返回
+            # 空清单（白名单永远注入不上、DASHBOARD_MODE 播种拿到 0 个标的），是比列名写错更隐蔽的坑。
+            # 与 config_service 等处的取连接方式对齐。
+            _con = self.db._get_conn()
             try:
-                _w = _con.execute("SELECT config_json FROM data_source_config WHERE module='ib_config' AND source_name='whitelist'").fetchone()
-                if _w:
-                    syms += json.loads(_w[0]).get('symbols', [])
-                _bw = _con.execute("SELECT DISTINCT symbol FROM fund_basket_weights").fetchall()
-                syms += [r[0] for r in _bw]
+                # [AI-2026-09-22] IB 核心池改读 yaml 顶层 ib_core_symbols —— 该配置的唯一权威源
+                # （前端设置页 GET/POST /api/config/ib_core_symbols 直接读写它，main.py:1529-1570）。
+                # 旧实现读 DB data_source_config.ib_config.whitelist，而那份只是 6 只的陈旧副本
+                # （GLD/USO/XOP/SPY/QQQ/INDA），缺 SLV/XBI/VGT/XLY/KWEB → 富途作为 IB 备份
+                # 覆盖不了 IB 核心池，IB 真出问题切不过去。又一处双重真相源，现予消除。
+                from arbcore.config.source_routing import IB_CORE_ARBITRAGE_SYMBOLS
+                syms += list(IB_CORE_ARBITRAGE_SYMBOLS)
+
+                # 每只基金自身最新日期的篮子成分（DB 唯一权威口径，不读 yaml/json 旧篮子）
+                # [AI-2026-09-22] 排除 unified_fund_list.paused=1 的基金 —— 这些基金不订阅任何标的，
+                # 额度即让出（额度 = 标的数 × 2：get_prices 对每个标的兼订 QUOTE + ORDER_BOOK）。
+                _bw = _con.execute(
+                    "SELECT DISTINCT b.underlying_symbol FROM fund_basket_weights b "
+                    "WHERE b.date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code = b.fund_code) "
+                    "AND NOT EXISTS (SELECT 1 FROM unified_fund_list u "
+                    "WHERE u.fund_code = b.fund_code AND COALESCE(u.paused, 0) = 1)"
+                ).fetchall()
+                syms += [r[0] for r in _bw if r[0]]
             finally:
                 _con.close()
             return sorted(set(syms))
-        except Exception:
+        except Exception as e:
+            # [AI-2026-09-22] 由 warning 升为 error + 堆栈：本方法的静默失效（连接取不到 / SQL 列名错）
+            # 曾让订阅白名单长期为空且无人察觉，必须让它在日志里显形。
+            logger.error(f"[富途] 收集订阅标的失败（本次不注入白名单，保持旧行为）: {e}", exc_info=True)
             return []
 
     def _seed_futu_prices(self):
@@ -168,6 +202,14 @@ class MarketDataService:
                     # 已连：价格空则补种（主看板不跑双源轮询，必须这里主动取），每周期一次不刷屏
                     if not getattr(reader, 'prices', {}):
                         self._seed_futu_prices()
+                    # [AI-2026-09-22] 白名单按自然日刷新一次（篮子日更；进程常驻数周时
+                    # 避免一直用启动那天的陈旧清单导致新成分永远订不上）
+                    _today = time.strftime('%Y-%m-%d')
+                    if getattr(self, '_futu_allowlist_date', None) != _today:
+                        self._futu_allowlist_date = _today
+                        _syms = self._get_futu_symbols()
+                        if _syms:
+                            reader.set_subscription_allowlist(_syms)
                     backoff = self.FUTU_AUTOCONNECT_MIN_BACKOFF
                     time.sleep(self.FUTU_AUTOCONNECT_OK_INTERVAL)
                     continue

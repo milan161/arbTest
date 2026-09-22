@@ -29,6 +29,29 @@ class IntradaySamplerService:
         self.lof_prices = {}   # [2026-08-21] LOF买卖一价缓存
         self.etf_prices = {}   # [2026-08-21] ETF买卖一价缓存
 
+    def _load_db_basket(self, fund_code: str):
+        """[AI-2026-09-22 第2步断源] 读 fund_basket_weights 最新日期篮子（yaml 同构 list[dict]）。
+
+        采样取价清单与计算口径统一以 DB 为唯一权威，不再读 yaml 的 valuation_portfolio /
+        hedging_portfolio 旧口径（旧口径与 DB 权威不一致 → 会订到 DB 里根本不存在的标的，
+        把富途订阅额度撑爆）。无行返回空 list —— 不兜底 yaml：缺失即缺失，表现为
+        「该基金本轮无标的可取价」，而不是静默回落到另一套口径。
+        """
+        try:
+            conn = self.db._get_conn()
+            rows = conn.execute(
+                "SELECT underlying_symbol, weight FROM fund_basket_weights "
+                "WHERE fund_code = ? "
+                "AND date = (SELECT MAX(date) FROM fund_basket_weights WHERE fund_code = ?) "
+                "ORDER BY weight DESC",
+                (fund_code, fund_code)
+            ).fetchall()
+            conn.close()
+            return [{'symbol': r[0], 'weight': r[1]} for r in rows if r[0]]
+        except Exception as e:
+            logger.warning(f"采样读取DB篮子失败 {fund_code}: {e}")
+            return []
+
     async def start(self):
         if self.running: return
 
@@ -127,11 +150,11 @@ class IntradaySamplerService:
             for f in funds_to_sample:
                 if f is None:
                     continue
-                # 获取估值组合中ETF的实时价格（完整符号如 ^INDA-EU）
-                v_port = f.get('valuation_portfolio') or []
-                h_port = f.get('hedging_portfolio') or []
-                portfolio = v_port if v_port else h_port
-                if portfolio is None: portfolio = []
+                # [AI-2026-09-22 第2步断源] 取价清单改读 fund_basket_weights 最新日期（DB 唯一权威），
+                # 不再读 yaml 的 valuation_portfolio / hedging_portfolio 旧口径。采样取价与计算口径
+                # 由此统一（计算侧 DynamicValuationCalculator 本就用 DB _basket 覆盖 yaml portfolio）。
+                _fcode = str(f.get('code', '')).strip()
+                portfolio = self._load_db_basket(_fcode)
                 
                 for item in portfolio:
                     if item is None:
@@ -239,7 +262,8 @@ class IntradaySamplerService:
                         #   开仓时卖空ETF吃买一（低价），成本保守→估值偏低→溢价偏高
                         # backendRtValPeg: 用ETF卖一价（ask）计算
                         #   平仓时买平ETF吃卖一（高价），成本激进→估值偏高→溢价偏低
-                        portfolio = fund.get('valuation_portfolio', []) or fund.get('hedging_portfolio', [])
+                        # [AI-2026-09-22 第2步断源] 主标的改取 DB 篮子权重最大者（与计算口径一致）
+                        portfolio = self._load_db_basket(code)
                         etf_symbol = portfolio[0].get('symbol', '') if portfolio else ''
                         etf_bid = _scalar_level(self.etf_prices.get(etf_symbol, {}).get('bid', 0)) if etf_symbol else 0
                         etf_ask = _scalar_level(self.etf_prices.get(etf_symbol, {}).get('ask', 0)) if etf_symbol else 0

@@ -228,7 +228,20 @@ class WoodyAPIService:
                 except Exception:
                     pass
             
+            # [AI-2026-09-22] 修复：symbol_hedge 的 str 形态被静默丢弃 → 17 只基金篮子从未入库
+            #   woody 该字段有两种形态：
+            #     dict → 多标的篮子，带 ratio/price/est_price（实测 14 只，如 161116 的 GLD+^GLD-EU）
+            #     str  → 单标的跟踪型基金的简写（如 SZ162411 → "XOP"，即净值 100% 跟 XOP）
+            #   旧代码只认 dict，str 形态直接落到 else 外被跳过 → 这 17 只基金在
+            #   fund_basket_weights 里永远无行（162411/161127/161125/161130/162415/161128/
+            #   161126/164906/159502/159518/513350/513000/159866/513520/513880/501300/159561）。
+            #   权重取 100.0：与 dict 形态的单标的基金一致（实测 164701 的 GLD weight=100.0）。
+            #   ⚠️ 仅当 key 是 6 位纯数字基金代码时才按篮子处理：GLD→hf_GC、SPY→^GSPC、
+            #      QQQ→^NDX、SGOL/AAAU/IAU/UGL→hf_GC、ZSL→hf_SI、SCO→hf_CL 等 str 是
+            #      「该 ETF 的对冲物」语义，不是估值篮子，一并写入会污染篮子表。
             sh_data = f_data.get('symbol_hedge')
+            if isinstance(sh_data, str) and sh_data.strip() and fund_code.isdigit() and len(fund_code) == 6:
+                sh_data = {sh_data.strip(): {'ratio': 100.0}}
             if isinstance(sh_data, dict):
                 # [AI-2026-07-29] 修复权重换代残留bug：woody 篮子每日可能换代（标的组合变化），
                 # 旧逻辑只 INSERT OR REPLACE 新代符号，换代后消失的旧 symbol 行残留 → 权重和>100%。

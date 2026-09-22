@@ -424,8 +424,10 @@ class IBReader(EWrapper, EClient):
                     print(f"[IBReader] 核心套利标的: {new_symbols} ({len(new_symbols)} 只)")
                 self.symbols = new_symbols
             except Exception as e:
-                print(f"[IBReader] 加载核心套利标的异常: {e}，使用默认列表")
-                self.symbols = ["GLD", "USO", "XOP", "SLV", "SPY", "QQQ", "INDA"]
+                # [AI-2026-09-22] 不再在此硬编码默认标的：旧写死 7 只（GLD/USO/XOP/SLV/SPY/QQQ/INDA），
+                # 而 yaml `ib_core_symbols` 已增至 12 只 → 越用越偏，且构成第二份真相源。
+                # 载入失败时保持上一次成功值不变（首次失败则沿用 __init__ 初值），5s 后下一轮自愈。
+                print(f"[IBReader] 加载核心套利标的异常: {e}，保持上一次标的集（{len(self.symbols)} 只）")
             
             if not self.connected:
                 # [AI-2026-08-28] 防抖：excepthook 刚处理完 disconnect，等待 2s 让旧 socket 释放

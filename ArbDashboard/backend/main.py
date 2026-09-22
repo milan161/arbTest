@@ -527,22 +527,20 @@ async def lifespan(app: FastAPI):
                 system_status.add_milestone("SUCCESS", "实时行情引擎已启动")
 
                 # [AI-2026-08-02] 云端看板：无头环境无前端触发订阅，启动即播种全部基金代码，使实时行情流动
+                # [AI-2026-09-22] 美股订阅清单统一走 MarketDataService._get_futu_symbols() 单一出口，
+                # 不再在此本地重复实现。旧写法两处都踩坑：
+                #   ① 读 data_source_config.ib_config.whitelist —— 该行是 2026-06-11 旧架构的遗留副本
+                #      （写入路径 config_service.update_ib_symbols 已于 2026-06-12 删除，值冻结在
+                #       2026-06-10 的 6 只），权威早已迁至 yaml ib_core_symbols；
+                #   ② 篮子 SQL 把列名写成 symbol（库实为 underlying_symbol）→ 恒抛异常被 except 吞掉。
+                #   两者叠加 ⇒ 云端长期只订到 6 只，缺 SLV/XBI/VGT/XLY/KWEB，IB 真出问题切不过去。
                 if os.environ.get('ARB_DASHBOARD_MODE', '0') == '1':
                     try:
-                        import sqlite3, json
+                        import sqlite3
                         _con = sqlite3.connect(root_db_path)
                         _lof = [r[0] for r in _con.execute("SELECT fund_code FROM unified_fund_list")]
-                        _us = []
-                        _w = _con.execute("SELECT config_json FROM data_source_config WHERE module='ib_config' AND source_name='whitelist'").fetchone()
-                        if _w:
-                            _us += json.loads(_w[0]).get('symbols', [])
-                        try:
-                            _bw = _con.execute("SELECT DISTINCT symbol FROM fund_basket_weights").fetchall()
-                            _us += [r[0] for r in _bw]
-                        except Exception:
-                            pass
                         _con.close()
-                        _us = sorted(set(_us))
+                        _us = market_data_service._get_futu_symbols()
                         market_data_service.realtime_manager.subscribe(_lof)
                         if market_data_service.futu_reader and not getattr(market_data_service.futu_reader, 'disabled', True):
                             market_data_service.futu_reader.get_prices(_us)
