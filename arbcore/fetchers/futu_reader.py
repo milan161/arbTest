@@ -122,6 +122,20 @@ class FutuReader:
             return True
         return futu_code in self.subscription_allowlist
 
+    def is_subscribable(self, symbol) -> bool:
+        """该标的是否在富途可订阅范围内（白名单未注入时一律 True）。
+
+        [AI-2026-09-22] 供上游熔断判定使用。白名单外的标的是"设计内不订阅"
+        （非 DB 权威篮子 / IB 核心池），拿不到价属预期结果，不应计入富途熔断——
+        否则暂停基金的标的每轮请求都会记失败，形成"禁用↔恢复"抖动并污染日志。
+        """
+        if self.subscription_allowlist is None:
+            return True
+        code = self.to_futu_code(symbol)
+        if code is None:
+            return False
+        return code in self.subscription_allowlist
+
     def __init__(self, host='127.0.0.1', port=11111, max_retries=3, connect_timeout=5):
         """
         Args:

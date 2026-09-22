@@ -441,12 +441,17 @@ class MarketDataService:
                         # 计入熔断会导致熔断状态延续到次日开盘、开盘瞬间拿不到富途数据。
                         if not getattr(self.futu_reader, 'disabled', False) \
                                 and not getattr(self.futu_reader, 'session_closed', False):
-                            self._circuit_record_failure('富途')
-                            now = time.time()
-                            last_warn = self._futu_warn_cooldown.get(symbol, 0)
-                            if now - last_warn > 300:
-                                logger.warning(f"⚠️ 富途备用源获取{symbol}失败: {msg}")
-                                self._futu_warn_cooldown[symbol] = now
+                            # [AI-2026-09-22] 白名单外标的是"设计内不订阅"（非 DB 权威篮子/IB 核心池），
+                            # 拿不到价属预期，不计熔断、不刷 WARNING，避免禁用↔恢复抖动
+                            if not self.futu_reader.is_subscribable(symbol):
+                                logger.debug(f"[富途] {symbol} 不在订阅白名单，不计熔断")
+                            else:
+                                self._circuit_record_failure('富途')
+                                now = time.time()
+                                last_warn = self._futu_warn_cooldown.get(symbol, 0)
+                                if now - last_warn > 300:
+                                    logger.warning(f"⚠️ 富途备用源获取{symbol}失败: {msg}")
+                                    self._futu_warn_cooldown[symbol] = now
                 except Exception as e:
                     if not getattr(self.futu_reader, 'disabled', False):
                         self._circuit_record_failure('富途')
@@ -500,13 +505,18 @@ class MarketDataService:
                         # [AI-2026-08-04] A股非交易时段(session_closed)是预期行为，不计熔断、不刷 WARNING
                         if not getattr(self.futu_reader, 'disabled', False) \
                                 and not getattr(self.futu_reader, 'session_closed', False):
-                            self._circuit_record_failure('富途')
-                            # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
-                            now = time.time()
-                            last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
-                            if now - last_warn > 300:
-                                logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
-                                self._futu_warn_cooldown[f'futu_{symbol}'] = now
+                            # [AI-2026-09-22] 白名单外标的是"设计内不订阅"（非 DB 权威篮子/IB 核心池），
+                            # 拿不到价属预期，不计熔断、不刷 WARNING，避免禁用↔恢复抖动
+                            if not self.futu_reader.is_subscribable(symbol):
+                                logger.debug(f"[富途] {symbol} 不在订阅白名单，不计熔断")
+                            else:
+                                self._circuit_record_failure('富途')
+                                # [V10.1] 去重：同一 symbol 300 秒内只记一次 warning
+                                now = time.time()
+                                last_warn = self._futu_warn_cooldown.get(f'futu_{symbol}', 0)
+                                if now - last_warn > 300:
+                                    logger.warning(f"⚠️ 富途获取{symbol}失败: {msg}")
+                                    self._futu_warn_cooldown[f'futu_{symbol}'] = now
                 except Exception as e:
                     if not getattr(self.futu_reader, 'disabled', False):
                         self._circuit_record_failure('富途')
