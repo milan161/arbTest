@@ -91,19 +91,25 @@ class IntradaySamplerService:
 
     async def _sampling_loop(self):
         while self.running:
+            # [AI-2026-09-22] 轮次对齐自然分钟：slot 为本轮起算时刻，落库时间戳由它决定。
+            slot = datetime.now()
             try:
                 if self.is_market_open():
                     # [修复] 同步网络/DB 调用不应跑在事件循环上，整体丢线程池避免 head-of-line 阻塞
-                    await asyncio.to_thread(self._perform_sample_sync)
+                    await asyncio.to_thread(self._perform_sample_sync, slot)
             except Exception as e:
                 import traceback
                 logger.error(f"🚨 采样循环异常: {e}")
                 logger.error(traceback.format_exc())
-            
-            # 每 60 秒采样一次
-            await asyncio.sleep(60)
 
-    def _perform_sample_sync(self):
+            # [AI-2026-09-22] 原实现是「跑完再 sleep 60s」⇒ 周期 = 60s + 本轮耗时，
+            # 上游一慢（富途额度满/重连、DB 写锁竞争）周期就变成 2~8 分钟且**永久累积漂移**，
+            # 分时序列出现大面积分钟空档。现改为「睡到本轮起算时刻的下一个整分」：
+            # 慢轮次只吃掉自己那几格，恢复正常后立刻回到逐分钟，不再一路漂下去。
+            elapsed = (datetime.now() - slot).total_seconds()
+            await asyncio.sleep(max(1.0, 60.0 - (elapsed % 60.0)))
+
+    def _perform_sample_sync(self, slot=None):
         try:
             # 加载所有的配置基金
             all_config_funds = []
@@ -231,7 +237,10 @@ class IntradaySamplerService:
                         }
             
             # 执行采样
-            now = datetime.now()
+            # [AI-2026-09-22] 时间戳改用「本轮起算时刻」(slot) 而非落库时刻 datetime.now()。
+            # 取价段若被上游阻塞数分钟，用落库时刻会把 14:44 采到的数据标成 15:11
+            # （既越过收盘、又在序列里拉出假空档）。分钟位必须由轮次起点决定。
+            now = slot or datetime.now()
             date_str = now.strftime('%Y-%m-%d')
             time_str = now.strftime('%H:%M')
             conn = self.db._get_conn()

@@ -1442,7 +1442,18 @@ class FundService:
             funds_with_basket = set()
             basket_symbols_by_fund = {}  # [AI-2026-08-17] code -> set(underlying_symbol)，供「缺FUTU」源依赖判断
             try:
-                basket_codes_df = pd.read_sql("SELECT fund_code, underlying_symbol FROM fund_basket_weights", conn)
+                # [AI-2026-09-22 第2步断源·补齐] 原 SQL 无日期过滤 ⇒ 取到的是**全历史**成分：
+                #   已调出标的（160644 的 ASML/GOOGL/AVGO、501312 的 FINX、160216 的 CPER、
+                #   港股 00700/03690/09988 等）与「最新篮子」差集达 63 vs 54 个，
+                #   它们会被塞进下面的并发预取清单 → 走 get_realtime_quote → 触发富途订阅/取价，
+                #   白白吃正股额度（1 标的=2 额度）并拖慢整个主面板重算。
+                # 改为「每只基金自身最新日期」，口径与 sampler_service._load_db_basket /
+                # market_data_service._get_futu_symbols 完全一致（单一权威）。
+                basket_codes_df = pd.read_sql(
+                    "SELECT b.fund_code, b.underlying_symbol FROM fund_basket_weights b "
+                    "WHERE b.date = (SELECT MAX(date) FROM fund_basket_weights "
+                    "WHERE fund_code = b.fund_code)",
+                    conn)
                 funds_with_basket = set(basket_codes_df['fund_code'].tolist())
                 for _, r in basket_codes_df.iterrows():
                     basket_symbols_by_fund.setdefault(r['fund_code'], set()).add(r['underlying_symbol'])
