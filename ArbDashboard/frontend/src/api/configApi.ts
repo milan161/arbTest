@@ -62,13 +62,3 @@ export function getIbCoreSymbols() {
 export function postIbCoreSymbols(symbols: string[]) {
   return client.post('/api/config/ib_core_symbols', { symbols })
 }
-
-/** 获取暂停的分类列表 */
-export function getPausedCategories() {
-  return client.get('/api/config/app_settings/paused_categories')
-}
-
-/** 更新暂停的分类列表 */
-export function postPausedCategories(paused: string[]) {
-  return client.post('/api/config/app_settings/paused_categories', { paused })
-}

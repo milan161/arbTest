@@ -1,76 +1,6 @@
 <template>
   <div class="p-6">
 
-    <!-- ===== 分类优先级（实时行情数据源展示已移除，顺序由系统默认固定） ===== -->
-    <div style="display:grid; grid-template-columns: 1fr; gap:16px; align-items:start; margin-bottom:16px;">
-
-
-
-      <!-- 右卡片：分类优先级 -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <div class="flex items-center mb-4">
-          <div class="w-2 h-6 rounded mr-3" style="background-color:#7c3aed"></div>
-          <h2 class="text-xl font-bold text-gray-700">分类优先级</h2>
-        </div>
-        <div style="border-bottom:1px solid #e5e7eb; color:#9ca3af; font-size:12px; padding:3px 0; margin-bottom:8px;">
-          点击卡片切换暂停 / 恢复（即时保存）
-        </div>
-        <!-- 7 个卡片：第一行 4，第二行 3 居中 -->
-        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:8px;">
-          <div v-for="(cat, idx) in allCategories.slice(0,4)" :key="cat.name"
-               @click="toggleCategory(cat.name)"
-               :style="{
-                 padding:'10px 4px',
-                 borderRadius:'8px',
-                 cursor:'pointer',
-                 border: cat.paused ? '1.5px solid #e5e7eb' : '1.5px solid #7c3aed',
-                 background: cat.paused ? '#f9fafb' : '#f5f3ff',
-                 textAlign:'center',
-                 userSelect:'none',
-                 transition:'all 0.15s'
-               }">
-            <div style="font-size:12px; font-weight:700; color:cat.paused?'#9ca3af':'#1f2937'; margin-bottom:3px;">{{ cat.name }}</div>
-            <div :style="{
-              display:'inline-block',
-              padding:'1px 6px',
-              borderRadius:'8px',
-              fontSize:'10px',
-              fontWeight:'bold',
-              background:cat.paused?'#f1f5f9':'#dcfce7',
-              color:cat.paused?'#94a3b8':'#16a34a'
-            }">{{ cat.paused ? '已暂停' : '运行中' }}</div>
-          </div>
-        </div>
-        <div style="display:flex; gap:8px; justify-content:center;">
-          <div v-for="cat in allCategories.slice(4)" :key="cat.name"
-               @click="toggleCategory(cat.name)"
-               :style="{
-                 width:'calc(33.33% - 6px)',
-                 padding:'10px 4px',
-                 borderRadius:'8px',
-                 cursor:'pointer',
-                 border: cat.paused ? '1.5px solid #e5e7eb' : '1.5px solid #7c3aed',
-                 background: cat.paused ? '#f9fafb' : '#f5f3ff',
-                 textAlign:'center',
-                 userSelect:'none',
-                 transition:'all 0.15s'
-               }">
-            <div style="font-size:12px; font-weight:700; color:cat.paused?'#9ca3af':'#1f2937'; margin-bottom:3px;">{{ cat.name }}</div>
-            <div :style="{
-              display:'inline-block',
-              padding:'1px 6px',
-              borderRadius:'8px',
-              fontSize:'10px',
-              fontWeight:'bold',
-              background:cat.paused?'#f1f5f9':'#dcfce7',
-              color:cat.paused?'#94a3b8':'#16a34a'
-            }">{{ cat.paused ? '已暂停' : '运行中' }}</div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
     <!-- ===== IB 核心套利标的配置（通栏） ===== -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-4">
       <div class="flex items-center mb-6">
@@ -384,7 +314,7 @@ import {
 } from 'naive-ui';
 import { h } from 'vue';
 import { getFundConfigs, upsertFundConfig, deleteFundConfig, exportFundConfig, importFundConfig, getCategories } from '../api';
-import { getIbCoreSymbols, postIbCoreSymbols, getPausedCategories, postPausedCategories } from '../api';
+import { getIbCoreSymbols, postIbCoreSymbols } from '../api';
 import client from '../api/client';
 import { Play, FileDown, Database, Trash2, RefreshCw, CheckCircle, Clock, HelpCircle } from 'lucide-vue-next';
 
@@ -393,17 +323,6 @@ const message = useMessage();
 // ========== IB 核心标的配置 ==========
 const ibCoreSymbols = ref([]);
 const ibCoreSymbolsText = ref('');
-
-// [AI-2026-07-20] 分类优先级管理
-const allCategories = ref([
-  { name: '黄金原油', paused: false, priority: '第一优先级' },
-  { name: 'QDII欧美', paused: false, priority: '第一优先级' },
-  { name: 'QDII日本', paused: false, priority: '第二优先级' },
-  { name: '白银', paused: false, priority: '第二优先级' },
-  { name: 'QDII亚洲', paused: true, priority: '已暂停' },
-  { name: '国内LOF', paused: true, priority: '已暂停' },
-  { name: '现金管理', paused: true, priority: '已暂停' },
-]);
 
 // 富途可用标的列表（非 IB 核心美股 ETF）
 const futuCandidates = ref([
@@ -463,35 +382,9 @@ const setDefaultIbSymbols = () => {
   message.info('已恢复默认 7 只标的')
 }
 
-// [AI-2026-07-20] 分类优先级管理
-const loadPausedCategories = async () => {
-  try {
-    const res = await getPausedCategories()
-    if (res.data.status === 'ok') {
-      const paused = res.data.data || []
-      allCategories.value.forEach(cat => {
-        cat.paused = paused.includes(cat.name)
-      })
-    }
-  } catch (e) {
-    console.error('加载暂停分类失败:', e)
-  }
-}
+// [AI-2026-09-23] 分类暂停功能已删除（见 docs/013_7）
 
-// [AI-2026-08-22] 方向A：分类暂停即时保存（postPausedCategories 后端立即 sync）
-const toggleCategory = async (name) => {
-  const cat = allCategories.value.find(c => c.name === name)
-  if (!cat) return
-  cat.paused = !cat.paused
-  try {
-    const pausedList = allCategories.value.filter(c => c.paused).map(c => c.name)
-    await postPausedCategories(pausedList)
-    message.success(cat.paused ? `✅ 已暂停 ${name}` : `✅ 已恢复 ${name}`)
-  } catch (e) {
-    cat.paused = !cat.paused // 回滚
-    message.error('❌ 保存失败: ' + (e.message || e))
-  }
-}
+// [AI-2026-09-23] 分类暂停功能已删除（见 docs/013_7）
 
 // ========== 核心基金配置（合并自 Data.vue） ==========
 const showImportModal = ref(false);
@@ -810,7 +703,6 @@ const exportInventoryCsv = () => {
 
 onMounted(() => {
   loadIbCoreSymbols();
-  loadPausedCategories();
   fetchFundConfigs();
   fetchCategories();
 });

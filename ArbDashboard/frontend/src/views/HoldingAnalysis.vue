@@ -13,19 +13,13 @@
             <span style="font-size: 14px; color: #475569;">{{ fundName || fundCode }}</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <n-button size="small" :loading="usaSyncLoading" @click="syncUsaEtfData">同步美股ETF日K（从ARM）</n-button>
-            <span v-if="usaSyncMsg" :style="{ fontSize: '12px', color: usaSyncMsg.startsWith('⚠️') ? '#dc2626' : '#64748b' }">{{ usaSyncMsg }}</span>
-            <span style="font-size: 12px; color: #64748b;">报告期:</span>
-            <n-button
-              v-for="p in periods"
-              :key="p.period"
-              size="small"
-              :type="currentPeriod === p.period ? 'primary' : 'default'"
-              :ghost="currentPeriod !== p.period"
-              :style="currentPeriod === p.period ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : {}"
-              @click="switchPeriod(p.period)"
-            >
-              {{ p.period }}
+            <span style="font-size: 12px; color: #64748b;">持仓静态估值:</span>
+            <n-tag v-if="staticSynced" size="small" :bordered="false" type="success">
+              已同步（最新 {{ staticLatestDate }}）
+            </n-tag>
+            <n-tag v-else size="small" :bordered="false" type="warning">未同步</n-tag>
+            <n-button size="small" :loading="staticSyncLoading" @click="syncStaticValuation">
+              同步静态持仓估值
             </n-button>
           </div>
         </div>
@@ -33,6 +27,44 @@
 
       <n-alert v-if="syncAlert" type="warning" :show-icon="true" style="margin-bottom: 12px;">
         {{ syncAlert }}
+      </n-alert>
+      <n-alert
+        v-if="staticSyncMsg"
+        :type="staticSyncMsg.startsWith('✅') ? 'success' : 'error'"
+        :show-icon="true"
+        style="margin-bottom: 12px;"
+      >
+        {{ staticSyncMsg }}
+      </n-alert>
+
+      <!-- [AI-2026-09-24 东哥需求] 美股价新鲜度：ARM 缺「新浪口径最新交易日」收盘价时提示 + 一键重抓推送 -->
+      <n-alert
+        v-if="priceFresh && priceFresh.stale"
+        type="warning"
+        :show-icon="true"
+        style="margin-bottom: 12px;"
+      >
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+          <div style="font-size: 12px; line-height: 1.7; color: #92400e;">
+            新浪已更新 <strong>{{ priceFresh.reference_date }}</strong> 美股收盘价，但 ARM 最新只到
+            <strong>{{ priceFresh.arm_clock || priceFresh.arm_latest || '-' }}</strong>
+            → 静态估值不会起该日新行（宁缺毋假）。
+            <span v-if="priceFresh.missing_auto && priceFresh.missing_auto.length">
+              <br>参考日缺价：{{ priceFresh.missing_auto.join('、') }}
+            </span>
+          </div>
+          <n-button size="small" type="warning" :loading="refetchLoading" @click="refetchUsPrices">
+            重新从数据源抓取并推送到 ARM
+          </n-button>
+        </div>
+      </n-alert>
+      <n-alert
+        v-if="refetchMsg"
+        :type="refetchMsg.startsWith('✅') ? 'success' : 'error'"
+        :show-icon="true"
+        style="margin-bottom: 12px;"
+      >
+        {{ refetchMsg }}
       </n-alert>
 
       <div v-if="loading" style="text-align: center; padding: 40px; color: #999;">
@@ -140,7 +172,7 @@
                 {{ cSel && cSel.lof_price != null ? cSel.lof_price.toFixed(3) : '-' }}
               </div>
               <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">
-                {{ cSel && cSel.lof_price_source === 'close' ? '收盘(盘后)' : (cSel && cSel.lof_price_source ? cSel.lof_price_source.replace('realtime:', '') : '') }}
+                {{ lofSrcLabel(cSel && cSel.lof_price_source) }}
               </div>
             </n-gi>
             <!-- 实时持仓溢价：选中蓝 + 其他灰 -->
@@ -185,7 +217,24 @@
         <!-- 前十大持仓表 -->
         <n-card size="small" class="shadow-soft" style="margin-bottom: 16px;">
           <template #header>
-            <div style="font-size: 14px; font-weight: bold;">前十大持仓</div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <div style="font-size: 14px; font-weight: bold;">前十大持仓</div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 12px; color: #64748b;">报告期:</span>
+                <n-button
+                  v-for="p in periods"
+                  :key="p.period"
+                  size="small"
+                  type="default"
+                  :style="currentPeriod === p.period
+                    ? { background: '#16a34a !important', borderColor: '#16a34a !important', color: '#fff !important', fontWeight: 'bold' }
+                    : { background: 'transparent !important', borderColor: '#cbd5e1 !important', color: '#64748b !important' }"
+                  @click="switchPeriod(p.period)"
+                >
+                  {{ p.period }}
+                </n-button>
+              </div>
+            </div>
           </template>
           <n-data-table
             :columns="holdingColumns"
@@ -243,40 +292,21 @@
       :title="fundCode + ' 持仓静态估值（7-1 至今）'"
       style="width: 760px; max-width: 92vw;"
     >
-      <!-- [AI-2026-09-21] 手喂外盘 ETF 收盘价补录（仅 501018；1699/1671/OILUSA 为日股/瑞交所标的，ARM 抓不到） -->
-      <div v-if="fundCode === '501018'" style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
-        <div style="font-size: 13px; font-weight: bold; color: #92400e; margin-bottom: 6px;">补录外盘收盘价（1699 / 1671 / OILUSA）</div>
-        <div style="font-size: 11px; color: #b45309; margin-bottom: 10px; line-height: 1.5;">
-          只能填<strong>上一交易日的真实收盘价</strong>；当天盘中价无效，提交会被后端拒收。每个框下方显示该标的已录入的最新日期，方便你定位该补哪天。
-        </div>
-        <n-grid :cols="24" :x-gap="10" :y-gap="10" style="align-items: end;">
-          <n-gi :span="4">
-            <div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">交易日（已收盘）</div>
-            <n-input v-model:value="manualDate" placeholder="YYYY-MM-DD" size="small" style="width: 100%;" />
-          </n-gi>
-          <n-gi v-for="s in manualSymbols" :key="s.symbol" :span="6">
-            <div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">{{ s.label }}</div>
-            <n-input-number v-model:value="manualPrices[s.symbol]" :min="0" :step="0.01" size="small" style="width: 100%;" placeholder="收盘价" />
-            <div style="font-size: 10px; margin-top: 2px; color: #94a3b8;">
-              最新：{{ latestOf(s.symbol) || '—' }}
-              <span v-if="isStale(s.symbol)" style="color: #d97706; font-weight: 600;">⚠️ 沿用上一交易日</span>
-            </div>
-          </n-gi>
-          <n-gi :span="2" style="display: flex; align-items: flex-end;">
-            <n-button size="small" type="primary" :loading="manualSubmitting" @click="submitManualEtf">提交补录</n-button>
-          </n-gi>
-        </n-grid>
-        <div v-if="manualMsg" style="font-size: 12px; margin-top: 8px;" :style="{ color: (manualMsg.startsWith('⚠️') || manualMsg.startsWith('❌')) ? '#dc2626' : '#16a34a' }">{{ manualMsg }}</div>
-      </div>
+      <!-- [AI-2026-09-26] 手喂补录面板已删：OILUSA/1671/1699 已由 ARM sampler 自动抓取
+           （SIX 官方 CSV / 雅虎日本），013_2 §9.1 旧"手动补数"结论废止。 -->
       <n-data-table
-        v-if="recalcRows.length"
+        v-if="recalcDisplayRows.length"
         :columns="recalcColumns"
-        :data="recalcRows"
+        :data="recalcDisplayRows"
+        :row-key="(row: any) => row.date"
         :pagination="{ pageSize: 15 }"
-        :row-class-name="(row: any) => (row.fill_warning ? 'recalc-warn-row' : (row.carried_forward ? 'recalc-carry-row' : ''))"
+        :row-class-name="(row: any) => (row.pending ? 'recalc-pending-row' : (row.fill_warning ? 'recalc-warn-row' : (row.carried_forward ? 'recalc-carry-row' : '')))"
         size="small"
         bordered
       />
+      <div v-if="recalcDetailLoading" style="font-size: 11px; color: #94a3b8; margin-top: 6px;">
+        诊断细节加载中（底层 ETF / 缺价标注）…
+      </div>
       <n-empty v-else description="该基金暂无持仓静态估值数据" />
     </n-modal>
 
@@ -508,7 +538,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { PieChart } from 'lucide-vue-next'
-import { getFundHoldingPeriods, getFundHoldings, getFundHoldingRealtime, getFundHedgeExposure, getFundPenetration, getFundHoldingRecalc, syncFuturesFreeze, syncUsaEtf, getManualEtfPrices, postManualEtfPrices } from '../api'
+import { getFundHoldingPeriods, getFundHoldings, getFundHoldingRealtime, getFundHedgeExposure, getFundPenetration, getFundHoldingRecalc, getFundHoldingRecalcDetail, syncOilStatic, syncFuturesFreeze, getOilPriceFreshness, refetchOilPrices } from '../api'
 import { formatPercent, priceColor } from '../utils'
 
 const route = useRoute()
@@ -595,103 +625,115 @@ const recalcRows = ref<any[]>([])
 const latestNav = ref<number | null>(null)
 const latestNavDate = ref<string>('')
 const recalcModalShow = ref(false)
+// [AI-2026-09-23 B方案] 静态持仓估值"是否已从 ARM 同步到本地缓存"状态（读本地 holding_static_val）
+const staticSynced = computed(() => recalcRows.value.length > 0)
+const staticLatestDate = computed(() => recalcRows.value.length ? recalcRows.value[0].date : '')
+const staticSyncLoading = ref(false)
+const staticSyncMsg = ref('')
 
-// [AI-2026-09-21] 手喂外盘 ETF 收盘价补录（501018 写死三标的；接口通用）
-const manualSymbols = [
-  { symbol: '1699', label: '1699 日股 NEXT FUNDS 原油' },
-  { symbol: '1671', label: '1671 日股 Simplex WTI' },
-  { symbol: 'OILUSA', label: 'OILUSA 瑞交所 UBS 原油' },
-]
-const manualDate = ref('')
-const manualPrices = ref<Record<string, number | null>>({ '1699': null, '1671': null, 'OILUSA': null })
-const manualLatest = ref<any[]>([])
-const manualSubmitting = ref(false)
-const manualMsg = ref('')
-
-/** 回退到上一个工作日（跳过周末），返回 YYYY-MM-DD */
-function prevTradeDate(d: Date): string {
-  const x = new Date(d)
-  do {
-    x.setDate(x.getDate() - 1)
-  } while (x.getDay() === 0 || x.getDay() === 6)
-  return x.toISOString().slice(0, 10)
-}
-/** 取某标的已录入的最新日期（用于输入框下方提示） */
-function latestOf(symbol: string): string {
-  const r = manualLatest.value.find((m: any) => m.symbol === symbol)
-  return r && r.latest_date ? `${r.latest_date} = ${r.latest_price}` : ''
-}
-// [AI-2026-09-22] 该标的"最新已录入日"是否早于表内最新交易日→沿用上一交易日，琥珀提示
-function isStale(symbol: string): boolean {
-  const r = manualLatest.value.find((m: any) => m.symbol === symbol)
-  const latestTrade = recalcRows.value[0]?.date  // recalcRows 降序，[0] 为最新交易日
-  if (!r || !r.latest_date || !latestTrade) return false
-  return r.latest_date < latestTrade
-}
-/** 打开弹窗时拉取三标的最新录入日，并把日期框默认填为上一交易日 */
-const loadManualLatest = async () => {
-  try {
-    const r = await getManualEtfPrices(fundCode.value)
-    if (r.data?.status === 'ok') manualLatest.value = r.data.data || []
-  } catch (e: any) {
-    /* 非关键，忽略 */
+// [AI-2026-09-23 B方案] 持仓静态估值弹窗诊断：本地核心行（recalcRows）只含 date/nav/hsv/err，
+// 诊断细节（etf_prices/fill_warning/note 等）由弹窗打开时按需从 ARM 取全量，按 date 合并后展示。
+// 前端不直接 SSH 代理：/holding-recalc-detail 端点本机侧已代理到 ARM（只读）。
+const recalcDetailMap = ref<Record<string, any>>({})
+const recalcDetailLoading = ref(false)
+// [AI-2026-09-24 方案A] 美股价未入库的「待补日」：后端按 us_clock 口径给出（只读，不落库）。
+// 这些日不在 recalcRows（读库）里，以灰色行插回表格，避免"少一行"被误判为程序丢行。
+const recalcPending = ref<any[]>([])
+const recalcDisplayRows = computed(() => {
+  const m = recalcDetailMap.value
+  let base = recalcRows.value
+  if (m && Object.keys(m).length) {
+    base = recalcRows.value.map((r: any) => {
+      const d = m[r.date]
+      return d ? { ...r, ...d } : r
+    })
   }
-}
-const submitManualEtf = async () => {
-  manualSubmitting.value = true
-  manualMsg.value = ''
+  if (!recalcPending.value.length) return base
+  const pendRows = recalcPending.value.map((p: any) => ({
+    date: p.date,
+    official_nav: p.official_nav ?? null,
+    holding_static_val: null,
+    err_pct: null,
+    err_bp: null,
+    pending: true,
+    note: p.message || `美股价未入库（美股时钟 ${p.us_clock}），该行待补`,
+    fill_warning: false,
+    carried_forward: false,
+  }))
+  return [...pendRows, ...base].sort((a: any, b: any) => (a.date < b.date ? 1 : -1))
+})
+const fetchRecalcDetail = async () => {
+  recalcDetailLoading.value = true
   try {
-    const prices = manualSymbols
-      .map((s) => ({ symbol: s.symbol, price: manualPrices.value[s.symbol] }))
-      .filter((p) => p.price != null && p.price !== '' && !isNaN(p.price as number))
-    if (!prices.length) {
-      manualMsg.value = '⚠️ 请至少填一个有效收盘价'
-      return
-    }
-    if (!manualDate.value) {
-      manualMsg.value = '⚠️ 请填交易日（已收盘日）'
-      return
-    }
-    const r = await postManualEtfPrices(fundCode.value, manualDate.value, prices)
+    const r = await getFundHoldingRecalcDetail(fundCode.value, currentPeriod.value, '2026-07-01')
     if (r.data?.status === 'ok') {
-      const d = r.data.data || {}
-      recalcRows.value = d.rows || recalcRows.value
-      const w = (d.written || []).map((it: any) => `${it.symbol}=${it.price}`).join('、')
-      manualMsg.value = `✅ 已写入 ${w} 并重算持仓静态估值`
-      // 清空输入框，刷新最新日期提示
-      manualPrices.value = { '1699': null, '1671': null, 'OILUSA': null }
-      manualDate.value = prevTradeDate(new Date())
-      await loadManualLatest()
-    } else {
-      manualMsg.value = `❌ ${r.data?.message || '提交失败'}`
+      const rows: any[] = (r.data.data?.rows) || []
+      const m: Record<string, any> = {}
+      for (const row of rows) m[row.date] = row
+      recalcDetailMap.value = m
     }
   } catch (e: any) {
-    manualMsg.value = `❌ ${e?.message || e}`
+    // 诊断细节取不到时静默降级：核心行仍可显示，仅展开明细/缺价标红缺失
+    console.warn('recalc 诊断细节获取失败(降级):', e?.message || e)
   } finally {
-    manualSubmitting.value = false
+    recalcDetailLoading.value = false
   }
 }
 
-// [AI-2026-09-12] 美股/伦敦/港股 ETF 日 K：从 ARM 拉全表到本地（手动触发；本地非每日运行）
-const usaSyncLoading = ref(false)
-const usaSyncMsg = ref('')
-const syncUsaEtfData = async () => {
-  usaSyncLoading.value = true
-  usaSyncMsg.value = ''
+// [AI-2026-09-23 B方案] 手动触发 本地←ARM 拉取原油三基金 holding_static_val（pull_oil_static_from_arm）
+const syncStaticValuation = async () => {
+  staticSyncLoading.value = true
+  staticSyncMsg.value = ''
   try {
-    const r = await syncUsaEtf()
+    const r = await syncOilStatic(fundCode.value)
     const d = r?.data?.data || r?.data
     if (r?.data?.status === 'ok' || d?.status === 'ok') {
-      const missing: string[] = d?.fallback?.still_missing || []
-      usaSyncMsg.value = missing.length ? `⚠️ ${d?.message || '同步完成'}` : `✅ ${d?.message || '同步完成'}`
+      staticSyncMsg.value = `✅ ${d?.message || '同步完成'}`
+      // 重新读取本地缓存（holding-recalc 读本地），刷新 最新净值 / 同步状态
       await loadData()
     } else {
-      usaSyncMsg.value = `❌ ${d?.message || '同步失败'}`
+      staticSyncMsg.value = `❌ ${d?.message || '同步失败'}`
     }
   } catch (e: any) {
-    usaSyncMsg.value = `❌ 同步失败: ${e?.message || e}`
+    staticSyncMsg.value = `❌ 同步失败: ${e?.message || e}`
   } finally {
-    usaSyncLoading.value = false
+    staticSyncLoading.value = false
+  }
+}
+
+// [AI-2026-09-24 东哥需求] ARM 美股价新鲜度检测 + 一键重抓推送闭环：
+// 新浪凌晨收盘价未到（ARM 07:30 采集抓空）→ 本页提示 → 点按钮 → 本机重抓 → 推 ARM → ARM 重算 → 拉回。
+const priceFresh = ref<any>(null)
+const refetchLoading = ref(false)
+const refetchMsg = ref('')
+
+const checkPriceFreshness = async () => {
+  try {
+    const r = await getOilPriceFreshness()
+    priceFresh.value = r?.data?.status === 'ok' ? (r.data.data || null) : null
+  } catch (e: any) {
+    // 非关键检测：失败静默，不打扰主流程
+    priceFresh.value = null
+  }
+}
+
+const refetchUsPrices = async () => {
+  refetchLoading.value = true
+  refetchMsg.value = ''
+  try {
+    const r = await refetchOilPrices()
+    const d = r?.data?.data
+    if (r?.data?.status === 'ok') {
+      refetchMsg.value = `✅ ${d?.summary || '重抓并推送完成'}`
+      await checkPriceFreshness()
+      await loadData()
+    } else {
+      refetchMsg.value = `❌ ${d?.summary || r?.data?.message || '重抓失败'}`
+    }
+  } catch (e: any) {
+    refetchMsg.value = `❌ 重抓失败: ${e?.message || e}`
+  } finally {
+    refetchLoading.value = false
   }
 }
 
@@ -800,7 +842,7 @@ const mixedPremium = computed<number | null>(() => {
 const modalPriceSeg = computed(() => {
   const c = firstContract.value
   if (c?.lof_price == null) return null
-  const src = c.lof_price_source === 'close' ? '收盘' : (c.lof_price_source || '').replace('realtime:', '')
+  const src = lofSrcLabel(c.lof_price_source)
   return { price: c.lof_price.toFixed(3), src }
 })
 
@@ -853,7 +895,15 @@ const cmpBeta = (c: any) => c?.valid_weight_sum != null ? (c.valid_weight_sum * 
 const cmpNav = (c: any) => c?.realtime_nav != null ? c.realtime_nav.toFixed(4) : '-'
 const cmpPremium = (c: any) => c?.realtime_premium != null ? (c.realtime_premium * 100).toFixed(3) + '%' : '-'
 const cmpPrice = (c: any) => c?.lof_price != null ? c.lof_price.toFixed(3) : '-'
-const cmpPriceSrc = (c: any) => c?.lof_price_source === 'close' ? '收盘(盘后)' : (c?.lof_price_source ? c.lof_price_source.replace('realtime:', '') : '')
+// [AI-2026-09-23] LOF 价格来源标签：非交易时段腾讯返回的是最近收盘价，必须区分标"昨收"/"收盘(今日)"，避免把昨收误显成实时误导决策
+const lofSrcLabel = (src: string | null | undefined) => {
+  if (!src) return ''
+  if (src === 'close') return '收盘(盘后)'
+  if (src === '昨收') return '昨收'
+  if (src === '收盘') return '收盘(今日)'
+  return src.replace('realtime:', '')
+}
+const cmpPriceSrc = (c: any) => lofSrcLabel(c?.lof_price_source)
 const cmpShares = (c: any) => { const s = perLotShares(c); return s != null ? s.toLocaleString() : '-' }
 const cmpNetLabel = (row: any) => { const n = cmpNet(row); return n != null ? (n * 100).toFixed(3) + '%' : '-' }
 /** 对比弹窗标题用：取三基金同一合约月的 CL 实时价（任一非空即可，三基金值相同） */
@@ -946,6 +996,10 @@ const recalcColumns: DataTableColumns<any> = [
   {
     type: 'expand',
     renderExpand: (row: any) => {
+      // [AI-2026-09-24 方案A] 待补行无底层明细可展开，直接说明原因
+      if (row.pending) {
+        return h('div', { style: 'padding: 8px 12px; font-size: 12px; color: #92400e;' }, row.note || '美股价未入库，该行待补')
+      }
       const items = rowEtfSymbols(row).map((s) => {
         const p0 = row.etf_prev?.[s]
         const p1 = row.etf_prices?.[s]
@@ -976,11 +1030,14 @@ const recalcColumns: DataTableColumns<any> = [
     return row.official_nav != null ? row.official_nav.toFixed(4) : '-'
   }},
   { title: '静态估值', key: 'holding_static_val', width: 110, align: 'right', render(row: any) {
+    // [AI-2026-09-24 方案A] 美股价未入库的待补行：显式标「待补」，不留空让人误判丢行
+    if (row.pending) return h('span', { style: 'color: #d97706; font-weight: 600;', title: row.note || '美股价未入库，该行待补' }, '待补')
     if (row.holding_static_val == null) return '-'
     const mark = row.fill_warning ? ' ⚠️' : (row.carried_forward ? ' 🔸' : '')
     return h('span', null, `${row.holding_static_val.toFixed(4)}${mark}`)
   }},
   { title: '误差%', key: 'err_pct', width: 100, align: 'right', render(row: any) {
+    if (row.pending) return h('span', { style: 'color: #d97706;' }, '—')
     if (row.err_pct == null) {
       if (row.fill_warning) return h('span', { style: 'color: #dc2626; font-weight: 600;' }, '⚠️')
       if (row.carried_forward) return h('span', { style: 'color: #d97706; font-weight: 600;' }, '🔸')
@@ -995,10 +1052,8 @@ const recalcColumns: DataTableColumns<any> = [
 const openRecalcModal = async () => {
   if (recalcRows.value.length > 0) {
     recalcModalShow.value = true
-    if (fundCode.value === '501018') {
-      manualDate.value = prevTradeDate(new Date())
-      await loadManualLatest()
-    }
+    // 弹窗打开时按需取全量诊断（etf_prices/fill_warning/note），与本地核心行按 date 合并
+    await fetchRecalcDetail()
   }
 }
 
@@ -1066,6 +1121,10 @@ const loadData = async () => {
     if (recalcRes.data?.status === 'ok') {
       const d = recalcRes.data.data || {}
       recalcRows.value = d.rows || []
+      // [AI-2026-09-24 方案A] 待补日（美股价未入库）：随核心行一起刷新
+      recalcPending.value = d.pending || []
+      // 重新载入核心行后清空诊断 map（诊断细节仅在弹窗打开时按需取，避免陈旧合并）
+      recalcDetailMap.value = {}
       // QDII 净值 T+2 公布：今天及最近未公布日 official_nav 为 null，
       // 取第一个 official_nav 非空的行作为"最新净值"
       const navRow = recalcRows.value.find((r: any) => r.official_nav != null)
@@ -1073,6 +1132,8 @@ const loadData = async () => {
       latestNavDate.value = navRow ? navRow.date : ''
     } else {
       recalcRows.value = []
+      recalcPending.value = []
+      recalcDetailMap.value = {}
       latestNav.value = null
       latestNavDate.value = ''
     }
@@ -1081,6 +1142,8 @@ const loadData = async () => {
   } finally {
     loading.value = false
   }
+  // [AI-2026-09-24 东哥需求] 加载完成后异步检测 ARM 美股价新鲜度（失败静默，不挡页面）
+  void checkPriceFreshness()
 }
 
 const switchPeriod = (period: string) => {
@@ -1148,5 +1211,14 @@ onMounted(() => {
 }
 :deep(.recalc-carry-row:hover td) {
   background-color: #fef3c7 !important;
+}
+/* [AI-2026-09-24 方案A] 美股价未入库的「待补日」行：淡灰斜体，明示该日尚未生成（非程序丢行） */
+:deep(.recalc-pending-row td) {
+  background-color: #f8fafc !important;
+  color: #94a3b8 !important;
+  font-style: italic;
+}
+:deep(.recalc-pending-row:hover td) {
+  background-color: #f1f5f9 !important;
 }
 </style>

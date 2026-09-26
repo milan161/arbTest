@@ -1208,7 +1208,7 @@ class LedgerService:
             return None
         return v
 
-    def get_floating_pnl(self, market_service, holding_svc=None) -> Dict[str, Any]:
+    def get_floating_pnl(self, market_service, holding_svc=None, fund_svc=None) -> Dict[str, Any]:
         """计算 OPEN/unfinished 组的浮动盈亏（持仓未赎回跟盘）。
         返回 {in_window, usd_rate, updated_at, rows:[...]}。"""
         try:
@@ -1295,7 +1295,7 @@ class LedgerService:
             # ETF 腿记单价。跟盘统一折算成单价再对实时价，否则差一个乘数量级。
             if htype == 'FUTURES' and hedge_open is not None and mult:
                 hedge_open = hedge_open / mult
-            hedge_cur = self._hedge_current_price(market_service, htype, hsym, hcontract) if hedge_symbol else None
+            hedge_cur, hedge_cur_tag = self._hedge_current_price(market_service, htype, hsym, hcontract) if hedge_symbol else (None, None)
             hedge_pnl = None
             if hedge_cur is not None and hedge_open is not None and hedge_rem and usd is not None:
                 # 做空：价格跌 → 盈利
@@ -1321,6 +1321,7 @@ class LedgerService:
                 'realtime_premium': self._sanitize(realtime_premium),
                 'redeem_fee': self._sanitize(redeem_fee),
                 'hedge_symbol': hedge_symbol,
+                'hedge_cur_tag': self._sanitize(hedge_cur_tag),
                 'hedge_type': htype,
                 'hedge_open': self._sanitize(hedge_open),
                 'hedge_cur': self._sanitize(hedge_cur),

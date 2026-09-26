@@ -805,9 +805,15 @@ async def lifespan(app: FastAPI):
                     continue  # 已有今天收盘价，跳过
                 # 没有 → 异步子进程触发写入（不阻塞 uvicorn 事件循环）
                 try:
-                    _pe = os.path.normpath(os.path.join(backend_dir, "..", ".venv", "Scripts", "python.exe"))
+                    # [AI-2026-09-24 修 bug] 原实现硬编码 Windows 路径 ".venv/Scripts/python.exe"，
+                    # 在 ARM(Linux) 上每 30s 抛 FileNotFoundError → daily_updater --daily-close 从未跑起来
+                    # → _step_oil_recalc 唯一触发点失效。改用同作用域既有的跨平台 _find_python()。
+                    _pe = _find_python()
                     _sd = os.path.normpath(os.path.join(backend_dir, "scheduler"))
                     _du_py = os.path.join(_sd, "daily_updater.py")
+                    if not (_pe and os.path.exists(_du_py)):
+                        logger.warning(f"[AFTER_HOURS] 未找到 Python 或脚本，跳过本轮: pe={_pe} script={_du_py}")
+                        continue
                     if _popen_script_once([_pe, _du_py, "--daily-close"], _sd, "daily_updater.py"):
                         logger.info(f"[AFTER_HOURS] 盘后收盘价兜底已异步启动 daily_updater --daily-close ({_today})")
                     else:
@@ -1126,9 +1132,9 @@ def _fetch_h5_report_via_ssh() -> tuple:
             tmp = f.name
         cmd = 'ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
         proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r"),
-                              capture_output=True, text=True, timeout=25)
-        if proc.returncode == 0 and proc.stdout.strip():
-            return json.loads(proc.stdout.strip().splitlines()[-1]), None
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=25)
+        if proc.returncode == 0 and (proc.stdout or "").strip():
+            return json.loads((proc.stdout or "").strip().splitlines()[-1]), None
         return None, (proc.stderr or proc.stdout or "no output").strip()[:400]
     except subprocess.TimeoutExpired:
         return None, "SSH 超时（arm 不可达 / 网络中断 / 不在可访问 arm 的网络）"
@@ -1140,6 +1146,77 @@ def _fetch_h5_report_via_ssh() -> tuple:
                 os.unlink(tmp)
             except Exception:
                 pass
+
+
+def _arm_api_via_ssh(method: str, path: str, query: dict = None, json_body: dict = None, timeout: int = 60) -> dict:
+    """通过 ssh arm 在 ARM 本地调其后端 HTTP API（localhost:8000），返回解析后的 dict。
+
+    [AI-2026-09-23 B方案] 持仓静态估值改由 ARM 自算；本机相关端点（持仓分析重算/手喂外盘价）
+    不再本地计算，改为 SSH 代理到 ARM 对应端点（同源代码，ARM 自己算+写 ARM 库），前端无感。
+    ARM 后端经 nginx 反代 /api/，但此处走 SSH 到 ARM 内网 8000，不经过公网写接口。
+    失败返回 {"status":"error",...}，绝不兜底/绝不抛异常。
+    """
+    import json
+    import base64
+    import subprocess
+    from urllib.parse import urlencode
+    url = "http://127.0.0.1:8000" + path
+    if query:
+        url += "?" + urlencode(query)
+    if method.upper() == "POST" and json_body is not None:
+        body_b64 = base64.b64encode(json.dumps(json_body).encode("utf-8")).decode("ascii")
+        remote = (
+            'import json, base64, urllib.request\n'
+            'body=base64.b64decode("' + body_b64 + '")\n'
+            'req=urllib.request.Request("' + url + '", data=body, headers={"Content-Type":"application/json"}, method="POST")\n'
+            'try:\n'
+            '    r=urllib.request.urlopen(req, timeout=30); print(r.read().decode())\n'
+            'except Exception as e:\n'
+            '    print(json.dumps({"status":"error","message":str(e)[:300]}))\n'
+        )
+    else:
+        remote = (
+            'import json, urllib.request\n'
+            'req=urllib.request.Request("' + url + '", method="GET")\n'
+            'try:\n'
+            '    r=urllib.request.urlopen(req, timeout=30); print(r.read().decode())\n'
+            'except Exception as e:\n'
+            '    print(json.dumps({"status":"error","message":str(e)[:300]}))\n'
+        )
+    try:
+        cmd = 'ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
+        # [AI-2026-09-23 根因修复] 中文 Windows 下 text=True 会按系统 locale(GBK) 解码子进程输出；
+        # 远端 JSON 含非 ASCII（中文 note / 基金名）时抛 UnicodeDecodeError → subprocess 内部
+        # readerthread 崩 → proc.stdout 变为 None → 紧随其后的 proc.stdout.strip() 报
+        # "'NoneType' object has no attribute 'strip'"（detail 端点踩此坑，manual 因纯 ASCII 幸免）。
+        # 第一性原理：解码口径写死 utf-8，不随系统 locale 漂移；stdout 再兜底 None。
+        proc = subprocess.run(
+            cmd, shell=True, input=remote, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+        if proc.returncode != 0:
+            return {"status": "error", "message": f"SSH/ARM 调用失败: {(proc.stderr or '').strip()[:300]}"}
+        out = (proc.stdout or "").strip()
+        if not out:
+            return {"status": "error", "message": "ARM 返回空"}
+        try:
+            return json.loads(out.splitlines()[-1])
+        except Exception:
+            return {"status": "error", "message": f"ARM 返回非JSON: {out[:200]}"}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "SSH 超时（arm 不可达）"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:300]}
+
+
+def _is_arm() -> bool:
+    """判断当前后端进程是否运行在 ARM(H5) 部署机上。
+
+    [AI-2026-09-23 B方案] 同源代码在 ARM 与本机各跑一份：持仓静态估值改由 ARM 自算，
+    故本机端点需 SSH 代理到 ARM；但 ARM 机器上的端点若也走 SSH 代理会试图连回自己(无 arm 别名)而失败。
+    以数据库路径区分：ARM 库在 ~/arbtest/（POSIX 路径），本机在 Windows D:\\Study\\arbTest\\。
+    """
+    return "/home/ubuntu" in root_db_path or root_db_path.startswith("/home")
 
 
 @app.get("/api/system/maintenance-report")
@@ -1246,79 +1323,60 @@ async def get_fund_holding_valuation(code: str, period: str):
 
 @app.get("/api/fund/{code}/holding-recalc")
 async def get_fund_holding_recalc(code: str, period: str = "2026H1", start: str = "2026-07-01"):
-    """基金季报持仓分析：持仓静态估值历史（季报持仓法，全 USD 简化）"""
+    """[AI-2026-09-23 B方案·本地缓存读取] 持仓静态估值核心列（date/official_nav/holding_static_val/err）。
+
+    本机与 ARM 各读各自库的 unified_fund_history.holding_static_val（ARM 自算、本地经
+    pull_oil_static_from_arm 日更拉回），**展示时不再 SSH 代理 ARM**。
+    诊断细节（etf_prices/fill_warning/note）由前端弹窗按需调 /holding-recalc-detail 取全量。
+    """
     try:
-        data = holding_service.get_recalc_history(code, period, start)
+        data = holding_service.get_local_static_valuation_rows(code, start)
         return {"status": "ok", "data": data}
     except Exception as e:
-        logger.error(f"Error getting holding recalc for {code}: {e}")
+        logger.error(f"holding-recalc 失败: {e}")
         return {"status": "error", "message": str(e)}
 
 
-@app.get("/api/fund/{code}/manual-etf-prices")
-async def get_manual_etf_prices(code: str, symbols: str = ""):
-    """返回指定外盘标的在 usa_etf_daily_prices 的最新已录入日期/价格（供前端补录表单定位该补哪天）。
+@app.get("/api/fund/{code}/holding-recalc-detail")
+async def get_fund_holding_recalc_detail(code: str, period: str = "2026H1", start: str = "2026-07-01"):
+    """[AI-2026-09-23 B方案] 持仓静态估值全量诊断（含 etf_prices/fill_warning/note）。
 
-    默认 symbols=1699,1671,OILUSA（501018 篮子里的日股/瑞交所标的，ARM 抓不到，需手动喂）。
+    本机运行→SSH 代理 ARM 现算（该端点只读、无写，符合"不新增公网写接口"红线）；
+    ARM 运行→本地现算。仅供持仓静态估值弹窗按需展开诊断，不在页面加载时调用。
     """
     try:
-        syms = [s.strip() for s in symbols.split(",") if s.strip()]
-        if not syms:
-            syms = ["1699", "1671", "OILUSA"]
-        conn = holding_service._get_conn()
-        try:
-            out = []
-            for s in syms:
-                r = conn.execute(
-                    "SELECT date, price FROM usa_etf_daily_prices "
-                    "WHERE symbol=? AND price IS NOT NULL AND price>0 ORDER BY date DESC LIMIT 1",
-                    (s,),
-                ).fetchone()
-                out.append({
-                    "symbol": s,
-                    "latest_date": r[0] if r else None,
-                    "latest_price": r[1] if r else None,
-                })
-        finally:
-            conn.close()
-        return {"status": "ok", "data": out}
+        if _is_arm():
+            data = holding_service.get_recalc_history(code, period, start)
+            return {"status": "ok", "data": data}
+        return _arm_api_via_ssh("GET", f"/api/fund/{code}/holding-recalc-detail", query={"period": period, "start": start})
     except Exception as e:
-        logger.error(f"获取手动ETF最新价失败: {e}")
+        logger.error(f"holding-recalc-detail 失败: {e}")
         return {"status": "error", "message": str(e)}
 
 
-@app.post("/api/fund/{code}/manual-etf-prices")
-async def post_manual_etf_prices(code: str, request: Request):
-    """手喂外盘 ETF 收盘价并重算持仓静态估值。
+@app.post("/api/fund/{code}/sync-oil-static")
+async def sync_oil_static_api(code: str):
+    """[AI-2026-09-23 B方案] 手动触发 本地←ARM 拉取原油三基金 holding_static_val（pull_oil_static_from_arm）。
 
-    红线（东哥 2026-09-18 立规）：trade_date 必须是已收盘日（< 今天）。
-    填当天/未来（市场未收盘，喂的是盘中价）→ 直接拒回，绝不入库。
+    仅本地运行有意义（ARM 上即从自身拉自身，冗余）；前端"同步静态持仓估值"按键调用。
+    拉回后前端刷新本地缓存读取，使 最新净值 / 持仓静态估值 卡片反映最新。
     """
     try:
-        body = await request.json()
-        trade_date = (body.get("trade_date") or "").strip()
-        prices = body.get("prices") or []
-        if not trade_date:
-            return {"status": "error", "message": "缺少 trade_date"}
-        if not prices:
-            return {"status": "error", "message": "缺少 prices"}
-        today = datetime.now().strftime("%Y-%m-%d")
-        if trade_date >= today:
-            return {
-                "status": "error",
-                "message": f"⚠️ {trade_date} 未收盘（今天 {today}），请用上一交易日的真实收盘价。当天盘中价无效，已拒收。",
-            }
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, lambda: holding_service.manual_upsert_etf_prices(code, trade_date, prices)
-        )
-        if result.get("status") == "error":
-            return {"status": "error", "message": result.get("message")}
-        return {"status": "ok", "data": result.get("data")}
+        if _is_arm():
+            return {"status": "ok", "data": {"updated": 0, "message": "ARM 端无需同步（持仓静态估值由本机自算自存）"}}
+        # [AI-2026-09-26] pull_oil_static_from_arm 内含阻塞式 ssh 子进程；async 处理器里直接调会卡死
+        # 整个事件循环（单 worker），ARM 慢/不可达时请求被拖到客户端 30s 超时 → axios 报 "Network Error"。
+        # 第一性原理：把阻塞调用丢到线程池，事件循环始终可服务其他请求；SSH 失败也以 JSON 返回而非挂死。
+        r = await asyncio.to_thread(holding_service.pull_oil_static_from_arm)
+        return {"status": r.get("status", "ok"), "data": r}
     except Exception as e:
-        logger.error(f"手喂ETF收盘价失败: {e}")
+        logger.error(f"sync-oil-static 失败: {e}")
         return {"status": "error", "message": str(e)}
 
+
+# [AI-2026-09-26] 手喂端点 GET/POST /manual-etf-prices 已删：
+# OILUSA/1671/1699 由 ARM sampler 自动抓取（SIX 官方 CSV / 雅虎日本），手喂 UI/闭环废止，
+# 见 docs/013_2 与 usa_etf_history_sampler.py。
 
 @app.get("/api/fund/{code}/holding-realtime")
 async def get_fund_holding_realtime(code: str):
@@ -1347,6 +1405,169 @@ async def get_fund_hedge_exposure(code: str):
         return {"status": "ok", "data": data}
     except Exception as e:
         logger.error(f"Error getting hedge exposure for {code}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# [AI-2026-09-23] H5 原油实时估值独立页（手机被动看板核心 API）
+# ARM 自算（CL/MCL 对冲口径，正确），复用 get_realtime_valuation；页面打开即调此接口现算，
+# 前端 15-30s 自动/手动刷新；无服务器定时任务（不开页面零消耗）。
+OIL_RT_FUNDS = ["160723", "161129", "501018"]
+# [AI-2026-09-24] 删除硬编码 OIL_RT_NAMES：原字典三个名称全部写错
+# （160723 误作"南方原油"、161129 误作"国泰商品"、501018 误作"南方原油LOF"），
+# 且与 DB 权威表 unified_fund_list 构成双重真相源（东哥铁律：DB 唯一权威、绝不兜底）。
+# 改为运行时读 unified_fund_list.fund_name，DB 改名即时生效。
+
+
+def _oil_fund_names(codes) -> dict:
+    """从 DB 权威表 unified_fund_list 读基金名称（取代硬编码字典，消除双重真相源）。
+
+    返回值形如 {'161129': '易方达原油'}；DB 查不到该 code 时不返回条目（调用方显代码，不兜底假名）。
+    """
+    out = {}
+    try:
+        conn = holding_service._get_conn()
+        try:
+            q = ",".join("?" * len(codes))
+            for c, n in conn.execute(
+                    "SELECT fund_code, fund_name FROM unified_fund_list "
+                    "WHERE fund_code IN (%s)" % q, tuple(codes)):
+                if n:
+                    out[str(c)] = n
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"读基金名称失败(降级为代码): {e}")
+    return out
+
+
+def _simplify_oil_contracts(contracts: dict) -> dict:
+    """从 get_realtime_valuation 的 contracts 中提取 H5 页面所需精简字段。"""
+    out = {}
+    for k, c in (contracts or {}).items():
+        if not isinstance(c, dict):
+            continue
+        out[k] = {
+            "contract": c.get("contract"),
+            "status": c.get("status"),
+            "realtime_nav": c.get("realtime_nav"),
+            "lof_price": c.get("lof_price"),
+            "lof_price_source": c.get("lof_price_source"),
+            "realtime_premium": c.get("realtime_premium"),
+            "cl_now": c.get("cl_now"),
+            "cl_time": c.get("cl_time"),
+            "fx_now": c.get("fx_now"),
+            "fx_status": c.get("fx_status"),
+            "freeze_trade_date": c.get("freeze_trade_date"),
+            "message": c.get("message"),
+        }
+    return out
+
+
+def _oil_mixed_valuation(contracts: dict, hedge_plan: dict) -> dict | None:
+    """混合估值（WTI 动态加权）：V_mix = Σ(weights[i]% × months[i].realtime_nav)。
+
+    口径与本机 HoldingAnalysis.vue 的 mixedValuation/mixedPremium 完全一致（东哥 2026-09-23 拍板上 H5）：
+    仅当 hedge_plan 存在且每个月都取到估值时返回，否则 None（不兜底）。
+    混合溢价 = LOF 现价 / V_mix − 1（LOF 价取任一合约行的同一市价，与三合约行同口径）。
+    """
+    if not hedge_plan or not hedge_plan.get("months") or not hedge_plan.get("weights"):
+        return None
+    months, weights = hedge_plan["months"], hedge_plan["weights"]
+    if len(months) != len(weights):
+        return None
+    nav_sum, ok_all = 0.0, True
+    for m, w in zip(months, weights):
+        c = (contracts or {}).get(m) or {}
+        nav = c.get("realtime_nav")
+        if nav is None:
+            ok_all = False
+            break
+        nav_sum += (w / 100.0) * nav
+    if not ok_all or nav_sum <= 0:
+        return None
+    lof_price = next(
+        (c.get("lof_price") for c in (contracts or {}).values()
+         if isinstance(c, dict) and c.get("lof_price")), None)
+    mix = {"months": months, "weights": weights, "realtime_nav": round(nav_sum, 4)}
+    if lof_price:
+        mix["realtime_premium"] = round(lof_price / nav_sum - 1, 6)
+    return mix
+
+
+def _fund_hedge_plan(fund_code: str) -> dict | None:
+    """取该基金的进阶对冲方案（hedge_plan，敞口前两月按比例），失败返回 None 不影响主流程。"""
+    try:
+        return holding_service.get_hedge_exposure(fund_code).get("hedge_plan")
+    except Exception:
+        return None
+
+
+@app.get("/api/oil_rt")
+async def get_oil_rt():
+    """H5 原油实时估值页（手机被动看板）：循环三只原油基金，ARM 自算，无定时任务。"""
+    try:
+        funds = []
+        overall_ok = True
+        names = _oil_fund_names(OIL_RT_FUNDS)  # [AI-2026-09-24] 名称读 DB 权威表
+        for code in OIL_RT_FUNDS:
+            try:
+                d = holding_service.get_realtime_valuation(code)
+                if d.get("status") == "ok":
+                    contracts = _simplify_oil_contracts(d.get("contracts", {}))
+                    hedge_plan = _fund_hedge_plan(code)
+                    simplified = {
+                        "fund_code": code,
+                        "fund_name": names.get(code) or code,
+                        "base_date": d.get("base_date"),
+                        "base_nav": d.get("base_nav"),
+                        "selected_contract": d.get("selected_contract"),
+                        "active_contracts": d.get("active_contracts"),
+                        "hedge_plan": hedge_plan,
+                        "mixed_valuation": _oil_mixed_valuation(contracts, hedge_plan),
+                        "status": "ok",
+                        "contracts": contracts,
+                    }
+                else:
+                    overall_ok = False
+                    simplified = {
+                        "fund_code": code, "fund_name": names.get(code) or code,
+                        "status": "error", "code": d.get("code"), "message": d.get("message"),
+                        "contracts": {},
+                    }
+                funds.append(simplified)
+            except Exception as e:
+                overall_ok = False
+                funds.append({
+                    "fund_code": code, "fund_name": names.get(code) or code,
+                    "status": "error", "message": str(e)[:200], "contracts": {},
+                })
+        return {
+            "status": "ok" if overall_ok else "partial",
+            "data": {
+                "funds": funds,
+                "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "ARM 自算（CL/MCL 对冲口径）",
+            },
+        }
+    except Exception as e:
+        logger.error(f"oil_rt 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/oil/sync-report-holdings")
+async def sync_oil_report_holdings_api():
+    """手动触发：把本机三只原油基金的季报持仓同步到 ARM（季度更新自动同步能力）。
+
+    部署后可由 daily_updater 季报解析步骤自动调用（需东哥授权挂接）；亦可手动点按钮触发。
+    后台线程执行，不阻塞事件循环。
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: holding_service.sync_report_holdings_to_arm())
+        return {"status": result.get("status", "error"), "data": result}
+    except Exception as e:
+        logger.error(f"同步季报持仓到 ARM 失败: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1382,6 +1603,92 @@ async def sync_usa_etf_from_arm_api():
         return {"status": result.get("status", "error"), "data": result}
     except Exception as e:
         logger.error(f"同步美股 ETF 日 K 失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# [AI-2026-09-24 东哥需求] ARM 美股价新鲜度检测 + 本机一键重抓推送（仅本机可用）
+@app.get("/api/fund/oil-price-freshness")
+async def get_oil_price_freshness():
+    """只读检测：ARM 是否已抓到「新浪口径的美股最新已收盘交易日」。
+
+    供本机「季报持仓分析」页提示「新浪未抓到凌晨收盘价」+ 一键重抓按钮的判据。
+    口径见 holding_service.get_us_price_freshness（与 us_clock 拦截严格一致）。
+    仅本机可调（ARM 上调会 SSH 回自己，无 arm 别名必失败）。
+    """
+    try:
+        if _is_arm():
+            return {"status": "error", "message": "该检测仅在本机执行"}
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, holding_service.get_us_price_freshness)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        logger.error(f"美股价新鲜度检测失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/fund/oil-refetch-prices")
+async def refetch_oil_prices():
+    """[AI-2026-09-24 东哥需求] 一键闭环：本地重抓 → 推 ARM → ARM 重算 → 拉回本地。
+
+    触发场景：ARM 07:30 采集时数据源尚未更新 T-1 收盘价 → ARM 缺价 →
+    静态估值不起新行（"宁缺毋假"）。本机直连数据源补抓后推 ARM，
+    再驱动 ARM 自算落库，最后拉回本地缓存。全程 SSH/localhost，不经公网写端点。
+    [AI-2026-09-26] 补抓源扩为四路：美股/伦敦/港股→新浪/腾讯，JP/CH（OILUSA/1671/1699）
+    → sampler 的 SIX 官方 CSV / 雅虎日本（_fallback_fill_missing_etf 统一路由）。
+    仅本机可调（ARM 上调会 SSH 回自己，无 arm 别名必失败）。
+    """
+    try:
+        if _is_arm():
+            return {"status": "error", "message": "该操作仅在本机执行"}
+
+        def _job():
+            out: dict = {}
+            # ① 本地直连新浪/腾讯补抓「最新已收盘交易日」缺价标的（本地为权威）
+            out["local_fill"] = holding_service.refetch_usa_etf_from_source()
+            # ② 本机 → ARM 推价格（增量 INSERT OR REPLACE，绝不删）
+            out["push"] = holding_service.push_usa_etf_to_arm()
+            # ③ 驱动 ARM 自算（holding-recalc-detail 现算并落 ARM 库）
+            recalc: dict = {}
+            if out["push"].get("status") == "ok":
+                for code in ("160723", "161129", "501018"):
+                    recalc[code] = _arm_api_via_ssh(
+                        "GET", f"/api/fund/{code}/holding-recalc-detail",
+                        query={"start": "2026-01-01"}, timeout=600)
+            out["arm_recalc"] = recalc
+            # ④ ARM 自算值拉回本地缓存（页面读本地 holding_static_val）
+            out["pull"] = holding_service.pull_oil_static_from_arm()
+            return out
+
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, _job)
+
+        fill = data.get("local_fill") or {}
+        push = data.get("push") or {}
+        recalc = data.get("arm_recalc") or {}
+        pull = data.get("pull") or {}
+        n_recalc_ok = sum(1 for v in recalc.values() if (v or {}).get("status") == "ok")
+        n_recalc = len(recalc)
+        ok = (push.get("status") == "ok" and pull.get("status") == "ok"
+              and n_recalc == 3 and n_recalc_ok == 3)
+
+        parts = []
+        filled = fill.get("filled") or {}
+        ref_d = fill.get("reference_date") or "-"
+        if filled:
+            parts.append(f"本机从源补抓 {len(filled)} 只（{ref_d}）")
+        else:
+            parts.append(f"本机源无新价可补（参考日 {ref_d}）")
+        if fill.get("still_missing"):
+            parts.append(f"仍缺: {'、'.join(fill['still_missing'])}")
+        if fill.get("error"):
+            parts.append(f"补抓失败({fill['error']})")
+        parts.append(push.get("message") or "推送未执行")
+        parts.append(f"ARM 重算 {n_recalc_ok}/{n_recalc} 只")
+        parts.append(pull.get("message") or "拉回未执行")
+        data["summary"] = "；".join(parts)
+        return {"status": "ok" if ok else "error", "data": data}
+    except Exception as e:
+        logger.error(f"重抓美股价并推 ARM 失败: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1603,50 +1910,8 @@ async def update_ib_core_symbols(request: Request):
         return {"status": "error", "message": str(e)}
 
 # --- [AI-2026-07-07] App-level toggle settings ---
-# 分类暂停管理（替换旧的 skip_qdii_asia_index 单一开关）
+# 全部分类（快照服务遍历用；分类级暂停功能已于 2026-09-23 完整删除，见 docs/013_7）
 ALL_CATEGORIES = ["黄金原油", "QDII欧美", "QDII日本", "白银", "QDII亚洲", "国内LOF", "现金管理"]
-DEFAULT_PAUSED_CATEGORIES = ["QDII亚洲", "国内LOF", "现金管理"]
-
-@app.get("/api/config/app_settings/paused_categories")
-async def get_paused_categories():
-    """获取已暂停的分类列表（暂停的分类不再生成快照/抓指数/显示在 Dashboard）"""
-    # [AI-2026-07-23] 修复 NameError: db_manager → db
-    raw = db.get_app_setting('paused_categories', None)
-    if raw is None:
-        # 首次读取：迁移旧的 skip_qdii_asia_index 设置
-        old_skip = db.get_app_setting('skip_qdii_asia_index', '1')
-        if old_skip == '1':
-            paused = DEFAULT_PAUSED_CATEGORIES
-        else:
-            paused = []
-        db.set_app_setting('paused_categories', json.dumps(paused))
-        return {"status": "ok", "data": paused}
-    try:
-        return {"status": "ok", "data": json.loads(raw)}
-    except Exception:
-        return {"status": "ok", "data": DEFAULT_PAUSED_CATEGORIES}
-
-@app.post("/api/config/app_settings/paused_categories")
-async def update_paused_categories(request: Request):
-    """设置暂停的分类列表"""
-    try:
-        data = await request.json()
-        paused = data.get('paused', DEFAULT_PAUSED_CATEGORIES)
-        # 校验：只接受合法分类名
-        valid = [c for c in paused if c in ALL_CATEGORIES]
-        # [AI-2026-07-23] 修复 NameError: db_manager → db
-        db.set_app_setting('paused_categories', json.dumps(valid))
-        # 同步更新旧的 skip_qdii_asia_index（向后兼容）
-        asia_paused = "QDII亚洲" in valid
-        dom_paused = "国内LOF" in valid
-        old_skip = '1' if (asia_paused and dom_paused) else '0'
-        db.set_app_setting('skip_qdii_asia_index', old_skip)
-        # 通知快照服务重新加载暂停配置
-        dashboard_snapshot_service.sync_paused_categories(valid)
-        return {"status": "ok", "data": valid, "message": "分类优先级已更新"}
-    except Exception as e:
-        logger.error(f"更新 paused_categories 失败: {e}")
-        return {"status": "error", "message": str(e)}
 
 # [AI-2026-07-07] 回补缺失指数历史
 # --- Private / Custom Export APIs ---

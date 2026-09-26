@@ -56,9 +56,19 @@ export function getFundHoldingValuation(code: string, period: string) {
   return client.get(`/api/fund/${code}/holding-valuation`, { params: { period } })
 }
 
-/** 季报持仓分析：持仓静态估值历史（季报持仓法，全 USD 简化） */
+/** 季报持仓分析：持仓静态估值核心列（读本地缓存 holding_static_val，B方案） */
 export function getFundHoldingRecalc(code: string, period: string = '2026H1', start: str = '2026-07-01') {
   return client.get(`/api/fund/${code}/holding-recalc`, { params: { period, start } })
+}
+
+/** 季报持仓分析：持仓静态估值全量诊断（etf_prices/fill_warning/note，按需从 ARM 取） */
+export function getFundHoldingRecalcDetail(code: string, period: string = '2026H1', start: str = '2026-07-01') {
+  return client.get(`/api/fund/${code}/holding-recalc-detail`, { params: { period, start } })
+}
+
+/** B方案：手动触发 本地←ARM 拉取原油三基金 holding_static_val */
+export function syncOilStatic(code: string) {
+  return client.post(`/api/fund/${code}/sync-oil-static`)
 }
 
 /** 季报持仓分析：持仓实时估值（Model B，季报持仓法 + CL 期货实时价） */
@@ -81,12 +91,14 @@ export function syncUsaEtf() {
   return client.post(`/api/fund/sync-usa-etf`)
 }
 
-// [AI-2026-09-21] 手喂外盘 ETF 收盘价（501018 的 1699/1671/OILUSA 手动补录）
-export function getManualEtfPrices(code: string, symbols: string = '1699,1671,OILUSA') {
-  return client.get(`/api/fund/${code}/manual-etf-prices`, { params: { symbols } })
+// [AI-2026-09-24 东哥需求] ARM 美股价新鲜度检测（只读）：ARM 是否已抓到新浪口径的最新美股收盘日
+export function getOilPriceFreshness() {
+  return client.get(`/api/fund/oil-price-freshness`)
 }
-export function postManualEtfPrices(code: string, tradeDate: string, prices: { symbol: string; price: number }[]) {
-  return client.post(`/api/fund/${code}/manual-etf-prices`, { trade_date: tradeDate, prices })
+
+// [AI-2026-09-24 东哥需求] 一键闭环：本地重抓新浪 → 推 ARM → ARM 重算 → 拉回本地
+export function refetchOilPrices() {
+  return client.post(`/api/fund/oil-refetch-prices`)
 }
 
 /** 市场概览（汇率、活跃数据源、统计） */

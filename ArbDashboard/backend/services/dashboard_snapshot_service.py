@@ -13,11 +13,10 @@ from arbcore.utils.market_calendar import is_a_share_session  # [AI-2026-08-16] 
 logger = logging.getLogger(__name__)
 
 
-# 【AI-2026-07-20】分类优先级管理：改为从 app_settings 读取暂停列表
+# 【AI-2026-07-20 原】分类优先级管理：改为从 app_settings 读取暂停列表
 # HIGH_FREQ_CATEGORIES 是系统支持的全部分类（每分类独立 3s 快照循环）
+# [AI-2026-09-23] 分类级暂停功能已完整删除（见 docs/013_7），此处仅保留 ALL_CATEGORIES 供快照循环遍历
 ALL_CATEGORIES = ["黄金原油", "QDII欧美", "QDII日本", "白银", "QDII亚洲", "国内LOF", "现金管理"]
-# 默认暂停（用户不关心的分类）
-DEFAULT_PAUSED = ["QDII亚洲", "国内LOF", "现金管理"]
 
 
 class DashboardSnapshotService:
@@ -26,10 +25,8 @@ class DashboardSnapshotService:
     API handlers should read this service instead of calculating dashboard data
     inline. If a refresh fails, the last successful snapshot is kept.
 
-    [AI-2026-07-20] 分类优先级管理：
-    - 只有「未暂停」的分类才会启动独立快照循环（3s 刷新）
-    - 暂停的分类完全不生成快照、不抓指数、无日志噪音
-    - 支持运行时修改暂停列表（sync_paused_categories）
+    [AI-2026-09-23] 分类级暂停功能已删除：所有"有成员基金"的分类都启动独立快照循环（3s 刷新）；
+    空分类（无成员基金）不起循环，避免空载计算与首屏填充噪音。
     """
 
     def __init__(
@@ -51,45 +48,38 @@ class DashboardSnapshotService:
         self._last_errors: Dict[str, str] = {}
         self._running = False
         self._tasks: List[asyncio.Task] = []
-        # [AI-2026-07-20] 从 db 读取暂停分类列表
-        self._paused_categories: set = set()
 
-    def _load_paused(self) -> set:
-        """从 app_settings 读取暂停分类列表"""
+    def _category_has_funds(self, category: str) -> bool:
+        """分类是否在 unified_fund_list 中有成员基金。空分类(如已删空的暂停分类)无需起快照循环。"""
         try:
-            db = getattr(self.fund_service, 'db', None)
-            if db:
-                raw = db.get_app_setting('paused_categories', None)
-                if raw:
-                    return set(json.loads(raw))
-        except Exception:
-            pass
-        return set(DEFAULT_PAUSED)
-
-    def _is_paused(self, category: Optional[str]) -> bool:
-        """检查分类是否已暂停"""
-        if not category:
-            return False
-        return category in self._paused_categories
-
-    def sync_paused_categories(self, paused_list: List[str]):
-        """运行时重新加载暂停分类列表（由 API 调用）"""
-        self._paused_categories = set(paused_list)
-        logger.info(f"[SNAPSHOT] 暂停分类已更新: {paused_list}")
+            dbm = getattr(self.fund_service, 'db', None)
+            path = getattr(dbm, 'db_path', None) if dbm else None
+            if not path:
+                return True  # 拿不到 DB 时保守保留循环，避免误杀有基金分类
+            conn = sqlite3.connect(path, timeout=5.0)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM unified_fund_list WHERE category = ?", (category,)
+                ).fetchone()
+                return bool(row and row[0] > 0)
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.warning("[SNAPSHOT] 分类基金数探测失败 %s: %s", category, exc)
+            return True
 
     async def start(self):
         if self._running:
             return
         self._running = True
-        self._paused_categories = self._load_paused()
-        logger.info(f"[SNAPSHOT] 暂停分类: {sorted(self._paused_categories)}")
 
-        # [AI-2026-08-05] 所有分类都启动快照循环：暂停分类里的豁免基金(paused_exempt=1)也需要快照。
-        # get_unified_dashboard_data 内部会按 paused_exempt 过滤，非豁免基金不会出现在快照中。
-        active_categories = ALL_CATEGORIES
-        exempt_cats = [c for c in self._paused_categories if c in ALL_CATEGORIES]
-        logger.info(f"[SNAPSHOT] 暂停分类(含豁免基金): {sorted(self._paused_categories)}")
-        logger.info(f"[SNAPSHOT] 全部分类启动快照循环: {active_categories}")
+        # [AI-2026-09-23] 只给"有成员基金"的分类起快照循环：空分类(如已删空的 QDII亚洲/国内LOF/现金管理)
+        # 起循环只会每 3s 空载计算 + 刷"首屏填充 基金数=0"噪音，直接跳过。
+        active_categories = [c for c in ALL_CATEGORIES if self._category_has_funds(c)]
+        skipped = [c for c in ALL_CATEGORIES if c not in active_categories]
+        if skipped:
+            logger.info(f"[SNAPSHOT] 跳过空分类(无成员基金，不起循环): {skipped}")
+        logger.info(f"[SNAPSHOT] 有基金分类启动快照循环({len(active_categories)}/{len(ALL_CATEGORIES)}): {active_categories}")
 
         # [AI-2026-08-25] 立即后台启动首次刷新（非阻塞 lifespan）：
         # 不阻断 uvicorn listen，前端 wait-backend 秒级通过；同时保证
@@ -139,9 +129,7 @@ class DashboardSnapshotService:
                     logger.warning("[SNAPSHOT] 盘后快照重建失败 %s: %s", key, exc)
                 await asyncio.sleep(self.idle_interval)
                 continue
-            # [AI-2026-08-05] 不再跳过暂停分类：豁免基金(paused_exempt=1)需要快照循环正常运行。
-            # get_unified_dashboard_data 内部会按 paused_exempt 过滤，非豁免基金不会出现在快照中。
-            # 无豁免基金的暂停分类（如现金管理）会返回空列表，有缓存备用源开销可忽略。
+            # 分类级暂停功能已于 2026-09-23 删除：所有"有成员基金"的分类都正常跑快照循环。
             started = time.monotonic()
             try:
                 await self.refresh_once(key, None, category, use_db_watchlist=use_db_watchlist)

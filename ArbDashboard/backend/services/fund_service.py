@@ -1363,31 +1363,14 @@ class FundService:
                 params.extend(cats)
 
             funds_df = pd.read_sql_query(
-                # [AI-2026-08-05] 增加 paused_exempt 字段，用于豁免分类暂停
-                f"SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name, paused_exempt FROM unified_fund_list {where_clause}",
+                # [AI-2026-09-23] paused_exempt 列随分类级暂停功能删除已废弃（仅保留表结构兼容），不再读取
+                f"SELECT fund_code, fund_name, category, related_index, pos_ratio, idx_code, idx_name FROM unified_fund_list {where_clause}",
                 conn, params=params
             )
 
             if funds_df is None or funds_df.empty:
                 _dashboard_cache.set(cache_key, [])
                 return []
-
-            # [AI-2026-07-20] 从结果中剔除暂停分类的基金（不生成快照、不占 CPU）
-            # 注意：paused_set 可能在本方法前面已定义（指数过滤处），也可能未定义
-            if 'paused_set' not in dir():
-                try:
-                    import json
-                    raw = self.db.get_app_setting('paused_categories', None)
-                    paused_set = set(json.loads(raw)) if raw else set()
-                except Exception:
-                    paused_set = set()
-            if paused_set:
-                before = len(funds_df)
-                # [AI-2026-08-05] 豁免基金(paused_exempt=1)不受分类暂停影响，仍展示+计算估值
-                mask_paused = funds_df['category'].isin(paused_set) & (funds_df['paused_exempt'] == 0)
-                funds_df = funds_df[~mask_paused]
-                if len(funds_df) < before:
-                    logger.debug(f"[DASHBOARD-FILTER] 过滤暂停分类(保留豁免)，{before} -> {len(funds_df)} 只基金")
 
             # ── 2. 批量获取 fund_purchase_status 状态费率（AKShare 日更）──
             status_df = pd.read_sql_query(
@@ -1423,18 +1406,8 @@ class FundService:
             hist_grouped = hist_df.groupby('fund_code') if not hist_df.empty else {}
 
             # 【V7.0 工业级升级】 批量预取所有跟踪指数的日内涨跌幅
-            # [AI-2026-07-20] 根据 paused_categories 过滤：暂停的分类不抓指数
-            try:
-                import json
-                raw = self.db.get_app_setting('paused_categories', None)
-                paused_set = set(json.loads(raw)) if raw else set()
-            except Exception:
-                paused_set = {'QDII亚洲', '国内LOF', '现金管理'}
-            # [AI-2026-08-05] funds_df 已在上方按 paused_exempt 过滤（豁免基金保留），无需重复过滤
+            # [AI-2026-09-23] 分类级暂停功能已删除，所有分类统一预取指数（空分类无基金，indices_to_fetch 自然为空）
             indices_to_fetch = funds_df['related_index'].dropna().tolist()
-            if paused_set:
-                logger.debug(f"[INDEX-FILTER] 暂停分类(含豁免) {sorted(paused_set)}，抓取 {len(indices_to_fetch)} 个指数")
-            
             index_changes_map = prefetch_index_changes(indices_to_fetch, conn=conn)
             _prof['prefetch_index'] = _t.perf_counter()  # [埋点A] 指数预取段结束
 
@@ -1493,20 +1466,6 @@ class FundService:
                 code = fund['fund_code']
                 _vf_start = time.perf_counter()  # [埋点A] 逐基金计时起点
                 category = fund.get('category', '')
-
-                # [AI-2026-07-20] 暂停分类 ❌ 直接跳过，不计算实时估值、不产生 WARNING 日志
-                # [AI-2026-08-05] 豁免基金(paused_exempt=1)不跳过，正常计算估值
-                if category in paused_set and fund.get('paused_exempt', 0) == 0:
-                    result.append({
-                        'fund_code': code,
-                        'fund_name': fund.get('fund_name', ''),
-                        'category': category,
-                        'price': 0, 'nav': 0,
-                        'static_val': 0, 'static_premium': 0,
-                        'rt_val': None, 'rt_premium': None,
-                        'sub_category': _FUNDS_SUB_CATEGORY.get(code, ''),
-                    })
-                    continue
 
                 # ── 3a. 从批量历史数据中提取该基金的 metrics ──
                 if not hist_df.empty and code in hist_grouped.groups:
@@ -1934,7 +1893,23 @@ class FundService:
                                             logger.debug(f"[{code}] 跳过 {raw_sym}（{ex} 今日休市）")
                                             continue
                                         # [B1-2026-08-26] 优先复用预取的篮子成分价（已含新浪期货路径），绝不再触发新浪请求
-                                        q = quotes_dict.get(sym_base) or self.market_data_service.get_realtime_quote(sym_base)
+                                        # [FIX-2026-09-23] 篮子成分可能含 woody 合成对冲符号(如 znb_DAX/znb_NKY)或未在
+                                        # lof_config.yaml 声明的 symbol，get_realtime_quote 会因路由 KeyError 抛异常。
+                                        # 此处容错：单个成分取价失败 → 记 WARNING 并跳过该成分(已加入 required_bases 但不进
+                                        # current_etfs → 触发下方 _basket_missing_etf → 实时值干净为 None)，绝不让单只成分
+                                        # 拖垮整只基金实时估值、更绝不回落到陈旧采样值兜底(见 2062 行 stale 分支)。
+                                        try:
+                                            q = quotes_dict.get(sym_base) or self.market_data_service.get_realtime_quote(sym_base)
+                                        except Exception as e:
+                                            # [FIX-2026-09-23] 路由 KeyError（symbol 未在 symbol_sources 声明，
+                                            # 如 woody 合成对冲符号 znb_DAX/znb_NKY）= 设计内预期：该成分本就不参与
+                                            # 实时估值（东哥拍板实时值静默显 '-'），降级为 debug 不刷 WARNING。
+                                            # 其他真实异常（网络/行情源故障）仍记 WARNING，避免掩盖真实故障。
+                                            if isinstance(e, KeyError) or ('未在' in str(e) and 'symbol_sources' in str(e)):
+                                                logger.debug(f"[{code}] 篮子成分 {sym_base} 未声明数据源(合成/对冲符号)，跳过该成分: {e}")
+                                            else:
+                                                logger.warning(f"[{code}] 篮子成分 {sym_base} 实时价获取失败，跳过该成分: {e}")
+                                            continue
                                         # [AI-2026-07-20] 实时估值必须用买一价 bid，禁止用成交价 price（见 AGENTS.md 7.3.4）
                                         # [AI-2026-08-17] A股源 bid 为5档list，IB/FUTU 为标量 → 统一取买一价标量（bid[0]）
                                         if q:

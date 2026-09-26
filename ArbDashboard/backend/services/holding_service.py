@@ -14,7 +14,7 @@
 """
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 
 
@@ -121,6 +121,26 @@ def is_market_holiday(symbol: str, dt: str) -> bool:
     return dt in MARKET_HOLIDAYS.get(_market_of(symbol), set())
 
 
+def _last_trading_day(symbol: str, on_or_before: str, max_back: int = 20) -> Optional[str]:
+    """该标的所属市场在 on_or_before 当日或之前的最后一个交易日（跳过周末 + 该市场假期）。
+
+    JP/CH 等无自动源标的的"是否落后"基准必须用它 —— 各国假期不同，
+    拿美股参考日当基准会把"日股放假"误判成"缺价"（09-21~09-23 为日本假期，实测踩到）。
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _td
+    try:
+        d = _date.fromisoformat(on_or_before)
+    except Exception:
+        return None
+    for _ in range(max_back):
+        s = d.isoformat()
+        if not is_market_holiday(symbol, s):
+            return s
+        d -= _td(days=1)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 同步兜底补抓（东哥 2026-09-15 提议，配合 sync_usa_etf_from_arm）
 # 背景：ARM sampler 每日 06:00 抓取，新浪美股日K部分标的更新延迟（9-14 实证：
@@ -128,12 +148,26 @@ def is_market_holiday(symbol: str, dt: str) -> bool:
 # 兜底：同步完成后，对本地缺"最新已收盘交易日"收盘价的标的，本地直连源补抓
 # 一次；仍缺则在返回里列出供前端报警。ARM 缺 + 本地也缺的概率大幅降低。
 # 源与 sampler 一致：美股→新浪 US_MinKService；伦敦→腾讯 ukXXX；港股→腾讯 hkXXXX；
-# 日股(JP)/瑞股(CH) 无自动化源，跳过（维持人工补 + ⚠️标红口径，见 013_2 §9.1）。
+# 日股(JP)/瑞股(CH) [AI-2026-09-26] 已由 ARM sampler 自动抓取（SIX 官方 CSV / 雅虎日本），
+# 本机重抓兜底直接复用 sampler 抓取函数（见 _fetch_jpch_daily_closes），013_2 §9.1 旧手喂口径废止。
 
 _SINA_US_DAILY_URL = ("https://stock.finance.sina.com.cn/usstock/api/jsonp.php/var%20_/"
                       "US_MinKService.getDailyK?symbol={sym}&___qn=3")
 _TENCENT_KLINE_URL = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
                       "param={code},day,,,10,qfq")
+
+
+def _fetch_jpch_daily_closes(sym_key: str) -> Dict[str, float]:
+    """复用 sampler 的 JP/CH 源抓日线收盘（OILUSA→SIX 官方 CSV，1671/1699→雅虎日本）。
+
+    返回 {YYYY-MM-DD: price}；import 失败/抓取失败返回空 dict（调用方记 still_missing，
+    不抛异常）。延迟 import：holding_valuation 为 namespace 包，backend 在 sys.path 即可。
+    """
+    try:
+        from holding_valuation.usa_etf_history_sampler import fetch_symbol
+        return fetch_symbol(sym_key, n=30)
+    except Exception:
+        return {}
 
 
 def _http_get_text(url: str, timeout: int = 15) -> str:
@@ -697,6 +731,17 @@ class HoldingService:
                         (s, start),
                     ).fetchall()
                 }
+            # [AI-2026-09-26 东哥拍板] 行挂靠改为「篮子 ETF 收盘价交易日」：官方净值未公布
+            # 且净值源表连日期行都没有的日子（如 QDII T+1 的 2026-09-25）也生成估值行。
+            # 依据：估值依赖的是上一非空净值(T-1)，当日净值只影响误差列（未公布显示 '-'，
+            # 公布后重算自动回填）。已验证历史影响面=0：ETF 有价而净值表无行的日期仅新增
+            # 当日，历史行的 prev_date 锚点不变。落库相应改为 upsert（净值表本无该行时插行，
+            # 净值链路 save_unified_history 亦是 upsert，互不覆盖）。
+            etf_dates = sorted({dt for rows in price_rows.values() for dt in rows})
+            if etf_dates:
+                _nav_map = dict(nav_rows)
+                nav_rows = [(dt, _nav_map.get(dt))
+                            for dt in sorted(set(_nav_map) | set(etf_dates))]
             fx_rows: Dict[str, Dict[str, float]] = {}
             for col in CURRENCY_FX_COL.values():
                 fx_rows[col] = {
@@ -716,6 +761,9 @@ class HoldingService:
                 "WHERE symbol IN ('SPY','QQQ') AND price IS NOT NULL AND price>0"
             ).fetchone()
             us_clock = us_clock_row[0] if us_clock_row else None
+            # [AI-2026-09-24 方案A] 待补日清单（只读）：正是被上面 us_clock 拦掉、未生成的那些 NAV 日。
+            # 复用已算出的 us_clock，保证与拦截判定口径完全同源。
+            pending_dates = self._us_price_pending_dates(conn, fund_code, start, us_clock)
         finally:
             conn.close()
 
@@ -880,10 +928,14 @@ class HoldingService:
             )
             for r in rows:
                 if r["coverage"] >= cov_gate:
+                    # [AI-2026-09-26] upsert：净值源表无该日期行时插行（仅写 fund_code/date/
+                    # holding_static_val，其余列留 NULL 由净值链路后续 upsert 填充）。
+                    # 净值链路 save_unified_history 同为 ON CONFLICT upsert，互不覆盖。
                     conn.execute(
-                        "UPDATE unified_fund_history SET holding_static_val=? "
-                        "WHERE fund_code=? AND date=?",
-                        (r["holding_static_val"], fund_code, r["date"]),
+                        "INSERT INTO unified_fund_history (date, fund_code, holding_static_val) "
+                        "VALUES (?, ?, ?) ON CONFLICT(date, fund_code) DO UPDATE "
+                        "SET holding_static_val=excluded.holding_static_val",
+                        (r["date"], fund_code, r["holding_static_val"]),
                     )
             conn.commit()
         finally:
@@ -910,6 +962,85 @@ class HoldingService:
                 for p in periods
             ],
             "rows": list(reversed(rows)),  # 降序：最新在上
+            "pending": list(reversed(pending_dates)),  # 降序：美股价未入库的待补日
+        }
+
+    def _us_price_pending_dates(
+        self, conn, fund_code: str, start: str, us_clock: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """[AI-2026-09-24 方案A] 因「美股价未入库」而未生成静态估值的交易日（只读，不落库）。
+
+        口径与 get_recalc_history 的 us_clock 拦截严格一致，不另立规则：
+        该日有官方净值(nav 非空) + 该日静态估值仍为空 + 日期 > 美股时钟(SPY/QQQ 最新已入库收盘日)
+        + 该日非美股假期。
+
+        这些日在重算时被整行跳过（宁缺毋假，东哥 2026-09-15 拍板），因此读库表格会"少一行"，
+        用户第一反应是"程序丢行了"。本方法把它们显式列出，供前端以灰色「待补」行占位 ——
+        既保留"不生成假估值"的红线，又让"哪天缺、为什么缺"一眼可见。
+        """
+        if us_clock is None:
+            us_clock_row = conn.execute(
+                "SELECT MAX(date) FROM usa_etf_daily_prices "
+                "WHERE symbol IN ('SPY','QQQ') AND price IS NOT NULL AND price>0"
+            ).fetchone()
+            us_clock = us_clock_row[0] if us_clock_row else None
+        if not us_clock:
+            return []
+        nav_rows = conn.execute(
+            "SELECT date, nav FROM unified_fund_history "
+            "WHERE fund_code=? AND date>=? AND nav IS NOT NULL "
+            "AND holding_static_val IS NULL ORDER BY date",
+            (fund_code, start),
+        ).fetchall()
+        return [
+            {
+                "date": d,
+                "official_nav": round(nav, 6) if nav is not None else None,
+                "us_clock": us_clock,
+                "reason": "us_price_pending",
+                "message": f"美股价未入库（美股时钟 {us_clock}），该行待补",
+            }
+            for d, nav in nav_rows
+            if d > us_clock and not is_market_holiday("USO", d)
+        ]
+
+    def get_local_static_valuation_rows(self, fund_code: str, start: str = "2026-01-01") -> Dict[str, Any]:
+        """[AI-2026-09-23 B方案·本地缓存读取] 读本地 unified_fund_history 的 date / nav / holding_static_val。
+
+        与 get_recalc_history（ARM 现算）不同：本方法只读本地已落库的 holding_static_val
+        （由 ARM 自算后经 pull_oil_static_from_arm 日更拉回，或手动同步），不在展示时 SSH 代理 ARM。
+        返回核心列 date / official_nav / holding_static_val / err_pct / err_bp（err 由 nav 与 holding_static_val 反算）。
+        诊断细节（etf_prices / fill_warning / note）不在此列——前端弹窗打开时按需从 ARM 取全量。
+        """
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, nav, holding_static_val FROM unified_fund_history "
+                "WHERE fund_code=? AND date>=? AND holding_static_val IS NOT NULL ORDER BY date",
+                (fund_code, start),
+            ).fetchall()
+            # [AI-2026-09-24 方案A] 待补日：有净值但静态估值为空且已被美股时钟拦截的日子
+            pending_dates = self._us_price_pending_dates(conn, fund_code, start)
+        finally:
+            conn.close()
+        out = []
+        for d, nav, hsv in rows:
+            err = (hsv / nav - 1.0) if (nav is not None and nav != 0) else None
+            out.append({
+                "date": d,
+                "official_nav": round(nav, 6) if nav is not None else None,
+                "holding_static_val": round(hsv, 6),
+                "err_pct": round(err * 100, 4) if err is not None else None,
+                "err_bp": round(err * 10000, 2) if err is not None else None,
+            })
+        return {
+            "fund_code": fund_code,
+            "start": start,
+            "count": len(out),
+            "rows": list(reversed(out)),  # 降序：最新在上
+            "pending": list(reversed(pending_dates)),  # 降序：美股价未入库的待补日
+            "source": "local",
+            "error": None,
         }
 
     # [AI-2026-09-21] 手喂外盘 ETF 收盘价：写 usa_etf_daily_prices 并重算持仓静态估值。
@@ -925,24 +1056,7 @@ class HoldingService:
         """
         conn = self._get_conn()
         try:
-            written = []
-            for p in prices:
-                sym = (p.get("symbol") or "").strip()
-                price = p.get("price")
-                if not sym or price is None:
-                    continue
-                try:
-                    price = float(price)
-                except (TypeError, ValueError):
-                    continue
-                if price <= 0:
-                    continue
-                conn.execute(
-                    "INSERT OR REPLACE INTO usa_etf_daily_prices (date, symbol, price, updated_at) "
-                    "VALUES (?, ?, ?, (datetime('now','localtime')))",
-                    (trade_date, sym, price),
-                )
-                written.append({"symbol": sym, "price": price})
+            written = self._write_etf_price_rows(conn, trade_date, prices)
             conn.commit()
         finally:
             conn.close()
@@ -954,6 +1068,51 @@ class HoldingService:
         recalc = self.get_recalc_history(fund_code, "2026H1", "2026-07-01")
         recalc["written"] = written
         return {"status": "ok", "data": recalc}
+
+    @staticmethod
+    def _write_etf_price_rows(conn, trade_date: str, prices: list) -> list:
+        """把 [{symbol, price}] 写入 usa_etf_daily_prices（INSERT OR REPLACE，同日同标的覆盖）。
+
+        返回实际写入的 [{symbol, price}]。纯写库，**不含重算**——供「手喂(ARM 重算)」与
+        「本地副本(本机只存价)」两处共用，避免两份写库逻辑漂移。
+        """
+        written = []
+        for p in prices:
+            sym = (p.get("symbol") or "").strip()
+            price = p.get("price")
+            if not sym or price is None:
+                continue
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0:
+                continue
+            conn.execute(
+                "INSERT OR REPLACE INTO usa_etf_daily_prices (date, symbol, price, updated_at) "
+                "VALUES (?, ?, ?, (datetime('now','localtime')))",
+                (trade_date, sym, price),
+            )
+            written.append({"symbol": sym, "price": price})
+        return written
+
+    def local_write_manual_etf_prices(self, trade_date: str, prices: list) -> Dict[str, Any]:
+        """[AI-2026-09-24 东哥拍板] 手喂价在【本机】也留一份副本（仅写价格，绝不重算）。
+
+        背景：手喂走 SSH 代理直写 ARM（B 方案），本机 usa_etf_daily_prices 原样不落，
+        致本机数据不自洽（如 501018 的 OILUSA 停在 09-22），排查时两头对照费劲。
+        故本机分支在 ARM 手喂成功后顺手写一份本地副本 —— 只作数据自洽/排查用途：
+        **估值权威仍在 ARM**（本机不计算），静态估值照旧从 ARM 拉回。
+        """
+        conn = self._get_conn()
+        try:
+            written = self._write_etf_price_rows(conn, trade_date, prices)
+            conn.commit()
+        finally:
+            conn.close()
+        if not written:
+            return {"status": "error", "message": "没有有效价格被写入"}
+        return {"status": "ok", "written": written}
 
     # ------------------------------------------------------------------
     # 持仓实时估值（Model B）：季报持仓法 + CL 期货实时价
@@ -995,6 +1154,10 @@ class HoldingService:
 
         conn = self._get_conn()
         self._ensure_freeze_table(conn)
+        # [AI-2026-09-23] 确保 etf_contract_exposure 表存在（ARM 首次运行需种子）：
+        # 下方 brent_months 查询直接依赖该表，ARM 库若从未跑过持仓分析会缺表报错。
+        # 此处 ensure 仅建表+种子（种子为硬编码 ETF_EXPOSURE_SEED），不改变估值计算逻辑。
+        self._ensure_exposure_table(conn)
         try:
             # [AI-2026-09-15] 基准日 = CL 采样日（分子分母同日对齐），但必须是「完整采样日」：
             # 近月合约（active[0]）在该日三时点齐全，且该日 holding_static_val 已落库。
@@ -1437,8 +1600,10 @@ class HoldingService:
         """LOF 基金实时价（与主看板"现价"同源）。
 
         - A 股盘中：走 market_data_service.get_realtime_quote（腾讯/新浪，与主看板现价同一入口）；
-        - 盘后/休市/非交易日：回退到 unified_fund_history 最近官方收盘价（与主看板收盘口径一致）。
-        返回 (price, source)：source ∈ {'realtime:腾讯'/'realtime:新浪'/'close'/None}。取不到返回 (None, None)。
+        - 盘后/休市/非交易日：腾讯接口会把它"最近收盘价"当"当前价"返回，price>0 但实为昨收/收盘，
+          必须显式改标（见下方 relabel），否则弹窗会把昨收误显成"腾讯实时"误导用户；
+        - 接口彻底失败：回退到 unified_fund_history 最近官方收盘价（src='close'）。
+        返回 (price, source)：source ∈ {'realtime:腾讯'/'realtime:新浪'/'昨收'/'收盘'/'close'/None}。取不到返回 (None, None)。
         """
         price = None
         src = None
@@ -1450,6 +1615,16 @@ class HoldingService:
                     src = "realtime:" + str(q.get("source", "mds"))
             except Exception as e:
                 logger.debug(f"[{fund_code}] LOF 实时价获取失败(回退收盘): {e}")
+        # [AI-2026-09-23] 非 A 股盘中时腾讯返回的"当前价"实为最近收盘价，必须改标，
+        # 否则盘前弹窗会把昨收(2.272)误显成"腾讯实时"，误导场内/赎回判断。
+        if price is not None and src and src.startswith("realtime") and not self._is_a_share_open():
+            from arbcore.utils.market_calendar import is_trading_day
+            now = datetime.now(timezone(timedelta(hours=8)))
+            # 交易日且已过 15:00 → 今日已收盘；其余(盘前/休市/周末)→ 昨收
+            if is_trading_day('A_SHARE', now.date()) and (now.hour * 60 + now.minute) >= 900:
+                src = "收盘"
+            else:
+                src = "昨收"
         if price is None:
             conn = self._get_conn()
             try:
@@ -1464,6 +1639,15 @@ class HoldingService:
             finally:
                 conn.close()
         return price, src
+
+    @staticmethod
+    def _is_a_share_open() -> bool:
+        """当前是否处于 A 股可交易时段（9:30-15:00，含午休，强制 UTC+8）。"""
+        try:
+            from arbcore.utils.market_calendar import is_a_share_session
+            return bool(is_a_share_session())
+        except Exception:
+            return True  # 降级：拿不到时段判定时不拦截，避免误吞实时价
 
     @staticmethod
     def _ensure_freeze_table(conn) -> None:
@@ -1486,10 +1670,16 @@ class HoldingService:
     def _fallback_fill_missing_etf(self, conn) -> Dict[str, Any]:
         """同步后兜底：本地缺"最新已收盘交易日"收盘价的标的，直连源补抓一次。
 
+        遍历范围 = fund_basket_weights 最新篮子 ∪ fund_report_holdings 持仓篮子的
+        distinct symbol 合集（woody 估值 + 季度持仓估值两层实际用到的标的），不再遍历
+        usa_etf_daily_prices 全表——这样已调仓/无关注标的（如 160644 调出后的 GOOGL）
+        不会一起报红，消除噪音。篮子表为空时退化回全表，保证不丢补抓能力。
+
         参考日 = 新浪 SPY 最新日（即新浪口径的美股最新已收盘交易日，独立于本地库，
         避免整库同步延迟时"库内最新日"自我参照漏判）。逐标的检查：
         - 该标的所在市场当日休市（is_market_holiday）→ 跳过，不算缺；
-        - JP/CH 无自动化源 → 跳过（人工维护 + ⚠️标红口径）；
+        - JP/CH（OILUSA/1671/1699）[AI-2026-09-26] 已有自动源（ARM sampler：SIX/雅虎日本），
+          本机重抓直接复用 sampler 抓取函数，基准日用该市场自己的最后交易日；
         - 缺价 → 按 _market_of 选源补抓参考日收盘价，成功即 INSERT OR REPLACE 落库。
         返回 {reference_date, filled:{sym:price}, still_missing:[sym]}，绝不抛异常。
         """
@@ -1501,8 +1691,30 @@ class HoldingService:
                 return result
             ref_date = max(spy)
             result["reference_date"] = ref_date
-            symbols = [r[0] for r in conn.execute(
-                "SELECT DISTINCT symbol FROM usa_etf_daily_prices ORDER BY symbol").fetchall()]
+            # 兜底范围 = union(woody 篮子 fund_basket_weights 最新篮子, 季度持仓篮子
+            #  fund_report_holdings)：两层估值实际用到的标的，避免 GOOGL 等已调仓/无关
+            #  注标的报红噪音；JP/CH 手动喂标的本就会被下方 mkt 判断跳过。
+            # [AI-2026-09-23] 单一真相源：symbol_master（DB 权威）取代原先
+            #  fund_basket_weights∪fund_report_holdings 动态 UNION。只取走新浪/腾讯可补的
+            #  海外市场 ETF（含 woody 合成标的由下方 skip 规则自然跳过）；OTHER 类（A股成分如
+            #  SZ159560 等）不走美股接口、由 A股抓取链路负责，排除避免 still_missing 噪音。
+            #  symbol_master 缺失/为空时退化回全表，保证不丢补抓能力。
+            sm_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='symbol_master'"
+            ).fetchone()
+            if sm_exists:
+                symbols = [r[0] for r in conn.execute(
+                    "SELECT symbol FROM symbol_master WHERE active=1 AND asset_type='ETF' "
+                    "AND market IN ('US','JP','CH','LONDON','HK','SYNTHETIC') "
+                    "ORDER BY symbol").fetchall()]
+                if not symbols:
+                    symbols = [r[0] for r in conn.execute(
+                        "SELECT DISTINCT symbol FROM usa_etf_daily_prices "
+                        "ORDER BY symbol").fetchall()]
+            else:
+                symbols = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT symbol FROM usa_etf_daily_prices "
+                    "ORDER BY symbol").fetchall()]
             tried: list = []
             for sym in symbols:
                 # BRNG/BNQA 是 BRNT 的 GBP/EUR 份额别名：USD 价一致，按 BRNT(UK) 处理。
@@ -1513,8 +1725,30 @@ class HoldingService:
                         re.search(r"[.^]", sym_key) or sym_key.isdigit()
                         or re.match(r"^[a-z]{2}\d+$", sym_key)):
                     continue
+                # znb_DAX 等"指数代理代码"（含下划线且非全小写）非美股/英/港 ETF，
+                # 补抓必失败，直接跳过避免徒劳报红
+                if "_" in sym_key and not sym_key.islower():
+                    continue
                 mkt = _market_of(sym_key)
                 if mkt in ("JP", "CH"):
+                    # [AI-2026-09-26] JP/CH 已有自动源（ARM sampler：SIX/雅虎日本），
+                    # 本机重抓复用 sampler 抓取函数；基准日用该市场自己的最后交易日。
+                    base = _last_trading_day(sym_key, ref_date)
+                    if not base:
+                        continue
+                    if conn.execute(
+                        "SELECT 1 FROM usa_etf_daily_prices WHERE symbol=? AND date=?",
+                        (sym, base)).fetchone():
+                        continue
+                    tried.append(sym)
+                    closes = _fetch_jpch_daily_closes(sym_key)
+                    price = closes.get(base)
+                    if price is not None:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO usa_etf_daily_prices "
+                            "(date, symbol, price, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                            (base, sym, price))
+                        result["filled"][sym] = price
                     continue
                 if is_market_holiday(sym_key, ref_date):
                     continue
@@ -1574,11 +1808,11 @@ class HoldingService:
                 tmp = f.name
             cmd = 'ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
             proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r"),
-                                  capture_output=True, text=True, timeout=60)
+                                  capture_output=True, encoding="utf-8", errors="replace", timeout=60)
             if proc.returncode != 0:
                 return {"status": "error",
-                        "message": f"SSH 查询 ARM 失败: {(proc.stderr or proc.stdout).strip()[:300]}"}
-            out = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+                        "message": f"SSH 查询 ARM 失败: {(proc.stderr or proc.stdout or '').strip()[:300]}"}
+            out = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
             rows = json.loads(out)
             if not rows:
                 return {"status": "ok", "updated": 0,
@@ -1634,6 +1868,234 @@ class HoldingService:
                 except Exception:
                     pass
 
+    # ------------------------------------------------------------------
+    # [AI-2026-09-24 东哥需求] ARM 美股价新鲜度检测 + 本机一键重抓推送。
+    # 背景：ARM 采集器固定 07:30 跑（09-24 从 06:00 改），而新浪美股源在该时刻常尚未
+    #   更新 T-1 收盘价（实测：06:00 连续 12 次 0 成功、09:34 成功）→ ARM 缺价 →
+    #   静态估值不起新行（"宁缺毋假"拦截）。
+    # 东哥定的闭环：本机 UI 提示「新浪未抓到」→ 一键重抓 → 自动推 ARM → ARM 重算 → 拉回本地。
+    # 本机非 24h 开机（东哥 2026-09-24 明确），故【不做每日自动调度】，只做手动一键 + 检测提示。
+    # ------------------------------------------------------------------
+
+    def refetch_usa_etf_from_source(self) -> Dict[str, Any]:
+        """[AI-2026-09-24] 本机直连源（新浪/腾讯）重抓「最新已收盘交易日」缺价标的。
+
+        公开入口，包装 _fallback_fill_missing_etf（专供 /api/fund/oil-refetch-prices 调用）。
+        本地为价格权威（东哥铁律）：只补本地缺口，绝不从 ARM 反向覆盖本地已有值。
+        返回 {reference_date, filled:{sym:price}, still_missing:[...]}，绝不抛异常。
+        """
+        conn = self._get_conn()
+        try:
+            self._ensure_usa_etf_table(conn)
+            return self._fallback_fill_missing_etf(conn)
+        except Exception as e:
+            return {"reference_date": None, "filled": {}, "still_missing": [],
+                    "error": str(e)[:200]}
+        finally:
+            conn.close()
+
+    def get_us_price_freshness(self, fund_codes=("160723", "161129", "501018")) -> Dict[str, Any]:
+        """[AI-2026-09-24] 只读检测：ARM 是否已抓到「新浪口径的美股最新已收盘交易日」。
+
+        判据口径与 get_recalc_history 的 us_clock 拦截【严格一致】（口径不一致会给出误导提示）：
+        - reference_date = 新浪 SPY 最新日（独立于本地/ARM 库，避免自我参照漏判）；
+        - arm_clock = ARM 库 SPY/QQQ 的 MAX(date)，即静态估值实际用的美股时钟；
+        - stale ⟺ arm_clock < reference_date（此时 ARM 整行被跳过、不起新行）。
+
+        missing_auto    = 原油三基金季报篮子里参考日缺价的标的（含 JP/CH——
+                         [AI-2026-09-26] 三者已由 ARM sampler 自动抓取，不再区分手喂类；
+                         基准日仍按市场区分：JP/CH 用该市场自己的最后交易日）。
+        绝不抛异常；失败时 error 字段给出原因。
+        """
+        result: Dict[str, Any] = {
+            "reference_date": None, "arm_clock": None, "arm_latest": None,
+            "stale": False, "missing_auto": [],
+            "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "error": None,
+        }
+        # 1) 新浪口径参考日
+        try:
+            spy = _sina_us_daily_closes("SPY")
+        except Exception as e:
+            result["error"] = f"新浪 SPY 参考日获取失败: {str(e)[:120]}"
+            return result
+        if not spy:
+            result["error"] = "新浪 SPY 参考日获取失败（空响应）"
+            return result
+        ref_date = max(spy)
+        result["reference_date"] = ref_date
+
+        # 2) 季报篮子标的（最新报告期），统一 (sym, 基准日) 结构。
+        # [AI-2026-09-26] JP/CH 已有自动源（ARM sampler：SIX/雅虎日本），不再归手喂类；
+        # 但基准日仍按市场区分——JP/CH 用该市场自己的最后一个交易日（假期不同），
+        # 其余用美股参考日（市场假期过滤）。
+        auto_syms: List[tuple] = []
+        try:
+            conn = self._get_conn()
+            try:
+                code_q = ",".join("?" * len(fund_codes))
+                row = conn.execute(
+                    "SELECT MAX(report_period) FROM fund_report_holdings "
+                    "WHERE fund_code IN (%s)" % code_q, tuple(fund_codes)).fetchone()
+                latest_period = row[0] if row else None
+                if latest_period:
+                    syms = [r[0] for r in conn.execute(
+                        "SELECT DISTINCT symbol FROM fund_report_holdings "
+                        "WHERE fund_code IN (%s) AND report_period=? AND symbol IS NOT NULL"
+                        % code_q, tuple(fund_codes) + (latest_period,)).fetchall()]
+                else:
+                    syms = []
+            finally:
+                conn.close()
+        except Exception as e:
+            result["error"] = f"读季报篮子失败: {str(e)[:120]}"
+            return result
+
+        # 非美股命名的特殊代码（00700/0857.HK 等）跳过
+        for sym in syms:
+            sym_key = SYMBOL_ALIAS.get(sym, sym)
+            if sym_key not in SYMBOL_MARKET and (
+                    re.search(r"[.^]", sym_key) or sym_key.isdigit()
+                    or re.match(r"^[a-z]{2}\d+$", sym_key)):
+                continue
+            if "_" in sym_key and not sym_key.islower():
+                continue
+            if _market_of(sym_key) in ("JP", "CH"):
+                base = _last_trading_day(sym_key, ref_date)
+            else:
+                base = None if is_market_holiday(sym_key, ref_date) else ref_date
+            if base:
+                auto_syms.append((sym, base))
+        auto_syms = sorted(set(auto_syms))
+
+        # 3) 查 ARM：美股时钟 + 篮子各标的的最大有价日
+        import json
+        import os
+        import subprocess
+        import tempfile
+
+        syms_json = json.dumps([s for s, _ in auto_syms])
+        remote_script = """import sqlite3, json
+syms = json.loads('__SYMS__')
+c = sqlite3.connect('/home/ubuntu/arbtest/database/arb_master.db')
+clock = c.execute("SELECT MAX(date) FROM usa_etf_daily_prices WHERE symbol IN ('SPY','QQQ')").fetchone()[0]
+latest = c.execute("SELECT MAX(date) FROM usa_etf_daily_prices").fetchone()[0]
+out = {}
+if syms:
+    q = ','.join('?' * len(syms))
+    for s, d in c.execute("SELECT symbol, MAX(date) FROM usa_etf_daily_prices WHERE symbol IN (%s) GROUP BY symbol" % q, syms):
+        out[s] = d
+print(json.dumps({'clock': clock, 'latest': latest, 'syms': out}))
+""".replace("__SYMS__", syms_json)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                             encoding="utf-8") as f:
+                f.write(remote_script)
+                tmp = f.name
+            cmd = 'ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
+            proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r", encoding="utf-8"),
+                                  capture_output=True, encoding="utf-8",
+                                  errors="replace", timeout=30)
+            if proc.returncode != 0:
+                result["error"] = "SSH 查询 ARM 失败: %s" % (
+                    (proc.stderr or proc.stdout or "").strip()[:200])
+                return result
+            out = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
+            arm = json.loads(out)
+        except subprocess.TimeoutExpired:
+            result["error"] = "SSH 超时（arm 不可达）"
+            return result
+        except Exception as e:
+            result["error"] = str(e)[:200]
+            return result
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+
+        result["arm_clock"] = arm.get("clock")
+        result["arm_latest"] = arm.get("latest")
+        arm_syms = arm.get("syms") or {}
+        result["stale"] = bool(arm.get("clock")) and arm.get("clock") < ref_date
+        result["missing_auto"] = [s for s, base in auto_syms
+                                  if base and (not arm_syms.get(s) or arm_syms[s] < base)]
+        return result
+
+    def push_usa_etf_to_arm(self) -> Dict[str, Any]:
+        """[AI-2026-09-24] 本机 → ARM 推送 usa_etf_daily_prices（增量 INSERT OR REPLACE）。
+
+        本机为价格权威（东哥铁律）。触发场景：ARM 采集未拿到 T-1 收盘价（源延迟），
+        或 JP/CH 标的（1699/1671/OILUSA）本就不在 ARM 采集器标的表内 —— 只能由本机推。
+
+        安全约束（第一性原理：不制造删数风险）：
+        - 只 INSERT OR REPLACE，【绝不 DELETE】：ARM 行数只增不减，本机缺数也不会清空 ARM；
+        - 不推送 2026 年以前的行（与本地清理口径一致）；
+        - 复用 ssh arm 的 BatchMode 通道，不碰 ARM 部署、不重启 ARM 服务。
+        失败就地返回 dict，绝不抛异常。
+        """
+        import base64
+        import json
+        import os
+        import subprocess
+        import tempfile
+
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, symbol, price, netvalue, updated_at "
+                "FROM usa_etf_daily_prices WHERE date >= ? ORDER BY symbol, date",
+                ("2026-01-01",)).fetchall()
+        except Exception as e:
+            return {"status": "error", "message": f"读本地价格表失败: {str(e)[:200]}"}
+        finally:
+            conn.close()
+        if not rows:
+            return {"status": "ok", "updated": 0,
+                    "message": "本机无 usa_etf_daily_prices 数据（2026+），无需推送"}
+
+        payload = base64.b64encode(
+            json.dumps([list(r) for r in rows]).encode("utf-8")).decode("ascii")
+        remote_script = """import sqlite3, json, base64
+rows = json.loads(base64.b64decode('__PAYLOAD__').decode('utf-8'))
+c = sqlite3.connect('/home/ubuntu/arbtest/database/arb_master.db')
+c.execute('CREATE TABLE IF NOT EXISTS usa_etf_daily_prices (date TEXT NOT NULL, symbol TEXT NOT NULL, price REAL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, netvalue REAL, PRIMARY KEY (date, symbol))')
+c.executemany('INSERT OR REPLACE INTO usa_etf_daily_prices (date, symbol, price, netvalue, updated_at) VALUES (?, ?, ?, ?, ?)', rows)
+c.commit()
+tot = c.execute('SELECT COUNT(*), MAX(date) FROM usa_etf_daily_prices').fetchone()
+print(json.dumps({'updated': len(rows), 'total': tot[0], 'max_date': tot[1]}))
+""".replace("__PAYLOAD__", payload)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                             encoding="utf-8") as f:
+                f.write(remote_script)
+                tmp = f.name
+            cmd = 'ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
+            proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r", encoding="utf-8"),
+                                  capture_output=True, encoding="utf-8",
+                                  errors="replace", timeout=180)
+            if proc.returncode != 0:
+                return {"status": "error",
+                        "message": f"SSH 推送 ARM 失败: {(proc.stderr or proc.stdout or '').strip()[:300]}"}
+            out = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
+            r = json.loads(out)
+            return {"status": "ok", "updated": r.get("updated", 0),
+                    "arm_total": r.get("total"), "arm_max_date": r.get("max_date"),
+                    "message": (f"已推 {r.get('updated', 0)} 行到 ARM"
+                                f"（ARM 现有 {r.get('total')} 行，最新 {r.get('max_date')}）")}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "SSH 超时（arm 不可达）"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)[:300]}
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+
     @staticmethod
     def _ensure_usa_etf_table(conn) -> None:
         """确保本地 usa_etf_daily_prices 表存在（与 ARM 同结构）。"""
@@ -1674,11 +2136,11 @@ class HoldingService:
                 tmp = f.name
             cmd = 'ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
             proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r"),
-                                  capture_output=True, text=True, timeout=30)
+                                  capture_output=True, encoding="utf-8", errors="replace", timeout=30)
             if proc.returncode != 0:
                 return {"status": "error",
-                        "message": f"SSH 查询 ARM 失败: {(proc.stderr or proc.stdout).strip()[:300]}"}
-            out = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+                        "message": f"SSH 查询 ARM 失败: {(proc.stderr or proc.stdout or '').strip()[:300]}"}
+            out = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
             rows = json.loads(out)
             if not rows:
                 return {"status": "ok", "updated": 0,
@@ -1702,6 +2164,136 @@ class HoldingService:
             finally:
                 conn.close()
             return {"status": "ok", "updated": n, "message": f"同步 {n} 条"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "SSH 超时（arm 不可达）"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)[:300]}
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+
+
+    def pull_oil_static_from_arm(self, fund_codes=("160723", "161129", "501018"),
+                                   recent_days: int = 400) -> Dict[str, Any]:
+        """[AI-2026-09-23 B方案] 从 ARM 拉取原油三基金的 holding_static_val 回本地库。
+
+        本地 HoldingAnalysis 表格列 + 弹窗仍读本地 holding_static_val；B 方案下该值由 ARM 自算
+        （daily_updater 的 _step_oil_recalc），本地不再本地计算，每日从 ARM(自算权威) 拉回即可。
+        失败就地返回 dict，绝不抛异常。
+        """
+        import json
+        import subprocess
+        remote = (
+            'import sqlite3, json\n'
+            'con = sqlite3.connect("/home/ubuntu/arbtest/database/arb_master.db")\n'
+            'rows = con.execute("SELECT fund_code, date, holding_static_val FROM unified_fund_history WHERE fund_code IN (\'160723\',\'161129\',\'501018\') AND holding_static_val IS NOT NULL").fetchall()\n'
+            'print(json.dumps(rows))\n'
+        )
+        try:
+            cmd = 'ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
+            # [AI-2026-09-26] 子进程超时 20s < 前端 axios 30s 上限，确保失败先于客户端超时返回 JSON
+            # （超时返回 {"status":"error","message":"SSH 超时..."}），不再让连接被拖到中止 → 杜绝 "Network Error"。
+            proc = subprocess.run(cmd, shell=True, input=remote, capture_output=True, encoding="utf-8", errors="replace", timeout=20)
+            if proc.returncode != 0:
+                return {"status": "error",
+                        "message": f"SSH 拉取 ARM 失败: {(proc.stderr or '').strip()[:300]}"}
+            out = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
+            rows = json.loads(out)
+            if not rows:
+                return {"status": "ok", "updated": 0, "message": "ARM 无 holding_static_val 数据"}
+            conn = self._get_conn()
+            try:
+                n = 0
+                for fc, d, v in rows:
+                    cur = conn.execute(
+                        "UPDATE unified_fund_history SET holding_static_val=? WHERE fund_code=? AND date=?",
+                        (v, fc, d))
+                    n += cur.rowcount if cur.rowcount > 0 else 0
+                conn.commit()
+            finally:
+                conn.close()
+            return {"status": "ok", "updated": n,
+                    "message": f"已从 ARM 拉取 {len(rows)} 行，本地更新 {n} 行"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "SSH 超时（arm 不可达）"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)[:300]}
+
+    def sync_oil_to_arm(self) -> Dict[str, Any]:
+        """daily_updater 流水线尾部挂接入口：[AI-2026-09-23 B方案]
+        ① 季报持仓 本机→ARM（sync_report_holdings_to_arm，季度自动覆盖）；
+        ② holding_static_val ARM自算→本地拉回（pull_oil_static_from_arm，日更）。
+        本地不再本地计算 holding_static_val。"""
+        r1 = self.sync_report_holdings_to_arm()
+        r2 = self.pull_oil_static_from_arm()
+        return {
+            "status": "ok" if (r1.get("status") == "ok" and r2.get("status") == "ok") else "error",
+            "report_holdings": r1,
+            "holding_static": r2,
+        }
+
+    def sync_report_holdings_to_arm(self, fund_codes=("160723", "161129", "501018")) -> Dict[str, Any]:
+        """本地解析季报后，把指定基金的 fund_report_holdings 行自动同步到 ARM（东哥 2026-09-23 同意）。
+
+        反向于 sync_futures_freeze_from_arm：本机读 → SSH 推 ARM 库 upsert。
+        复用 main.py 的 ssh arm 通道（BatchMode，不碰 ARM 部署）；失败就地返回 dict，绝不抛异常。
+        仅同步给定基金（当前原油三基金），不做整表同步，守住"按需同步"边界。
+        ARM 端用 INSERT OR REPLACE（按唯一键 fund_code+report_period+sort_order+is_stock），
+        季度更新自动覆盖旧报告期，无需手动清理。
+        """
+        import base64
+        import json
+        import os
+        import subprocess
+        import tempfile
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT fund_code, report_period, report_date, symbol, name, name_en, "
+                "region, currency, type, operation_mode, manager, weight, market_value, "
+                "is_stock, sort_order "
+                "FROM fund_report_holdings WHERE fund_code IN (%s)"
+                % ",".join("?" * len(fund_codes)),
+                tuple(fund_codes)).fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return {"status": "ok", "updated": 0,
+                    "message": "本机无这三只基金的季报持仓，无需同步"}
+
+        payload = base64.b64encode(
+            json.dumps([list(r) for r in rows]).encode("utf-8")).decode("ascii")
+        remote_script = """import sqlite3, json, base64
+data = base64.b64decode('%s').decode('utf-8')
+rows = json.loads(data)
+ddl = 'CREATE TABLE IF NOT EXISTS fund_report_holdings (id INTEGER PRIMARY KEY AUTOINCREMENT, fund_code TEXT NOT NULL, report_period TEXT NOT NULL, report_date TEXT NOT NULL, symbol TEXT, name TEXT NOT NULL, name_en TEXT, region TEXT, currency TEXT, type TEXT, operation_mode TEXT, manager TEXT, weight REAL NOT NULL, market_value REAL, is_stock INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, UNIQUE(fund_code, report_period, sort_order, is_stock))'
+c = sqlite3.connect('/home/ubuntu/arbtest/database/arb_master.db')
+c.execute(ddl)
+n = 0
+for r in rows:
+    c.execute('INSERT OR REPLACE INTO fund_report_holdings (fund_code, report_period, report_date, symbol, name, name_en, region, currency, type, operation_mode, manager, weight, market_value, is_stock, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', tuple(r))
+    n += 1
+c.commit()
+print(json.dumps({'updated': n}))
+""" % payload
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+                f.write(remote_script)
+                tmp = f.name
+            cmd = 'ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o BatchMode=yes arm "python3 -"'
+            proc = subprocess.run(cmd, shell=True, stdin=open(tmp, "r"),
+                                  capture_output=True, encoding="utf-8", errors="replace", timeout=30)
+            if proc.returncode != 0:
+                return {"status": "error",
+                        "message": f"SSH 推送 ARM 失败: {(proc.stderr or proc.stdout or '').strip()[:300]}"}
+            out = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
+            result = json.loads(out)
+            return {"status": "ok", "updated": result.get("updated", 0),
+                    "message": f"已同步 {result.get('updated', 0)} 行到 ARM"}
         except subprocess.TimeoutExpired:
             return {"status": "error", "message": "SSH 超时（arm 不可达）"}
         except Exception as e:

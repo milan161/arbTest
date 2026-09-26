@@ -7,8 +7,8 @@
 - 每日收盘后增量抓取指定标的日 K 收盘价，写入 ARM 数据库
   `usa_etf_daily_prices(date, symbol, price, updated_at)`。
 - 美股走新浪 US_MinKService.getDailyK；伦敦 ETC/港股走腾讯日 K。
-- 瑞士 OILUSA / 日股 1699/1671 当前无稳定自动化源，不纳入本脚本，
-  继续按 docs/013_2 保留手动补数 + ⚠️标红。
+- 瑞士 OILUSA（SIX 官方 CSV: CH0109967858USD4）/ 日股 1671·1699（雅虎日本: 1671.T / 1699.T）
+  自 2026-09-26 起自动化抓取，替代原先手动补数；HoldingAnalysis 手喂表单保留为可选覆盖。
 
 部署：
 - systemd timer 每日北京时间 06:00 运行（美股收盘后、A股开盘前）。
@@ -20,9 +20,12 @@
 """
 
 import argparse
+import csv
+import io
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -62,10 +65,14 @@ SOURCES = {
     "XLE": ("sina", "XLE"),
     "XLY": ("sina", "XLY"),
     "KWEB": ("sina", "KWEB"),
+    # 瑞士/日本上市（SIX 官方 CSV / 雅虎日本，2026-09-26 接入，替代手动补）
+    "OILUSA": ("six", "CH0109967858USD4"),
+    "1671": ("jp", "1671.T"),
+    "1699": ("jp", "1699.T"),
 }
 
-# 无稳定自动化源、仍靠手动补的标的（用于日志提示）
-UNSUPPORTED = {"OILUSA", "1699", "1671"}
+# 无稳定自动化源的标的（日志提示用）。OILUSA/1671/1699 自 2026-09-26 已由 SIX/雅虎日本自动抓取，移出。
+UNSUPPORTED = set()
 
 N_DAYS_DEFAULT = 800
 
@@ -100,6 +107,129 @@ def _http_get(url, enc="utf-8", referer=None, timeout=25, retry=3):
             if i < retry - 1:
                 time.sleep(1.5 * (i + 1))
     raise last
+
+
+# ---------- SIX / 雅虎日本 新增源（2026-09-26 接入，替代手动补 OILUSA/1671/1699） ----------
+
+def _to_num(s):
+    """'6,050' / '73.91' / '-' -> float|None。"""
+    if s is None:
+        return None
+    if isinstance(s, (int, float)):
+        return float(s)
+    t = str(s).replace(",", "").replace("+", "").strip()
+    if not t or t in {"-", "--", "－"}:
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _http_get_bytes(url, timeout=25, retry=3):
+    last = None
+    for i in range(retry):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i < retry - 1:
+                time.sleep(1.5 * (i + 1))
+    raise last
+
+
+def fetch_six(sid, n=N_DAYS_DEFAULT):
+    """SIX 瑞士交易所官方 CSV（OILUSA = CH0109967858USD4）。
+
+    零依赖、免 UA/Cookie/代理；裸请求即 200。CSV 四坑：
+    UTF-8-BOM / 分号分隔 / 前两行元数据 / 日期 dd.mm.yyyy 且倒序。
+    返回 {YYYY-MM-DD: close}。
+    """
+    url = "https://www.six-group.com/sheldon/market_data/v1/%s/historic.csv" % sid
+    raw = _http_get_bytes(url)
+    text = raw.decode("utf-8-sig")
+    lines = text.splitlines()
+    hdr = next((i for i, l in enumerate(lines) if l.strip().lower().startswith("date;")), None)
+    if hdr is None:
+        raise ValueError("SIX CSV 未找到表头行: %r" % text[:200])
+    header = [h.strip().lower() for h in lines[hdr].split(";")]
+    price_col = header.index("price") if "price" in header else 1
+    out = {}
+    for parts in csv.reader(io.StringIO("\n".join(lines[hdr + 1:])), delimiter=";"):
+        if len(parts) < 2 or not parts[0].strip():
+            continue
+        try:
+            d = datetime.strptime(parts[0].strip(), "%d.%m.%Y").strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+        p = _to_num(parts[price_col]) if price_col < len(parts) else None
+        if p is not None:
+            out[d] = p
+    return out
+
+
+def _rsc_payload(html):
+    """把 Next.js 的 RSC 分片（JS 字符串字面量）拼回完整载荷。"""
+    chunks = re.findall(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)', html)
+    return "".join(json.loads(c) for c in chunks if c)
+
+
+def _extract_balanced(text, key, open_ch="{"):
+    """抠出 "key":{...} / "key":[...] 完整结构（括号配平，跳过字符串内括号）。"""
+    close_ch = "}" if open_ch == "{" else "]"
+    idx = text.find('"%s":' % key)
+    if idx < 0:
+        return None
+    start = text.find(open_ch, idx)
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+    return None
+
+
+def fetch_yahoo_jp(code, n=N_DAYS_DEFAULT):
+    """雅虎日本历史页（Next.js RSC 载荷）。返回 {YYYY-MM-DD: close}。
+
+    国内网络 finance.yahoo.co.jp 可达；values 顺序：开/高/低/收/量/调整后收。
+    """
+    url = "https://finance.yahoo.co.jp/quote/%s/history" % code
+    html = _http_get(url, referer="https://finance.yahoo.co.jp/")
+    payload = _rsc_payload(html)
+    if not payload:
+        raise ValueError("雅虎日本页面无 RSC 载荷（结构可能变化）")
+    arr_txt = _extract_balanced(payload, "histories", "[")
+    if not arr_txt:
+        raise ValueError("载荷中未找到 histories 数组")
+    arr = json.loads(arr_txt.replace("$undefined", "null"))
+    out = {}
+    for item in arr:
+        d = item.get("date")
+        vals = [_to_num(v.get("value")) for v in item.get("values", [])]
+        if d and len(vals) >= 4 and vals[3] is not None:
+            out[d] = vals[3]
+    return out
 
 
 # ---------- 行情源 ----------
@@ -142,6 +272,10 @@ def fetch_symbol(symbol, n=N_DAYS_DEFAULT):
         return fetch_tx(code, kind=kind, n=n)
     if src == "sina":
         return fetch_sina(code, n=n)
+    if src == "six":
+        return fetch_six(code, n=n)
+    if src == "jp":
+        return fetch_yahoo_jp(code, n=n)
     raise ValueError(f"未知 source: {src}")
 
 

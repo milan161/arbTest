@@ -186,22 +186,8 @@ class DatabaseManager:
                 value TEXT NOT NULL DEFAULT '',
                 updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
             )''')
-            # [AI-2026-08-06] 种子数据：默认暂停「QDII亚洲/国内LOF/现金管理」三类。
-            #   机制(东哥意图)：分类进 paused_set → 该分类全部基金默认隐藏；其中 paused_exempt=1 的单只基金豁免显示。
-            #   用途：东哥不想主看板显示太多基金，仅对少数 QDII香港/国内LOF 基金设 paused_exempt=1 让其显示。
-            #   注：表内已有值(如本次修复后的 ["QDII亚洲","国内LOF","现金管理"]) 不会覆盖；此处只管全新库的种子。
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM app_settings WHERE key='paused_categories'")
-            if cursor.fetchone()[0] == 0:
-                conn.execute("""
-                    INSERT INTO app_settings (key, value) VALUES ('paused_categories', '["QDII亚洲","国内LOF","现金管理"]')
-                """)
-            # 旧的 skip_qdii_asia_index 种子（向后兼容）
-            cursor.execute("SELECT COUNT(*) FROM app_settings WHERE key='skip_qdii_asia_index'")
-            if cursor.fetchone()[0] == 0:
-                conn.execute("""
-                    INSERT INTO app_settings (key, value) VALUES ('skip_qdii_asia_index', '1')
-                """)
+            # [AI-2026-09-23] 分类级暂停功能(paused_categories)与死字段(skip_qdii_asia_index)已删除（见 docs/013_7）。
+            #   不再写入任何种子；存量库的这两行由运维脚本/手动 DELETE 清理。
 
             conn.execute('''CREATE TABLE IF NOT EXISTS unified_fund_list (category TEXT, fund_code TEXT PRIMARY KEY, fund_name TEXT, related_index TEXT, pos_ratio REAL DEFAULT 0.95, target_type TEXT DEFAULT 'ETF')''')
             # [AI-2026-07-25] 已删除 jsl_fund_list 建表（表已废弃，零调用方死代码）

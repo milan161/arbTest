@@ -19,6 +19,9 @@
 
 # --- 密钥 / 私密配置 ---
 account_private.py
+# IB Flex / 各类只读凭据：真实 .env 应放仓库外项目根(D:\Study\arbTest\.env)，此条防误放 src/ 内被提交
+.env
+**/.env
 arbcore/scripts/
 **/private/
 **/Lazy*
@@ -47,6 +50,9 @@ ArbDashboard/data/
 **/_ps_tmp.json
 **/rt_cache.json
 **/rt_freeze.json
+
+# --- 运行时锁文件（不传）---
+*.lock
 
 # --- AI 临时调试脚本（不传）---
 _ai_backup/
