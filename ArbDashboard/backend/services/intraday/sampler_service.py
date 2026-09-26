@@ -13,6 +13,41 @@ def _scalar_level(v):
         return float(v[0]) if v[0] is not None else 0
     return v
 
+# [配套改进 2026-09-26] 中国法定节假日（A股休市日）排除，根治"把休市日误判为采样断档"。
+# 来源：国务院办公厅《关于2026年部分节假日安排的通知》(2025-11-04)。
+# 每年需更新此表；补班日(调休上班的周末)单独列出，优先于周末判定。
+_CN_HOLIDAYS_2026 = {
+    # 元旦 1/1-1/3
+    '2026-01-01','2026-01-02','2026-01-03',
+    # 春节 2/15-2/23（腊月廿八至正月初七）
+    '2026-02-15','2026-02-16','2026-02-17','2026-02-18','2026-02-19','2026-02-20','2026-02-21','2026-02-22','2026-02-23',
+    # 清明 4/4-4/6
+    '2026-04-04','2026-04-05','2026-04-06',
+    # 劳动节 5/1-5/5
+    '2026-05-01','2026-05-02','2026-05-03','2026-05-04','2026-05-05',
+    # 端午 6/19-6/21
+    '2026-06-19','2026-06-20','2026-06-21',
+    # 中秋 9/25-9/27（不调休）
+    '2026-09-25','2026-09-26','2026-09-27',
+    # 国庆 10/1-10/7
+    '2026-10-01','2026-10-02','2026-10-03','2026-10-04','2026-10-05','2026-10-06','2026-10-07',
+}
+# 调休补班日：本为周末，但法定上班（算交易日）。来源同上。
+_CN_MAKEUP_WORKDAYS_2026 = {
+    '2026-01-04','2026-02-14','2026-02-28','2026-05-09','2026-09-20','2026-10-10',
+}
+
+def is_trading_day(d):
+    """A股交易日判定：周一~周五，排除法定假日；补班日(调休上班的周末)算交易日。"""
+    if not isinstance(d, datetime):
+        d = datetime(d.year, d.month, d.day) if hasattr(d, 'date') else d
+    ds = d.strftime('%Y-%m-%d')
+    if ds in _CN_MAKEUP_WORKDAYS_2026:
+        return True
+    if ds in _CN_HOLIDAYS_2026:
+        return False
+    return d.weekday() < 5
+
 class IntradaySamplerService:
     """
     分时数据采样服务 (每分钟执行一次)
@@ -79,11 +114,12 @@ class IntradaySamplerService:
         logger.info("⏹️ 分时采样服务已停止")
 
     def is_market_open(self):
-        """判断是否为 A 股交易时间 (9:30-11:30, 13:00-15:00)"""
+        """判断是否为 A 股交易时间 (9:30-11:30, 13:00-15:00)，并排除法定节假日"""
         now = datetime.now()
-        # 排除周末
-        if now.weekday() >= 5: return False
-        
+        # 排除周末与法定节假日（补班日已在内判定为交易日）
+        if not is_trading_day(now):
+            return False
+
         current_time = now.strftime('%H:%M')
         if '09:30' <= current_time <= '11:30' or '13:00' <= current_time <= '15:00':
             return True
@@ -140,14 +176,23 @@ class IntradaySamplerService:
             current_fx = None
             try:
                 conn = self.db._get_conn()
-                row = conn.execute("SELECT usd_cny_mid FROM exchange_rate ORDER BY date DESC LIMIT 1").fetchone()
+                # [配套改进 2026-09-26] 跳过法定假日 NULL 行（如中秋 9/25 央行不发布中间价），
+                # 回退到最近有效汇率，避免假日采样因 FX 缺失而 0 行 / 误触发守卫。
+                row = conn.execute(
+                    "SELECT usd_cny_mid FROM exchange_rate "
+                    "WHERE usd_cny_mid IS NOT NULL ORDER BY date DESC LIMIT 1"
+                ).fetchone()
                 conn.close()
                 if row and row[0]:
                     current_fx = float(row[0])
                     logger.info(f"📊 采样服务使用美元中间价汇率: {current_fx}")
             except Exception as e:
                 logger.warning(f"⚠️ 获取美元中间价汇率失败: {e}")
-            
+
+            # [A-守卫] FX 缺失守卫：usd_cny_mid 为 NULL/表空 → 估值必失败、本轮大概率 0 行
+            if current_fx is None:
+                logger.warning("⚠️ [采样守卫] exchange_rate.usd_cny_mid 缺失或为空，实时估值将失败，本轮可能 0 行写入")
+
             # [修复] 构建完整符号的实时价格字典（如 ^INDA-EU → 35.5）
             current_etfs = {}
             
@@ -212,7 +257,12 @@ class IntradaySamplerService:
                         'price': q['price']
                     }
                     logger.info(f"📈 采样ETF: {symbol} price={q['price']}, bid={q.get('bid')}, ask={q.get('ask')}")
-            
+
+            # [A-守卫] ETF 取价守卫：待采美股ETF全部取价失败 → 行情源/OpenD链路断
+            _etf_ok = sum(1 for s in us_etf_symbols if s in current_etfs)
+            if us_etf_symbols and _etf_ok == 0:
+                logger.warning(f"⚠️ [采样守卫] {len(us_etf_symbols)} 只美股ETF全部取价失败(行情源/OpenD链路断?)，本轮估值必缺")
+
             # 第三步：采集自选LOF基金的实时价格
             for f in funds_to_sample:
                 if f is None:  # [修复] 跳过None元素
@@ -246,6 +296,7 @@ class IntradaySamplerService:
             conn = self.db._get_conn()
             try:
                 cursor = conn.cursor()
+                written = 0
                 for fund in funds_to_sample:
                     if fund is None:  # [修复] 跳过None元素
                         continue
@@ -309,7 +360,11 @@ class IntradaySamplerService:
                         """, (code, date_str, time_str, price, rt_val, premium,
                               open_premium, close_premium,
                               lof_bid, lof_ask, etf_bid, etf_ask))
+                        written += 1
                 conn.commit()
+                # [A-守卫] 整轮写库守卫：有基金要采却 0 行 → 取价/估值全断，盲窗！
+                if len(funds_to_sample) > 0 and written == 0:
+                    logger.warning(f"⚠️ [采样守卫] 本轮意图采样 {len(funds_to_sample)} 只基金但 0 行写入，疑似行情源/FX/估值链路静默失败")
             except Exception as e:
                 logger.error(f"❌ 采样写入数据库失败: {e}")
                 import traceback

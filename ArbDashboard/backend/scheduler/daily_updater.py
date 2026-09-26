@@ -56,6 +56,20 @@ def _save_no_kline_denylist(d):
     except Exception:
         pass
 
+def _is_arm_runtime() -> bool:
+    """本进程是否跑在 ARM(H5) 部署机上 —— 与 backend/main.py 的 _is_arm 同口径（按库路径区分）。
+
+    ARM 库在 ~/arbtest/（POSIX 路径），本机在 Windows D:\\Study\\arbTest\\。
+    用于区分「同一套日终代码」在本机与 ARM 上的分支行为。
+    """
+    try:
+        from arbcore.database.db_manager import _resolve_db_path
+        p = _resolve_db_path()
+    except Exception:
+        return False
+    return "/home/ubuntu" in p or p.startswith("/home")
+
+
 class DailyUpdater(BaseApp):
     def __init__(self):
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
@@ -471,10 +485,15 @@ class DailyUpdater(BaseApp):
                 file_date = item['date']
                 content = item['content']
                 try:
-                    # [AI-2026-07-08] 读取全部四个汇率字段（中间价/在岸价/离岸价）
+                    # [AI-2026-07-08] 读取全部汇率字段（中间价/在岸价/离岸价）
+                    # [AI-2026-09-24 根因修复] 补读 jpy_cny_mid：VPS 的 fx 文件本就含该字段
+                    #  （与 usd/hkd 同源），但此前入库只取 4 个键、从未读 jpy；而 ARM 是
+                    #  DASHBOARD_MODE 又跳过日元中间价直连 ⇒ 两路落空，jpy_cny_mid 自 09-21
+                    #  起在 ARM 永久为 NULL。upsert 是逐字段合并，传 None 不会清空已有值。
                     date_info = content.get('date')
                     usd_val = content.get('usd_cny_mid')
                     hkd_val = content.get('hkd_cny_mid')
+                    jpy_val = content.get('jpy_cny_mid')
                     cny_spot_val = content.get('usd_cny_spot')
                     cnh_val = content.get('usd_cnh')
                     # 中间价缺失则尝试用其他汇率备用源日期，避免整条跳过
@@ -484,10 +503,11 @@ class DailyUpdater(BaseApp):
                             date_info_str,
                             usd_cny_mid=usd_val,
                             hkd_cny_mid=hkd_val,
+                            jpy_cny_mid=jpy_val,
                             usd_cny_spot=cny_spot_val,
                             usd_cnh=cnh_val,
                         )
-                        self.logger.info(f"   ✅ [VPS] 同步入库汇率: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}, CNYSpot:{cny_spot_val}, CNH:{cnh_val}")
+                        self.logger.info(f"   ✅ [VPS] 同步入库汇率: {date_info_str} -> USD:{usd_val}, HKD:{hkd_val}, JPY:{jpy_val}, CNYSpot:{cny_spot_val}, CNH:{cnh_val}")
                         # 标记云端文件在此日期已完成同步
                         self.db.mark_access_synced(file_date, 'fx_vps_sync')
                 except Exception as e:
@@ -499,6 +519,8 @@ class DailyUpdater(BaseApp):
         #   修正：DASHBOARD_MODE 下仍本地直连补抓在岸价(USD/JPY spot)，
         #   仅跳过中间价/离岸价/日元中间价（由 VPS 提供，避免双源不一致）。
         #   不碰"VPS 不采集在岸价"铁律——ARM 侧 spot 本就由 ARM 自抓新浪，与设计一致。
+        # [AI-2026-09-24] 注：日元中间价(jpy_cny_mid)已由上方 VPS fx 入库循环补读（见 jpy_val），
+        #   此处仍跳过直连以维持"中间价统一由 VPS 供数"的单一真相源；不再依赖 ARM 本地直连。
         if DASHBOARD_MODE:
             self.logger.info("🖥️ [DASHBOARD_MODE] 跳过中间价/离岸价/日元中间价直连（VPS 提供），仅补抓在岸价(USD/JPY spot)")
             self._fetch_spot_rates(today_str)
@@ -1034,22 +1056,46 @@ class DailyUpdater(BaseApp):
             self.logger.info("⏭️ [海外/指数] 今日已抓取，跳过步骤五")
             return
 
+        # [AI-2026-09-23] 单一真相源：symbol_master（DB 权威）取代原先读 YAML config.funds
+        #  的 valuation/hedging portfolio + related_index 白名单。只取走新浪/腾讯可补的海外
+        #  市场 ETF/INDEX（含 woody 合成标的；N225 由 step5b VPS 链路负责，此处排除 JP INDEX）。
+        #  symbol_master 缺失时退化回 YAML，保证不丢抓取能力。
         symbols = set()
-        # [AI-2026-07-20] 美股指数符号白名单：这些是从新浪拉历史、且必须写入 index_history 的指数
-        # （.NDX/.INX 是 QDII欧美基金的 related_index，不在任何篮子/对冲组合里，
-        #  原先的 symbols 收集循环漏掉了它们，导致 index_history 里 .NDX/.INX 停更。
-        #  VPS 只提供当天数据，美股指数多天历史只能由新浪补，故此处补回。）
-        us_index_whitelist = {'.NDX', '.INX'}
-        for fund in self.config.get('funds', []):
-            for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
-                sym = str(item.get('symbol', '')).replace('^', '').split('-')[0]
-                # 港股代码(5位纯数字如00700)允许通过，其他纯数字跳过
-                if sym and (not sym.isdigit() or len(sym) == 5):
-                    symbols.add(sym)
-            # 把基金的 related_index 美股指数也纳入回采（仅 .NDX/.INX）
-            ri = str(fund.get('related_index', '') or '').strip()
-            if ri and ri.upper() in us_index_whitelist:
-                symbols.add(ri)
+        sym_meta = {}  # sym -> (market, asset_type)，循环内区分 ETF/INDEX 落库表
+        sm_rows = None
+        try:
+            conn = self.db._get_conn()
+            try:
+                sm_rows = conn.execute(
+                    "SELECT symbol, market, asset_type FROM symbol_master "
+                    "WHERE active=1 AND asset_type IN ('ETF','INDEX') AND ("
+                    " market IN ('US','CH','LONDON','HK','SYNTHETIC') "
+                    " OR (market='JP' AND asset_type='ETF')) "
+                    "ORDER BY symbol"
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception as e:
+            self.logger.warning(f"⚠️ [海外/指数] symbol_master 读取失败，退化用 YAML: {e}")
+            sm_rows = None
+        if sm_rows:
+            for sym, mkt, atype in sm_rows:
+                symbols.add(sym)
+                sym_meta[sym] = (mkt, atype)
+        else:
+            # 退化：老 YAML 逻辑
+            us_index_whitelist = {'.NDX', '.INX'}
+            for fund in self.config.get('funds', []):
+                for item in fund.get('valuation_portfolio', []) + fund.get('hedging_portfolio', []):
+                    sym = str(item.get('symbol', '')).replace('^', '').split('-')[0]
+                    # 港股代码(5位纯数字如00700)允许通过，其他纯数字跳过
+                    if sym and (not sym.isdigit() or len(sym) == 5):
+                        symbols.add(sym)
+                ri = str(fund.get('related_index', '') or '').strip()
+                if ri and ri.upper() in us_index_whitelist:
+                    symbols.add(ri)
+            for s in ('.NDX', '.INX'):
+                sym_meta.setdefault(s, ('US', 'INDEX'))
 
         for sym in symbols:
             df = self.hist_manager.get_prices(sym, source="sina", start_date=start_date)
@@ -1067,9 +1113,9 @@ class DailyUpdater(BaseApp):
                         continue
                     self.db.upsert_usa_etf_price(date=date_str, symbol=sym, price=float(close_val))
                     written_count += 1
-                    # [AI-2026-07-20] 美股指数（.NDX/.INX）本身就是要写入 index_history 的指数，
-                    # 与"ETF(XOP/GLD)只写 usa_etf_daily_prices，绝不写 index_history；
-                    if sym.upper() in us_index_whitelist:
+                    # [AI-2026-09-23] 指数类型（.NDX/.INX/.SP500-45 等）写 index_history，
+                    # ETF 类型只写 usa_etf_daily_prices；由 symbol_master.asset_type 区分。
+                    if sym_meta.get(sym, ('', ''))[1] == 'INDEX':
                         self.db.upsert_index_history(symbol=sym, date=date_str, close=float(close_val))
                 msg = f"✅ [海外/指数] {sym} 行情同步完成 (写入{written_count}条)"
                 if skipped_count > 0:
@@ -1397,22 +1443,26 @@ class DailyUpdater(BaseApp):
             # [AI-2026-07-23] VPS 同步成功后，检查 NK 数据是否存在
             # VPS 可能有其他期货数据但缺少 NK，需要从新浪备用源补齐
             try:
-                nk_check = conn.execute(
-                    "SELECT COUNT(*) FROM futures_daily WHERE symbol='NK' AND date=? AND settle_price > 0",
-                    (today_str,)
-                ).fetchone()
-                if nk_check[0] == 0:
-                    self.logger.warning(f"⚠️ [VPS] 今日 NK 期货数据缺失，从新浪补齐...")
-                    from arbcore.fetchers.data_fetcher import data_fetcher
-                    nk_data = data_fetcher.get_futures_settlement_data()
-                    for f_data in nk_data:
-                        if f_data.get('symbol') == 'NK':
-                            settle = f_data.get('settle')
-                            close_price = f_data.get('close')
-                            volume = f_data.get('volume')
-                            if settle is not None or close_price is not None:
-                                self.db.upsert_futures_daily(date=today_str, symbol='NK', settle_price=settle, close_price=close_price, volume=volume)
-                                self.logger.info(f"  ✅ NK 结算价={settle}, 收盘价={close_price}")
+                _nk_conn = self.db._get_conn()
+                try:
+                    nk_check = _nk_conn.execute(
+                        "SELECT COUNT(*) FROM futures_daily WHERE symbol='NK' AND date=? AND settle_price > 0",
+                        (today_str,)
+                    ).fetchone()
+                    if nk_check[0] == 0:
+                        self.logger.warning(f"⚠️ [VPS] 今日 NK 期货数据缺失，从新浪补齐...")
+                        from arbcore.fetchers.data_fetcher import data_fetcher
+                        nk_data = data_fetcher.get_futures_settlement_data()
+                        for f_data in nk_data:
+                            if f_data.get('symbol') == 'NK':
+                                settle = f_data.get('settle')
+                                close_price = f_data.get('close')
+                                volume = f_data.get('volume')
+                                if settle is not None or close_price is not None:
+                                    self.db.upsert_futures_daily(date=today_str, symbol='NK', settle_price=settle, close_price=close_price, volume=volume)
+                                    self.logger.info(f"  ✅ NK 结算价={settle}, 收盘价={close_price}")
+                finally:
+                    _nk_conn.close()
             except Exception as e:
                 self.logger.warning(f"⚠️ [VPS] NK 数据检查失败: {e}")
 
@@ -1884,6 +1934,11 @@ class DailyUpdater(BaseApp):
             self._step10_calculate_static_valuation()
             self.step11_simple_static_valuation(recent_days=5)
             self.step12_silver_static_valuation(recent_days=5)
+            # [AI-2026-09-24 东哥拍板] 原油三基金持仓静态估值**已从本分支移出**。
+            # 原因：美股 04:00(北京) 收盘，清晨刷新(08:00) step5 抓到 T-1 收盘价后即可算；
+            # 而白天 A 股时段的实时估值正需要这份持仓静态估值 —— 等 15:00 盘后再算已毫无意义。
+            # 新触发点：refresh_morning 分支（见下方）。本分支保留 step13 做「季报持仓推 ARM + 拉回」。
+            self.step13_oil_data_sync()
             self.logger.info("🎉 [收盘后更新] 收盘价/净值/静态估值已更新！")
             return
 
@@ -1896,6 +1951,16 @@ class DailyUpdater(BaseApp):
                 self.logger.info(f"🗑️ 清除 {src} 标记")
                 self.db.remove_access_sync_status(today_str, src)
             self._run_pipeline()
+            # [AI-2026-09-24 东哥拍板] 原油三基金持仓静态估值：改由「清晨刷新」触发。
+            # 美股 04:00(北京) 收盘 → _run_pipeline 的 step5 抓到 T-1 收盘价 → 立即重算，
+            # 供白天 A 股时段的实时估值使用；不再等 15:00 盘后（那时已无意义）。
+            # 放在 _run_pipeline() **之后**：必须先有当日美股价才能算。
+            #   - ARM 分支：自算并落 ARM 库（权威源头）；
+            #   - 本机分支：跳过（本机只靠 step13 从 ARM 拉回）。
+            # ⚠️ 代码保留不删除（故障兜底）：ARM 死机/不可达时，去掉下面的 if 改为无条件调用
+            #    `self._step_oil_recalc()` 即可让本机恢复自算（改完重启本机后端）。
+            if _is_arm_runtime():
+                self._step_oil_recalc()
             self.logger.info("🎉 [清晨刷新] Woody/汇率/VPS 数据已重新同步！")
             return
 
@@ -1941,7 +2006,51 @@ class DailyUpdater(BaseApp):
         self._step10_calculate_static_valuation()
         self.step11_simple_static_valuation(recent_days=5)
         self.step12_silver_static_valuation(recent_days=5)
+        self.step13_oil_data_sync()
         self.logger.info("🎉 流水线执行完毕，数据大盘一切就绪！")
+
+    def step13_oil_data_sync(self):
+        """[AI-2026-09-23 B方案] 原油三基金数据同步（替代旧 step13_sync_oil_to_arm）。
+
+        ① 季报持仓 本机→ARM（sync_report_holdings_to_arm，季度自动覆盖）；
+        ② holding_static_val ARM自算→本地拉回（pull_oil_static_from_arm，日更）。
+        失败仅记日志不中断流水线。复用 HoldingService.sync_oil_to_arm（SSH 通道）。
+        """
+        try:
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+            from services.holding_service import HoldingService
+            svc = HoldingService(self.db)
+            r = svc.sync_oil_to_arm()
+            if r.get("status") == "ok":
+                self.logger.info(f"✅ [step13] 原油数据同步完成: "
+                                 f"holdings推ARM={r['report_holdings'].get('updated')} 行, "
+                                 f"static从ARM拉回={r['holding_static'].get('updated')} 行")
+            else:
+                self.logger.warning(f"⚠️ [step13] 原油数据同步异常: {r}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ [step13] 原油数据同步失败(不中断流水线): {e}")
+
+    def _step_oil_recalc(self):
+        """[AI-2026-09-24] ARM 端原油三基金持仓静态估值自算（get_recalc_history 落 ARM 库）。
+
+        触发点：**清晨刷新**（refresh_morning 分支；ARM 上 08:00）。
+        美股 04:00(北京) 收盘 → step5 抓到 T-1 收盘价 → 立即重算，供白天 A 股时段实时估值使用。
+        ARM 数据全齐(季报持仓/美股ETF价/LOF净值/汇率)即可算，无需本机推送。
+        仅 ARM 运行时调用；本机只靠 step13_oil_data_sync 从 ARM 拉回。
+        历史：2026-09-23 曾在 daily_close(15:00 盘后) 分支触发，因对白天实时估值无意义已移至清晨。
+        """
+        try:
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+            from services.holding_service import HoldingService
+            svc = HoldingService(self.db)
+            for code in ("160723", "161129", "501018"):
+                r = svc.get_recalc_history(code, start="2026-01-01")
+                if isinstance(r, dict) and r.get("error") is None:
+                    self.logger.info(f"✅ [oil_recalc] {code}: {r.get('count', 0)} 行")
+                else:
+                    self.logger.warning(f"⚠️ [oil_recalc] {code}: {r}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ [oil_recalc] 异常(不中断流水线): {e}")
 
 if __name__ == "__main__":
     import argparse
