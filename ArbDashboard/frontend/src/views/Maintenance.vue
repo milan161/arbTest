@@ -302,7 +302,7 @@ const handleExportShareDb = async () => {
 const SOURCE_ORDER: { key: string; label: string }[] = [
   { key: 'lof_price', label: 'LOF/A股 价格' },
   { key: 'lof_nav', label: 'LOF 净值' },
-  { key: 'static_val', label: '静态估值' },
+  { key: 'static_val', label: 'T-1静态估值' },
   { key: 'us_etf', label: '美股ETF价格' },
   { key: 'fx_mid', label: '汇率(中间价)' },
   { key: 'fx_spot', label: '汇率(在岸价)' },

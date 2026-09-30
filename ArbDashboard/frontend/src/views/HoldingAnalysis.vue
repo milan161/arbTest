@@ -13,7 +13,7 @@
             <span style="font-size: 14px; color: #475569;">{{ fundName || fundCode }}</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 12px; color: #64748b;">持仓静态估值:</span>
+            <span style="font-size: 12px; color: #64748b;">T-1 持仓静态估值:</span>
             <n-tag v-if="staticSynced" size="small" :bordered="false" type="success">
               已同步（最新 {{ staticLatestDate }}）
             </n-tag>
@@ -143,18 +143,17 @@
             <div style="font-size: 14px; font-weight: bold;">持仓实时估值（CL 合约月 · 近月±1）</div>
           </template>
           <n-grid :cols="24" :x-gap="12" :y-gap="12">
-            <n-gi :span="4" style="cursor: pointer;" @click="openRecalcModal">
+            <n-gi :span="4">
               <div style="font-size: 12px; color: #64748b;">
                 最新净值<span v-if="latestNavDate" style="font-size: 11px; color: #94a3b8;">（{{ latestNavDate }}）</span>
               </div>
               <div style="font-size: 18px; font-weight: bold; color: #1e293b;">
                 {{ latestNav != null ? latestNav.toFixed(4) : '-' }}
               </div>
-              <div style="font-size: 10px; color: #2563eb; margin-top: 2px;">点击查看持仓静态估值</div>
             </n-gi>
             <!-- 实时估值：选中合约蓝字大 + 其他合约灰字小 -->
             <n-gi :span="4" style="cursor: pointer;" @click="openRealtimeModal">
-              <div style="font-size: 12px; color: #64748b;">实时估值</div>
+              <div style="font-size: 12px; color: #64748b;">持仓实时估值</div>
               <template v-if="cSel">
                 <div style="font-size: 18px; font-weight: bold; line-height: 1.25; color: #2563eb;">
                   {{ cSel.realtime_nav != null ? cSel.realtime_nav.toFixed(4) : '缺失' }}<span style="font-size: 11px; font-weight: normal; margin-left: 2px;">{{ contractMonthLabel(hedgeContract) }}</span>
@@ -214,100 +213,108 @@
           </div>
         </n-card>
 
-        <!-- 前十大持仓表 -->
+        <!-- [AI-2026-09-30 东哥需求] 持仓静态估值常驻主页面（原为「点击最新净值」弹窗）
+             前十大持仓 / 本期退出·新进前十 三个月才变一次，已收进二级弹窗「季报仓位跟踪」 -->
         <n-card size="small" class="shadow-soft" style="margin-bottom: 16px;">
           <template #header>
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-              <div style="font-size: 14px; font-weight: bold;">前十大持仓</div>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 12px; color: #64748b;">报告期:</span>
-                <n-button
-                  v-for="p in periods"
-                  :key="p.period"
-                  size="small"
-                  type="default"
-                  :style="currentPeriod === p.period
-                    ? { background: '#16a34a !important', borderColor: '#16a34a !important', color: '#fff !important', fontWeight: 'bold' }
-                    : { background: 'transparent !important', borderColor: '#cbd5e1 !important', color: '#64748b !important' }"
-                  @click="switchPeriod(p.period)"
-                >
-                  {{ p.period }}
-                </n-button>
-              </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+              <div style="font-size: 14px; font-weight: bold;">持仓静态估值（7-1 至今）</div>
+              <n-button size="small" @click="trackingModalShow = true">季报仓位跟踪</n-button>
             </div>
           </template>
+          <n-empty v-if="!recalcDisplayRows.length" description="该基金暂无持仓静态估值数据" />
           <n-data-table
-            :columns="holdingColumns"
-            :data="holdings"
-            :summary="holdingSummary"
+            v-else
+            :columns="recalcColumns"
+            :data="recalcDisplayRows"
+            :row-key="(row: any) => row.date"
+            :pagination="{ pageSize: 15 }"
+            :row-class-name="(row: any) => (row.pending ? 'recalc-pending-row' : (row.fill_warning ? 'recalc-warn-row' : (row.carried_forward ? 'recalc-carry-row' : '')))"
             size="small"
             bordered
-            :pagination="false"
-            style="max-height: 500px;"
           />
+          <div v-if="recalcDetailLoading" style="font-size: 11px; color: #94a3b8; margin-top: 6px;">
+            诊断细节加载中（底层 ETF / 缺价标注）…
+          </div>
         </n-card>
-
-        <!-- 退出 / 新进前十 — 并排（只要有上期就显示，列表为空则提示"无"，让用户看清朝季度持仓无变化） -->
-        <n-grid :cols="24" :x-gap="12" :y-gap="12" style="margin-bottom: 16px;">
-          <n-gi :span="12" v-if="prevPeriod">
-            <n-card size="small" class="shadow-soft" style="background: #fff7ed;">
-              <template #header>
-                <div style="font-size: 13px; font-weight: bold; color: #9a3412;">本期已退出前十（上期 {{ prevPeriod }}）</div>
-              </template>
-              <div v-for="(item, idx) in exited" :key="idx" style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #ffedd5;">
-                <span style="font-size: 12px;">
-                  <span v-if="item.symbol" style="font-weight: 600; margin-right: 6px;">{{ item.symbol }}</span>
-                  {{ item.name }}
-                </span>
-                <span style="font-size: 12px; color: #64748b;">{{ item.weight != null ? (item.weight * 100).toFixed(2) + '%' : '-' }}</span>
-              </div>
-              <div v-if="exited.length === 0" style="font-size: 12px; color: #94a3b8; padding: 6px 0;">无</div>
-            </n-card>
-          </n-gi>
-          <n-gi :span="12" v-if="prevPeriod">
-            <n-card size="small" class="shadow-soft" style="background: #f0fdf4;">
-              <template #header>
-                <div style="font-size: 13px; font-weight: bold; color: #166534;">本期新进前十（上期 {{ prevPeriod }}）</div>
-              </template>
-              <div v-for="(item, idx) in newIn" :key="idx" style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #dcfce7;">
-                <span style="font-size: 12px;">
-                  <span v-if="item.symbol" style="font-weight: 600; margin-right: 6px;">{{ item.symbol }}</span>
-                  {{ item.name }}
-                </span>
-                <span style="font-size: 12px; color: #64748b;">{{ item.weight != null ? (item.weight * 100).toFixed(2) + '%' : '-' }}</span>
-              </div>
-              <div v-if="newIn.length === 0" style="font-size: 12px; color: #94a3b8; padding: 6px 0;">无</div>
-            </n-card>
-          </n-gi>
-        </n-grid>
       </template>
 
       <n-empty v-else description="暂无持仓数据" style="padding: 40px;" />
     </n-card>
 
-    <!-- 持仓静态估值弹窗（7-1 至今，降序分页） -->
+    <!-- [AI-2026-09-30 东哥需求] 季报仓位跟踪（二级弹窗）：前十大持仓 + 本期退出/新进前十。
+         这些数据每季度才变一次，平时收起，不占用主页面空间。格式与数据维持原状。 -->
     <n-modal
-      v-model:show="recalcModalShow"
+      v-model:show="trackingModalShow"
       preset="card"
-      :title="fundCode + ' 持仓静态估值（7-1 至今）'"
-      style="width: 760px; max-width: 92vw;"
+      :title="fundCode + ' 季报仓位跟踪'"
+      style="width: 1000px; max-width: 94vw;"
     >
-      <!-- [AI-2026-09-26] 手喂补录面板已删：OILUSA/1671/1699 已由 ARM sampler 自动抓取
-           （SIX 官方 CSV / 雅虎日本），013_2 §9.1 旧"手动补数"结论废止。 -->
-      <n-data-table
-        v-if="recalcDisplayRows.length"
-        :columns="recalcColumns"
-        :data="recalcDisplayRows"
-        :row-key="(row: any) => row.date"
-        :pagination="{ pageSize: 15 }"
-        :row-class-name="(row: any) => (row.pending ? 'recalc-pending-row' : (row.fill_warning ? 'recalc-warn-row' : (row.carried_forward ? 'recalc-carry-row' : '')))"
-        size="small"
-        bordered
-      />
-      <div v-if="recalcDetailLoading" style="font-size: 11px; color: #94a3b8; margin-top: 6px;">
-        诊断细节加载中（底层 ETF / 缺价标注）…
-      </div>
-      <n-empty v-else description="该基金暂无持仓静态估值数据" />
+      <n-card size="small" class="shadow-soft" style="margin-bottom: 16px;">
+        <template #header>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div style="font-size: 14px; font-weight: bold;">前十大持仓</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 12px; color: #64748b;">报告期:</span>
+              <n-button
+                v-for="p in periods"
+                :key="p.period"
+                size="small"
+                type="default"
+                :style="currentPeriod === p.period
+                  ? { background: '#16a34a !important', borderColor: '#16a34a !important', color: '#fff !important', fontWeight: 'bold' }
+                  : { background: 'transparent !important', borderColor: '#cbd5e1 !important', color: '#64748b !important' }"
+                @click="switchPeriod(p.period)"
+              >
+                {{ p.period }}
+              </n-button>
+            </div>
+          </div>
+        </template>
+        <n-data-table
+          :columns="holdingColumns"
+          :data="holdings"
+          :summary="holdingSummary"
+          size="small"
+          bordered
+          :pagination="false"
+          style="max-height: 500px;"
+        />
+      </n-card>
+
+      <!-- 退出 / 新进前十 — 并排（只要有上期就显示，列表为空则提示"无"，让用户看清朝季度持仓无变化） -->
+      <n-grid :cols="24" :x-gap="12" :y-gap="12">
+        <n-gi :span="12" v-if="prevPeriod">
+          <n-card size="small" class="shadow-soft" style="background: #fff7ed;">
+            <template #header>
+              <div style="font-size: 13px; font-weight: bold; color: #9a3412;">本期已退出前十（上期 {{ prevPeriod }}）</div>
+            </template>
+            <div v-for="(item, idx) in exited" :key="idx" style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #ffedd5;">
+              <span style="font-size: 12px;">
+                <span v-if="item.symbol" style="font-weight: 600; margin-right: 6px;">{{ item.symbol }}</span>
+                {{ item.name }}
+              </span>
+              <span style="font-size: 12px; color: #64748b;">{{ item.weight != null ? (item.weight * 100).toFixed(2) + '%' : '-' }}</span>
+            </div>
+            <div v-if="exited.length === 0" style="font-size: 12px; color: #94a3b8; padding: 6px 0;">无</div>
+          </n-card>
+        </n-gi>
+        <n-gi :span="12" v-if="prevPeriod">
+          <n-card size="small" class="shadow-soft" style="background: #f0fdf4;">
+            <template #header>
+              <div style="font-size: 13px; font-weight: bold; color: #166534;">本期新进前十（上期 {{ prevPeriod }}）</div>
+            </template>
+            <div v-for="(item, idx) in newIn" :key="idx" style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #dcfce7;">
+              <span style="font-size: 12px;">
+                <span v-if="item.symbol" style="font-weight: 600; margin-right: 6px;">{{ item.symbol }}</span>
+                {{ item.name }}
+              </span>
+              <span style="font-size: 12px; color: #64748b;">{{ item.weight != null ? (item.weight * 100).toFixed(2) + '%' : '-' }}</span>
+            </div>
+            <div v-if="newIn.length === 0" style="font-size: 12px; color: #94a3b8; padding: 6px 0;">无</div>
+          </n-card>
+        </n-gi>
+      </n-grid>
     </n-modal>
 
     <!-- 持仓实时估值 - CL 分母核对弹窗（全合约对比，不单选切换） -->
@@ -346,7 +353,7 @@
             <tr>
               <th>对冲合约</th>
               <th>CL 实时价</th>
-              <th>实时估值</th>
+              <th>持仓实时估值</th>
               <th>实时持仓溢价</th>
               <th>每手MCL→份数</th>
               <th>{{ mclLots }}手→份数</th>
@@ -388,14 +395,19 @@
           公式：每手份数 = 100桶 × CL实时价 × 中间价(usd_cny_mid) ÷ (实时估值 × β)；N手 = 每手 × 手数。Brent 同月行与对应 WTI 行 CL 价/估值相同（同月跨品种对冲），仅对冲用途不同；Brent 2701 需 2701 冻结价（今夜 ARM 采样后生效，落地前该格显 -）。
         </div>
 
-        <!-- [AI-2026-09-17] CL 三时点冻结价（ARM 采样，分母）：矩阵，上移到穿透表前（每天变的数据集中顶部） -->
-        <div style="font-size: 13px; font-weight: bold; margin: 8px 0 6px;">CL 三时点冻结价（ARM 采样，分母）</div>
+        <!-- [AI-2026-09-17] CL 冻结价（ARM 采样，分母）：矩阵，上移到穿透表前（每天变的数据集中顶部）
+             [AI-2026-09-26] 新增 0230 = 东京 TSE 收盘 15:30 JST，仅 501018 日本腿（1671/1699 共 11.04%）
+             用它做 Model B 分母；其余腿沿用 1130(Brent)/1430(CRUD)/1600(美股)，不受影响。 -->
+        <div style="font-size: 13px; font-weight: bold; margin: 8px 0 6px;">CL 冻结价（ARM 采样，分母）</div>
+        <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">
+          0230 = 东京 TSE 收盘（15:30 JST，仅 501018 日本腿用）；1130 = LSE 收盘；1430 = CME 结算；1600 = NYSE 收盘。
+        </div>
         <n-table :single-line="false" size="small" style="margin-bottom: 8px;">
           <thead>
             <tr><th>时点(NY)</th><th v-for="k in contractKeys" :key="k">CL {{ k }}（{{ contractMonthLabel(k) }}）</th></tr>
           </thead>
           <tbody>
-            <tr v-for="pt in ['1130', '1430', '1600']" :key="pt">
+            <tr v-for="pt in ['0230', '1130', '1430', '1600']" :key="pt">
               <td>{{ pt }}</td>
               <td v-for="k in contractKeys" :key="k">
                 <div>{{ (cData(k)?.freeze_points && cData(k)!.freeze_points[pt]) ? cData(k)!.freeze_points[pt].price : '-' }}</div>
@@ -496,16 +508,16 @@
             <tr>
               <th>基金</th>
               <th>β(仓位)</th>
-              <th>实时估值</th>
+              <th>持仓实时估值</th>
               <th>实时持仓溢价</th>
               <th>实时ETF现价</th>
               <th>每手MCL→份数</th>
               <th>赎回费</th>
-              <th>扣费后净折价</th>
+              <th>净折溢价</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in compareRows" :key="row.code" :style="bestNetCode === row.code ? 'background: #f0fdf4;' : ''">
+            <tr v-for="row in compareRows" :key="row.code">
               <td style="font-weight: bold; white-space: nowrap;">{{ row.code }} {{ row.name }}</td>
               <td>{{ cmpBeta(row.data) }}</td>
               <td style="font-weight: bold; color: #2563eb;">{{ cmpNav(row.data) }}</td>
@@ -516,14 +528,22 @@
               </td>
               <td>{{ cmpShares(row.data) }}</td>
               <td>{{ (row.redeemFee * 100).toFixed(3) + '%' }}</td>
-              <td :style="{ fontWeight: 'bold', color: cmpNet(row) != null ? (cmpNet(row)! <= 0 ? '#16a34a' : '#dc2626') : '#1e293b' }">
-                {{ cmpNetLabel(row) }}<span v-if="bestNetCode === row.code" style="font-size: 10px; color: #16a34a; margin-left: 4px;">最优</span>
+              <td :style="{ fontWeight: 'bold', color: cmpNet(row) != null ? (cmpNet(row)! >= 0 ? '#dc2626' : '#16a34a') : '#1e293b' }">
+                {{ cmpNetLabel(row) }}
               </td>
             </tr>
           </tbody>
         </n-table>
         <div style="font-size: 11px; color: #94a3b8; margin-top: 8px;">
-          净折价 = 实时持仓溢价 + 赎回费（市价买入 → 按估值赎回：毛利=|溢价|，扣赎回费后 = |净折价|；负值 = 扣费后仍有套利空间，越负越优，绿底行=当前最优）。三基金数据与各自"对冲"弹窗同源同口径，随主弹窗每 20 秒刷新。
+          净折溢价：实时持仓溢价 <b>&gt; 0</b>（场内卖出）时本列<b>留空</b>，看左侧「实时持仓溢价」；<b>&lt; 0</b>（场内买入 → 赎回）时 = <b>|实时持仓溢价| − 赎回费</b>。<span style="color: #dc2626;">红 = 正数</span>／<span style="color: #16a34a;">绿 = 负数</span>。三基金数据与各自"对冲"弹窗同源同口径，随主弹窗每 20 秒刷新。
+        </div>
+        <!-- [AI-2026-09-28 东哥需求] 导出 Model B 全部原始数据（2611/2612/2701 三个月），
+             一腿一行长表，供每日在 Excel 里复算；不含「混合估值」（进阶对冲派生量，非原始输入）。 -->
+        <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #e2e8f0;">
+          <span style="font-size: 11px; color: #94a3b8;">CSV 含 2611/2612/2701 三个月 · 一腿一行 · 不含混合估值</span>
+          <n-button size="small" type="primary" :disabled="compareLoading || !compareRows.length" @click="exportCompareCsv">
+            导出原始数据 CSV
+          </n-button>
         </div>
       </div>
     </n-modal>
@@ -561,7 +581,7 @@ const valuation = ref<any>(null)
 // [AI-2026-09-17] 对冲穿透：底层 ETF 实际持有合约月 + 归一化 CL 对冲分布
 const hedgeExposure = ref<any>(null)
 
-// [AI-2026-09-15] 进页面自动同步 CL 三时点冻结价（从 ARM），每天只拉一次；
+// [AI-2026-09-15] 进页面自动同步 CL 冻结价（从 ARM），每天只拉一次；
 // 拉取失败弹出黄色报警，提示东哥检查 ARM 连接/采样。
 const syncAlert = ref('')
 
@@ -624,7 +644,8 @@ const penetrationReady = ref(false)
 const recalcRows = ref<any[]>([])
 const latestNav = ref<number | null>(null)
 const latestNavDate = ref<string>('')
-const recalcModalShow = ref(false)
+// [AI-2026-09-30 东哥需求] 持仓静态估值已常驻主页面（不再用弹窗）；此开关改为二级弹窗「季报仓位跟踪」
+const trackingModalShow = ref(false)
 // [AI-2026-09-23 B方案] 静态持仓估值"是否已从 ARM 同步到本地缓存"状态（读本地 holding_static_val）
 const staticSynced = computed(() => recalcRows.value.length > 0)
 const staticLatestDate = computed(() => recalcRows.value.length ? recalcRows.value[0].date : '')
@@ -737,7 +758,7 @@ const refetchUsPrices = async () => {
   }
 }
 
-// [AI-2026-09-12] 持仓实时估值弹窗：核对 CL 三时点分母 + 实时 CL 价
+// [AI-2026-09-12] 持仓实时估值弹窗：核对 CL 各腿分母（1130/1430/1600，日本腿 0230）+ 实时 CL 价
 const realtimeModalShow = ref(false)
 const rtRefreshing = ref(false)
 const openRealtimeModal = () => { realtimeModalShow.value = true }
@@ -848,7 +869,8 @@ const modalPriceSeg = computed(() => {
 
 // [AI-2026-09-18] 三原油 LOF 同合约月套利对比（点对冲弹窗"对冲合约"列的合约名进入）。
 // 赎回费口径（东哥 2026-09-18）：160723/501018 = 0.5%，161129 = 0.365%。
-// 套利逻辑：市价买入 → 按 NAV 赎回，毛利 = |实时持仓溢价|，净利 = |溢价| − 赎回费 → 净折价 = 溢价 + 赎回费，越负越优。
+// [AI-2026-09-28 东哥定口径·终2] 净折溢价：>0（场内卖出）留空；<0（买入→赎回）用「|溢价| − 赎回费」。
+// [AI-2026-09-28 东哥点名] 只呈报数值，不标"最优"、不标绿底 —— 选标由东哥自行判断。
 const OIL_FUNDS = [
   { code: '160723', name: '嘉实原油', redeemFee: 0.005 },
   { code: '161129', name: '易方达原油', redeemFee: 0.00365 },
@@ -862,12 +884,15 @@ const fetchCompareRows = async () => {
   compareLoading.value = true
   try {
     compareRows.value = await Promise.all(OIL_FUNDS.map(async (f) => {
-      let data: any = null
+      let contracts: any = null
       try {
         const r = await getFundHoldingRealtime(f.code)
-        data = r?.data?.data?.contracts?.[compareContract.value] || null
-      } catch { data = null }
-      return { ...f, data }
+        // [AI-2026-09-28 东哥需求] 保留整份 contracts（2611/2612/2701 全月），供 CSV 导出；
+        // data 仍是当前对比合约，喂表格。兼容两种壳：本机 {status,data} / ARM 外层多包一层。
+        const payload = r?.data?.data?.data ?? r?.data?.data ?? null
+        contracts = payload?.contracts || null
+      } catch { contracts = null }
+      return { ...f, contracts, data: contracts?.[compareContract.value] || null }
     }))
   } finally { compareLoading.value = false }
 }
@@ -876,20 +901,24 @@ const openCompareModal = (contract: string) => {
   compareModalShow.value = true
   fetchCompareRows()
 }
-/** 净折价 = 实时持仓溢价 + 赎回费（负值 = 扣费后仍有折价空间） */
+/** [AI-2026-09-28 东哥定口径·终2] 净折溢价 —— 两条路各算各的，用不上的那支留空。
+ *  东哥 10:52 理清现金流：「实时持仓溢价 > 0 时我不会折价去买入，也不会去赎回，
+ *  只会考虑场内卖出，那就和赎回费没关系了」；10:59「可以让 >0 时留空」。
+ *    · 溢价 > 0 → 场内卖出：本列【留空】（值 = 实时持仓溢价，与赎回费无关，看左侧列即可）
+ *    · 溢价 < 0 → 场内买入 → 赎回：net = |溢价| − 赎回费（赎回费是这条路上唯一的成本）
+ *  ⚠️ 赎回费在程序里是【正数】（160723/501018=0.005，161129=0.00365）。
+ *  不做排序推荐（东哥自行判断，无"最优"标记）。
+ *  ⚠️ 史（同日六次改动，以本式为准）：
+ *    ① 09-18 起 `溢价 + 赎回费`（配"越负越优"）；② 09:45 我擅自改 `(1−费)/(1+溢价) − 1`（错）；
+ *    ③ 09:47 统一 `溢价 − 赎回费`（错）；④ 10:37 统一 `溢价 + 赎回费`；
+ *    ⑤ 10:45 分两支（>0 `溢价 − 费` / <0 `溢价 ＋ 费`）；
+ *    ⑥ 10:52·10:59 东哥理清现金流 ⇒ >0 留空、<0 用 `|溢价| − 费`。 */
 function cmpNet(row: any): number | null {
-  return row?.data?.realtime_premium != null ? row.data.realtime_premium + row.redeemFee : null
+  const p = row?.data?.realtime_premium
+  if (p == null) return null
+  return p > 0 ? null : Math.abs(p) - row.redeemFee
 }
-/** 三基金中净折价最小（最优套利标的）的代码 */
-const bestNetCode = computed(() => {
-  let best: string | null = null
-  let bestV = Infinity
-  for (const r of compareRows.value) {
-    const n = cmpNet(r)
-    if (n != null && n < bestV) { bestV = n; best = r.code }
-  }
-  return best
-})
+// [AI-2026-09-28 东哥点名] 已删除 bestNetCode（自动标"最优"）：不做选标推荐，由东哥自行判断。
 // —— 对比弹窗展示 helper（吸收 TS 断言噪音）——
 const cmpBeta = (c: any) => c?.valid_weight_sum != null ? (c.valid_weight_sum * 100).toFixed(2) + '%' : '-'
 const cmpNav = (c: any) => c?.realtime_nav != null ? c.realtime_nav.toFixed(4) : '-'
@@ -906,6 +935,106 @@ const lofSrcLabel = (src: string | null | undefined) => {
 const cmpPriceSrc = (c: any) => lofSrcLabel(c?.lof_price_source)
 const cmpShares = (c: any) => { const s = perLotShares(c); return s != null ? s.toLocaleString() : '-' }
 const cmpNetLabel = (row: any) => { const n = cmpNet(row); return n != null ? (n * 100).toFixed(3) + '%' : '-' }
+
+// ============================================================================
+// [AI-2026-09-28 东哥需求] 导出三只原油 LOF 的 Model B 全部原始数据
+//   · 范围：2611 / 2612 / 2701 三个月全导（一次性成一份文件，带「合约月」列区分）
+//   · 结构：一腿一行长表 —— 基金级字段每腿重复，便于 Excel 直接复算
+//   · 刻意不含「混合估值（WTI 2611/2612 加权）」：那是进阶对冲方案的派生量，
+//     不是 Model B 的原始输入，混进来会污染要核对的那条链。
+// Excel 可原样复核：
+//   Σ腿贡献 × 100 ÷ β(pos_pct)                        = 篮子变动%
+//   β/100 × ((1+篮子变动%) × (1+r_fx%) − 1)            = 总变动%
+//   base_nav × (1 + 总变动%)                           = 实时估值
+//   LOF现价 ÷ 实时估值 − 1                             = 实时持仓溢价%
+//   净折溢价% = 溢价>0 留空 ／ <0 → |溢价| − 赎回费
+// ============================================================================
+const CSV_HEADERS = [
+  '导出时间(北京)', '合约月', '基金代码', '基金名称',
+  '基准日', '基准静态估值', 'β仓位%(pos_pct)', '有效权重和%', '覆盖率%',
+  '腿序号', '腿标的', '腿权重%', '采样时点', '冻结价', '冻结日',
+  'CL实时价', 'CL时间', '腿涨跌%', '腿贡献',
+  '篮子变动%', '汇率基准fx_point', '今日中间价fx_now', 'r_fx%', 'fx状态',
+  '总变动%', '实时估值', 'LOF现价', '现价来源', '实时持仓溢价%', '赎回费%', '净折溢价%', '备注',
+]
+const csvNum = (v: any, d = 6) => (v == null || v === '' || isNaN(Number(v))) ? '' : Number(v).toFixed(d)
+const csvPct = (v: any, d = 6) => (v == null || v === '' || isNaN(Number(v))) ? '' : (Number(v) * 100).toFixed(d)
+const exportCompareCsv = () => {
+  const now = new Date()
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const stampStr = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}`
+  // 合约月 = 三只基金 contracts 键的并集，按 YYMM 数值排序（2611/2612/2701）
+  const months = Array.from(new Set(
+    compareRows.value.flatMap((r: any) => Object.keys(r.contracts || {}))
+  )).sort((a: any, b: any) => parseInt(a) - parseInt(b))
+  const out: Record<string, any>[] = []
+  for (const row of compareRows.value) {
+    for (const m of months) {
+      const c: any = row.contracts?.[m] || null
+      const p = c?.realtime_premium
+      const base: Record<string, any> = {
+        '导出时间(北京)': stampStr,
+        '合约月': m,
+        '基金代码': row.code,
+        '基金名称': row.name,
+        '基准日': c?.base_date ?? '',
+        '基准静态估值': csvNum(c?.base_nav, 6),
+        'β仓位%(pos_pct)': csvNum(c?.pos_pct, 2),
+        '有效权重和%': csvPct(c?.valid_weight_sum, 2),
+        '覆盖率%': csvPct(c?.coverage, 2),
+        '篮子变动%': csvPct(c?.basket_change_pct, 6),
+        '汇率基准fx_point': csvNum(c?.fx_point, 4),
+        '今日中间价fx_now': csvNum(c?.fx_now, 4),
+        'r_fx%': csvPct(c?.fx_change_pct, 6),
+        'fx状态': c?.fx_status ?? '',
+        '总变动%': csvPct(c?.total_change_pct, 6),
+        '实时估值': csvNum(c?.realtime_nav, 6),
+        'LOF现价': csvNum(c?.lof_price, 4),
+        '现价来源': lofSrcLabel(c?.lof_price_source),
+        '实时持仓溢价%': csvPct(p, 6),
+        '赎回费%': csvNum(row.redeemFee * 100, 3),
+        // 与页面同口径：>0 留空；<0 → |溢价| − 赎回费
+        '净折溢价%': (p == null) ? '' : (p > 0 ? '' : csvPct(Math.abs(p) - row.redeemFee, 3)),
+        '备注': (c?.status && c.status !== 'ok') ? (c.message || c.status) : '',
+      }
+      const legs: any[] = c?.components || []
+      if (!legs.length) { out.push(base); continue }
+      legs.forEach((g: any, i: number) => {
+        out.push({
+          ...base,
+          '腿序号': i + 1,
+          '腿标的': g.symbol ?? '',
+          '腿权重%': csvNum(g.weight_pct, 4),
+          '采样时点': g.point ?? '',
+          '冻结价': csvNum(g.freeze_price, 4),
+          '冻结日': g.freeze_date ?? '',
+          'CL实时价': csvNum(g.cl_now, 4),
+          'CL时间': c?.cl_time ?? '',
+          '腿涨跌%': csvPct(g.ratio, 6),
+          '腿贡献': csvNum(g.contrib, 8),
+          '备注': (g.status && g.status !== 'ok') ? g.status : base['备注'],
+        })
+      })
+    }
+  }
+  const esc = (v: any) => {
+    const s = (v == null) ? '' : String(v)
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }
+  // \uFEFF BOM：保证 Excel 双击打开中文不乱码
+  const csv = '\uFEFF' + [CSV_HEADERS.join(',')]
+    .concat(out.map(r => CSV_HEADERS.map(h => esc(r[h])).join(',')))
+    .join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `原油LOF实时估值原始数据_${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}_${p2(now.getHours())}${p2(now.getMinutes())}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 3000)
+}
 /** 对比弹窗标题用：取三基金同一合约月的 CL 实时价（任一非空即可，三基金值相同） */
 const compareClNow = computed(() => {
   for (const r of compareRows.value) {
@@ -1029,7 +1158,7 @@ const recalcColumns: DataTableColumns<any> = [
   { title: '官方净值', key: 'official_nav', width: 110, align: 'right', render(row: any) {
     return row.official_nav != null ? row.official_nav.toFixed(4) : '-'
   }},
-  { title: '静态估值', key: 'holding_static_val', width: 110, align: 'right', render(row: any) {
+  { title: 'T-1 持仓静态估值', key: 'holding_static_val', width: 110, align: 'right', render(row: any) {
     // [AI-2026-09-24 方案A] 美股价未入库的待补行：显式标「待补」，不留空让人误判丢行
     if (row.pending) return h('span', { style: 'color: #d97706; font-weight: 600;', title: row.note || '美股价未入库，该行待补' }, '待补')
     if (row.holding_static_val == null) return '-'
@@ -1048,14 +1177,6 @@ const recalcColumns: DataTableColumns<any> = [
     return h('span', { style: `font-weight: 600; color: ${color};` }, `${row.err_pct >= 0 ? '+' : ''}${row.err_pct.toFixed(2)}%${mark}`)
   }},
 ]
-
-const openRecalcModal = async () => {
-  if (recalcRows.value.length > 0) {
-    recalcModalShow.value = true
-    // 弹窗打开时按需取全量诊断（etf_prices/fill_warning/note），与本地核心行按 date 合并
-    await fetchRecalcDetail()
-  }
-}
 
 const loadPeriods = async () => {
   if (!fundCode.value) return
@@ -1130,6 +1251,9 @@ const loadData = async () => {
       const navRow = recalcRows.value.find((r: any) => r.official_nav != null)
       latestNav.value = navRow ? navRow.official_nav : null
       latestNavDate.value = navRow ? navRow.date : ''
+      // [AI-2026-09-30 东哥需求] 持仓静态估值表已常驻主页面：载入核心行后立即取诊断明细
+      // （etf_prices/fill_warning/note，展开行要用），不再等弹窗打开才取。
+      if (recalcRows.value.length) void fetchRecalcDetail()
     } else {
       recalcRows.value = []
       recalcPending.value = []

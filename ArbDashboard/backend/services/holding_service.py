@@ -219,11 +219,19 @@ def _tencent_daily_closes(code: str) -> Dict[str, float]:
 # ---------------------------------------------------------------------------
 # 持仓实时估值（Model B）配置
 # ---------------------------------------------------------------------------
-# 分母 = CL(WTI) 合约月三时点冻结价（来自 ARM futures_freeze_prices，每天上午盘前拉一次）。
+# 分母 = CL(WTI) 合约月冻结价（来自 ARM futures_freeze_prices，每天上午盘前拉一次）。
 # 自 2026-09-17 起改为"两个对冲合约"：有效近月=当月+2（USO 在每月初 5-8 个工作日滚仓，
 # 中下旬实际持有"次次月"合约），只保留近月与 +1 两月。
 # 例: 9 月 → [2611,2612]；10 月自动滚动为 [2612,2701]。2610（主连）底层已滚过，估值对对冲无意义，移除。
-FREEZE_POINTS = ["1130", "1430", "1600"]
+#
+# [2026-09-26 东哥拍板] 拆「必需三点 + 可选增强」，为 501018 日本腿补 0230 分母：
+#   FREEZE_POINTS = 参与 base_date 判定的必需三点；
+#   EXTRA_POINTS  = 只用于逐腿取价的增强点（0230 = TSE 15:30 JST），缺失时回落 1600。
+# ⚠️ FREEZE_POINTS 绝不能追加 "0230"：base_date 判定是下方 _value_one_contract 调用方的
+#   `HAVING COUNT(DISTINCT f.point) >= len(FREEZE_POINTS)`。历史每一天都只有 3 点
+#   ⇒ 永远不满足 ⇒ freeze_base_date = None ⇒ 全库 fallback 到 nav_base_date，口径整体漂移。
+FREEZE_POINTS = ["1130", "1430", "1600"]   # 必需：base_date 判定分母，长度不可改
+EXTRA_POINTS = ["0230"]                     # 可选增强：仅 1671/1699（日本腿）取价用
 
 
 def get_active_cl_contracts(as_of_date=None):
@@ -261,10 +269,16 @@ def get_active_cl_contracts(as_of_date=None):
 CL_CONTRACTS = get_active_cl_contracts()  # 模块加载时算一次（当天不变）
 # 篮子标的 -> 其确定自身净值的 NY 时点（与 Model A 口径一致）：
 #   CRUD = CME WTI 14:30 EDT；BRNT = ICE Brent 11:30 EDT（本期用 CL 带残差）；
+#   1671/1699 = TSE 收盘 15:30 JST = 02:30 EDT（东京 Simplex WTI / 野村原油多头指数，
+#               501018 日本腿共 11.04%；[2026-09-26] 补上，此前被兜底归到 1600，
+#               分母锚点错位 13.5h，实测系统性 -1.74%（对估值 -0.18%））；
 #   其余美股/港股原油 ETF 净值按 NY 收盘近似 -> 16:00。
+# 取价时若映射到的点在 freeze 中缺失（历史日 / 未采到），逐腿回落 "1600"（见 _value_one_contract）。
 POINT_BY_SYMBOL: Dict[str, str] = {
     "CRUD": "1430",
     "BRNT": "1130",
+    "1671": "0230",
+    "1699": "0230",
 }
 
 # ---------------------------------------------------------------------------
@@ -807,24 +821,33 @@ class HoldingService:
         rows = []
         stat: Dict[str, Dict[str, float]] = {}
         prev_nav = None
+        # [AI-2026-09-28 锚点错配修复，东哥拍板方案A] prev_nav_date = 基数 prev_nav 所对应的
+        # 篮子交易日。篮子变动起点必须与基数**同源**：此前取「紧邻前一行日期」而基数取
+        # 「上一个非空净值」，当中间夹着 nav 为空的行（QDII T+1 未公布 / 跨假期顺延）时
+        # 两者会错配一天 ⇒ 该行漏掉一段涨跌、估值系统性偏低。
+        # 实测：2026-09-25（9-24 净值因中秋假期顺延未公布）三只原油 LOF 偏低 2.3~2.7%。
+        prev_nav_date = None
         for i, (d, nav) in enumerate(nav_rows):
             # 美股时钟拦截：d 尚未收盘/未入库（非假期）→ 整行跳过，不生成不落库。
             # 假期日放行（假期前填合法）；prev_nav 链与其它 skip 分支保持一致。
             if us_clock and d > us_clock and not is_market_holiday("USO", d):
                 if nav is not None:
                     prev_nav = nav
+                    prev_nav_date = d
                 continue
-            prev_date = nav_rows[i - 1][0]
+            prev_date = prev_nav_date      # 与 prev_nav 同源（2026-09-28 修复锚点错配）
             if prev_nav is None:
                 # 还没有可用于推算(T-1)的上一个非空净值，跳过当日；
                 # 仅当当日自身 nav 非空时才更新 prev_nav。
                 if nav is not None:
                     prev_nav = nav
+                    prev_nav_date = d
                 continue
             per = self._pick_period(periods, d)
             if per is None or not per["usable"]:
                 if nav is not None:
                     prev_nav = nav
+                    prev_nav_date = d
                 continue
 
             syms = list(per["usable"])
@@ -832,6 +855,7 @@ class HoldingService:
             p1 = {s: _fill(price_rows[s], d) for s in syms}
             if any(p0[s] is None or p1[s] is None or p0[s] <= 0 for s in syms):
                 prev_nav = nav
+                prev_nav_date = d if nav is not None else None
                 continue
             # 逐标的 FX：本地涨跌 × 该币种汇率涨跌，再按权重加权成 r_basket。
             # 纯 USD 篮子（160723/161129 五只）每标的使用 usd_cny_mid，与旧口径数值一致；
@@ -856,6 +880,7 @@ class HoldingService:
                 fx_detail[s] = {"cur": cur, "r_fx": round(r_fx, 6)}
             if fx_missing:
                 prev_nav = nav
+                prev_nav_date = d if nav is not None else None
                 continue
 
             est = prev_nav * (1.0 + pos / 100.0 * r_basket)
@@ -907,8 +932,10 @@ class HoldingService:
 
             # prev_nav 仅用非空净值推进；缺失日(如 T+1 未公布的 9-11)保持上一非空值，
             # 使后续可交易日的估值仍能依赖最近一个已公布净值推算。
+            # [AI-2026-09-28] prev_nav_date 与 prev_nav 严格同步推进（锚点同源）。
             if nav is not None:
                 prev_nav = nav
+                prev_nav_date = d
 
         for k, v in stat.items():
             v["mean_abs_bp"] = round(v["abs_bp"] / v["n"], 2) if v["n"] else None
@@ -1121,16 +1148,17 @@ class HoldingService:
         """持仓实时估值（Model B）—— 有效近月±1 三合约对比版。
 
         公式：est_now = base_nav * (1 + Σ (w_i/100) * (CL_now / CL_point_i - 1))
-        自 2026-09-15 起同时计算三个合约（近月/+1/+2，如 9 月 → 2610/2611/2612）的估值：
-          - 每个合约各自取本地 futures_freeze_prices 的三时点冻结价作分母（symbol='CL{合约}'）；
+        自 2026-09-15 起同时计算多个合约（近月 +1，如 9 月 → 2611/2612）的估值：
+          - 每个合约各自取本地 futures_freeze_prices 的冻结价作分母（symbol='CL{合约}'）；
+            每条腿按 POINT_BY_SYMBOL 取自己定盘时刻的点（缺则该腿回落 1600）；
           - 分子实时抓对应合约新浪 hf_CL{合约}（与冻结采样合约严格一致）；
-          - LOF 实时价 / 实时美元人民币为三合约共用输入（与实际基金、汇率相关，与合约无关）。
-        返回结构含 contracts:{ '2610':{...}, '2611':{...}, '2612':{...} }，
+          - LOF 实时价 / 实时美元人民币为各合约共用输入（与实际基金、汇率相关，与合约无关）。
+        返回结构含 contracts:{ '2611':{...}, '2612':{...} }，
         前端可任选一个作对冲基准并对比精度。
         selected_contract 默认取 CL_CONTRACTS[0]（当前近月），前端可切换。
         分母（futures_freeze_prices）需先经 sync_futures_freeze_from_arm 从 ARM 拉到本地；
         本方法只读本地缓存，不实时去 ARM（东哥：每天上午取一次即可）。
-        某合约三点不齐 → 该合约 status='freeze_incomplete'，其余仍正常；整体 status='partial'。
+        某合约必需三点不齐 → 该合约 status='freeze_incomplete'，其余仍正常；整体 status='partial'。
         """
         today = datetime.now().strftime("%Y-%m-%d")
 
@@ -1257,15 +1285,18 @@ class HoldingService:
                            fx_point, fx_now, lof_price, lof_price_source, today) -> Dict[str, Any]:
         """对单个合约（如 '2610' 近月 / '2611' +1 / '2612' +2）计算完整估值。
 
-        分母取本地 futures_freeze_prices 中 symbol='CL{contract}' 的三时点冻结价；
+        分母取本地 futures_freeze_prices 中 symbol='CL{contract}' 的冻结价；
         分子实时抓新浪 hf_CL{contract}。其余（base_nav/篮子/fx_point/lof_price/fx_now）与合约无关，由调用方传入。
-        冻结价缺失（三点不齐）返回 status='freeze_incomplete'，不兜底。
+        必需三点（FREEZE_POINTS）缺失返回 status='freeze_incomplete'，不兜底；
+        可选增强点（EXTRA_POINTS，如 0230）缺失时该腿回落 1600，不算缺失、不报错。
         """
         sym = "CL" + contract
         conn = self._get_conn()
         try:
             freeze: Dict[str, Dict[str, Any]] = {}
-            for pt in FREEZE_POINTS:
+            # [2026-09-26] 加载范围 = 必需三点 + 可选增强点（0230）。缺失判定只看 FREEZE_POINTS，
+            # 增强点缺失不进 missing、不影响 status（取价时逐腿回落 1600）。
+            for pt in FREEZE_POINTS + EXTRA_POINTS:
                 # [AI-2026-09-15] 分母三点必须严格取基准日当天，杜绝手工测试行 /
                 # 跨日残留污染分母（如 9-15 手工 1430 行顶掉 9-14 真实 1430）。
                 # 原写法 trade_date<=today 取各点最新一条，会把非基准日价格混入。
@@ -1305,6 +1336,12 @@ class HoldingService:
         valid_weight_pct = 0.0
         for s, w_pct in basket.items():
             pt = POINT_BY_SYMBOL.get(s, "1600")
+            if pt not in freeze:
+                # [2026-09-26] EXTRA_POINTS（0230）缺失时的逐腿回落，三种情形都会走到这里：
+                #   ① 基准日早于本次改动（历史日从未采过 0230）；② ARM 该点当日未采到；
+                #   ③ 该日恰逢美股假日周一，被 is_trading_day 守卫跳过。
+                # 回落 1600 ⇒ 行为与改动前完全一致；0230 是增强项，绝不因此报 freeze_incomplete。
+                pt = "1600"
             fp = freeze[pt]["price"]
             if fp <= 0:
                 components.append({"symbol": s, "weight_pct": round(w_pct, 4),
@@ -1353,8 +1390,9 @@ class HoldingService:
             "cl_contract_note": f"新浪 hf_CL{contract} 为 WTI {contract[2:]}月合约，与 ARM 三时点冻结采样合约一致",
             "freeze_trade_date": freeze["1600"]["trade_date"],
             "freeze_points": {
+                # [2026-09-26] 输出含可选增强点（0230，前端冻结价矩阵逐行展示采样是否生效）
                 pt: {"price": round(freeze[pt]["price"], 4), "trade_date": freeze[pt]["trade_date"]}
-                for pt in FREEZE_POINTS if pt in freeze
+                for pt in FREEZE_POINTS + EXTRA_POINTS if pt in freeze
             },
             "realtime_nav": round(est, 6),
             "lof_price": round(lof_price, 4) if lof_price is not None else None,
@@ -1367,6 +1405,10 @@ class HoldingService:
             "fx_now": round(fx_now, 4) if fx_now is not None else None,
             "fx_point": round(fx_point_used, 4) if fx_point_used is not None else None,
             "fx_status": fx_status,
+            # [AI-2026-09-28 东哥需求] 显式输出 β 仓位(pos_pct) —— r_basket 归一化的分母。
+            # 原来只隐含在 basket_change_pct 里，CSV 导出后在 Excel 无法精确复算；
+            # 有腿被剔除(fp<=0)时 pos_pct ≠ valid_weight_sum，必须分开给。
+            "pos_pct": round(pos_pct, 4),
             "valid_weight_sum": round(valid_weight_pct / 100.0, 4),
             "coverage": round(valid_weight_pct / per["total"], 4) if per["total"] > 0 else 0.0,
             "components": components,
@@ -2208,9 +2250,13 @@ print(json.dumps({'updated': len(rows), 'total': tot[0], 'max_date': tot[1]}))
             try:
                 n = 0
                 for fc, d, v in rows:
+                    # [AI-2026-09-26] UPDATE-only 改 upsert：本地无该日行（如 9-25 新估值日，
+                    # 本地从未生成占位行）时 UPDATE 匹配 0 行导致拉回丢失；upsert 直接补行。
                     cur = conn.execute(
-                        "UPDATE unified_fund_history SET holding_static_val=? WHERE fund_code=? AND date=?",
-                        (v, fc, d))
+                        "INSERT INTO unified_fund_history (date, fund_code, holding_static_val) "
+                        "VALUES (?, ?, ?) ON CONFLICT(date, fund_code) "
+                        "DO UPDATE SET holding_static_val=excluded.holding_static_val",
+                        (d, fc, v))
                     n += cur.rowcount if cur.rowcount > 0 else 0
                 conn.commit()
             finally:

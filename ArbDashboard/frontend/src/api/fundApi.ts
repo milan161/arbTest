@@ -81,7 +81,7 @@ export function getFundHedgeExposure(code: string) {
   return client.get(`/api/fund/${code}/hedge-exposure`)
 }
 
-/** 从 ARM 拉 CL 三时点冻结价到本地（盘前手动触发一次即可） */
+/** 从 ARM 拉 CL 冻结价到本地（盘前手动触发一次即可） */
 export function syncFuturesFreeze() {
   return client.post(`/api/fund/sync-freeze`)
 }

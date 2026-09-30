@@ -141,6 +141,7 @@ import { formatPrice, formatValuation, formatPercent, formatPremium,
          formatVolume, formatShares, formatSharesChange, formatTurnoverRate,
          formatIndexPrice, priceColor, shortDate, cleanFundName } from '../utils'
 import { getFundHistory, reconcileStaticVal } from '../api'
+import { getFundHoldingRealtime } from '../api/fundApi'
 import SilverRatio from './SilverRatio.vue'
 
 const router = useRouter()
@@ -158,6 +159,31 @@ const curPrice = (row: any): number => {
   if (rp && rp > 0) return rp
   return row?.price || 0
 }
+
+// [2026-09-29] 原油三基金主看板双估值：在现有 4 列内换行追加「我们自己的季报持仓口径」估值。
+// 复用 /api/fund/{code}/holding-realtime（Model B），与 HoldingAnalysis 同源同口径、零后端改动。
+// 端点返回 {data:{contracts:{合约:{realtime_nav, base_nav, ...}}}}，取首个合约(=当前近月，与 firstContract 一致)。
+// 注：这三只与 HOLDING_ANALYSIS_FUNDS 白名单相同（同一组原油 LOF）。
+const OIL_RT_FUNDS = ['160723', '161129', '501018']
+const isOilFund = (code: string) => OIL_RT_FUNDS.includes(code)
+const oilHoldingMap = ref<Record<string, { realtime_nav: number | null; base_nav: number | null }>>({})
+const fetchOilHolding = async () => {
+  await Promise.all(OIL_RT_FUNDS.map(async (code: string) => {
+    try {
+      const res: any = await getFundHoldingRealtime(code)
+      const d = res?.data?.data
+      if (d && d.contracts) {
+        const keys = Object.keys(d.contracts)
+        const c = d.contracts[keys[0]]
+        oilHoldingMap.value[code] = {
+          realtime_nav: c?.realtime_nav ?? null,
+          base_nav: c?.base_nav ?? null,
+        }
+      }
+    } catch (e) { /* 保留上次成功值，不清除 */ }
+  }))
+}
+let oilPollTimer: any = null
 
 // ===== 从 Store 解构响应式状态（保持与模板同名的变量，避免改模板） =====
 const { tableData, loading, currentTab, searchKeyword, watchlist,
@@ -319,10 +345,14 @@ onMounted(() => {
   updateTime()
   fetchRates()
   clockTimer = setInterval(updateTime, 1000)
+  // [2026-09-29] 原油三基金双估值：立即拉一次 + 每 20s 轮询 Model B 实时估值
+  fetchOilHolding()
+  oilPollTimer = setInterval(fetchOilHolding, 20000)
 })
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   if (clockTimer) clearInterval(clockTimer)
+  if (oilPollTimer) clearInterval(oilPollTimer)
 })
 
 // [AI-2026-09-12] 已支持「季报持仓分析」的原油基金白名单（东哥口径：短期只做这三只）。
@@ -389,38 +419,55 @@ const allColumns: DataTableColumns<any> = [
     className: 'col-rt-val',
     render(row: any) {
       // [AI-2026-08-20] 盘后(≥15:00)实时估值无意义，优先显示"冻"标签
-      if (row.rt_frozen) {
-        const canEnter = ['黄金原油', 'QDII欧美', 'QDII日本', '白银'].includes(row.category)
-        const onClick = canEnter ? () => router.push({ path: '/lazymode', query: { code: row.fund_code, name: row.fund_name } }) : undefined
-        const cellCls = canEnter ? 'num-cell strong clickable-cell' : 'num-cell strong'
-        const tip = canEnter ? undefined : '暂不支持（非可套利分类）'
-        return h('span', { class: cellCls + ' frozen-cell', onClick, title: tip || '收盘冻结估值' }, [
-          row.rt_val?.toFixed(4) || '-',
-          h('span', { class: 'freeze-badge', title: row.rt_frozen_note || '收盘冻结估值' }, '冻')
-        ])
-      }
-      // 盘中：正常显示实时估值
       const canEnter = ['黄金原油', 'QDII欧美', 'QDII日本', '白银'].includes(row.category)
       const onClick = canEnter ? () => router.push({ path: '/lazymode', query: { code: row.fund_code, name: row.fund_name } }) : undefined
       const cellCls = canEnter ? 'num-cell strong clickable-cell' : 'num-cell strong'
       const tip = canEnter ? undefined : '暂不支持（非可套利分类）'
-      if (row.rt_val && row.rt_val > 0) {
-        return h('span', { class: cellCls, onClick, title: tip }, row.rt_val.toFixed(4))
+      let top: any
+      if (row.rt_frozen) {
+        top = h('span', { class: cellCls + ' frozen-cell', onClick, title: tip || '收盘冻结估值' }, [
+          row.rt_val?.toFixed(4) || '-',
+          h('span', { class: 'freeze-badge', title: row.rt_frozen_note || '收盘冻结估值' }, '冻')
+        ])
+      } else if (row.rt_val && row.rt_val > 0) {
+        top = h('span', { class: cellCls, onClick, title: tip }, row.rt_val.toFixed(4))
+      } else if (row.rt_unavailable === 'FUTU') {
+        top = h('span', { class: cellCls, style: 'color:#f59e0b;font-size:11px;', onClick, title: tip }, '缺FUTU')
+      } else {
+        top = h('span', { class: cellCls, onClick, title: tip }, '-')
       }
-      if (row.rt_unavailable === 'FUTU') {
-        return h('span', { class: cellCls, style: 'color:#f59e0b;font-size:11px;', onClick, title: tip }, '缺FUTU')
+      // [2026-09-29] 原油三基金：换行追加我们的季报持仓口径实时估值(Model B)
+      const oil = oilHoldingMap.value[row.fund_code]
+      if (isOilFund(row.fund_code) && oil?.realtime_nav != null) {
+        return h('div', { style: 'line-height:1.3;' }, [
+          top,
+          h('div', { style: 'font-size:10px;color:#2563eb;margin-top:1px;', title: '我们的季报持仓口径 实时估值(Model B)' }, '持仓 ' + oil.realtime_nav.toFixed(4))
+        ])
       }
-      return h('span', { class: cellCls, onClick, title: tip }, '-')
+      return top
     }
   },
   {
     title: '实时溢价', key: 'rt_premium', width: 80, align: 'center',
     render(row: any) {
-      if (!row.rt_val || !curPrice(row)) return h('span', { class: 'num-cell muted' }, '-')
-      const p = (curPrice(row) / row.rt_val - 1) * 100
-      const children = [formatPremium(p)]
-      if (row.rt_frozen) children.push(h('span', { class: 'freeze-badge sm', title: row.rt_frozen_note || '收盘冻结估值' }, '冻'))
-      return h('span', { class: 'num-cell strong compact', style: { color: priceColor(p) } }, children)
+      const makeTop = () => {
+        if (!row.rt_val || !curPrice(row)) return h('span', { class: 'num-cell muted' }, '-')
+        const p = (curPrice(row) / row.rt_val - 1) * 100
+        const children = [formatPremium(p)]
+        if (row.rt_frozen) children.push(h('span', { class: 'freeze-badge sm', title: row.rt_frozen_note || '收盘冻结估值' }, '冻'))
+        return h('span', { class: 'num-cell strong compact', style: { color: priceColor(p) } }, children)
+      }
+      const top = makeTop()
+      // [2026-09-29] 原油三基金：换行追加我们的季报持仓口径实时溢价(÷持仓实时估值)
+      const oil = oilHoldingMap.value[row.fund_code]
+      if (isOilFund(row.fund_code) && oil?.realtime_nav != null && curPrice(row)) {
+        const p = (curPrice(row) / oil.realtime_nav - 1) * 100
+        return h('div', { style: 'line-height:1.3;' }, [
+          top,
+          h('div', { style: 'font-size:10px;color:#2563eb;margin-top:1px;' }, formatPremium(p))
+        ])
+      }
+      return top
     }
   },
   {
@@ -433,25 +480,45 @@ const allColumns: DataTableColumns<any> = [
   },
   {
     title: () => h('div', { class: 'col-title-wrapper' }, [
-      h('div', { style: 'font-size: 12px; font-weight: bold;' }, '静态估值'),
+      h('div', { style: 'font-size: 12px; font-weight: bold;' }, 'T-1静态估值'),
       h('div', { style: 'font-size: 9px; color: #64748b; margin-top: 1px;' }, '点击看历史记录')
     ]),
     key: 'static_val_display', width: 82, align: 'center',
     className: 'col-static-val',
     render(row: any) {
       const val = formatValuation(row.static_val)
-      return h('span', { 
+      const top = h('span', {
         class: 'num-cell strong clickable-cell',
         onClick: () => { selectedFund.value = row; showHistoryModal.value = true; fundStore.fetchFundHistory(row.fund_code) }
       }, val)
+      // [2026-09-29] 原油三基金：换行追加我们的季报持仓口径 T-1 静态估值(hsv)
+      const oil = oilHoldingMap.value[row.fund_code]
+      if (isOilFund(row.fund_code) && oil?.base_nav != null) {
+        return h('div', { style: 'line-height:1.3;' }, [
+          top,
+          h('div', { style: 'font-size:10px;color:#2563eb;margin-top:1px;', title: '我们的季报持仓口径 T-1 静态估值' }, '持仓 ' + oil.base_nav.toFixed(4))
+        ])
+      }
+      return top
     }
   },
   {
-    title: '静态溢价', key: 'static_premium', width: 80, align: 'center',
+    title: 'T-1估值溢价', key: 'static_premium', width: 92, align: 'center',
     sorter: (a: any, b: any) => (a.static_premium || 0) - (b.static_premium || 0),
     render(row: any) {
-      if (!row.static_premium) return '-'
-      return h('span', { class: 'num-cell compact', style: { color: priceColor(row.static_premium) } }, formatPremium(row.static_premium))
+      const top = !row.static_premium
+        ? h('span', { class: 'num-cell compact' }, '-')
+        : h('span', { class: 'num-cell compact', style: { color: priceColor(row.static_premium) } }, formatPremium(row.static_premium))
+      // [2026-09-29] 原油三基金：换行追加我们的季报持仓口径静态溢价(÷T-1持仓静态估值)
+      const oil = oilHoldingMap.value[row.fund_code]
+      if (isOilFund(row.fund_code) && oil?.base_nav != null && curPrice(row)) {
+        const p = (curPrice(row) / oil.base_nav - 1) * 100
+        return h('div', { style: 'line-height:1.3;' }, [
+          top,
+          h('div', { style: 'font-size:10px;color:#2563eb;margin-top:1px;' }, formatPremium(p))
+        ])
+      }
+      return top
     }
   },
   {
@@ -644,17 +711,17 @@ const historyColumns = computed<DataTableColumns<any>>(() => {
                     { title: '期货', key: 'futures_close', width: 78, align: 'center', render(row: any) { return row.futures_close ? h('span', { class: 'num-cell' }, row.futures_close.toFixed(3)) : '-' } },
                     { title: '期货涨幅', key: 'futures_pct', width: 78, align: 'center', render(row: any) { if (row.futures_pct == null) return '-'; return h('span', { style: { color: priceColor(row.futures_pct), fontWeight: '500' } }, row.futures_pct.toFixed(3) + '%') } },
                 ] : []),
-                { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
+                { title: 'T-1静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
                 // [AI-2026-07-07] 修复：static_val为null时不显示-100%，直接返回'-'
                 { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
                 { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; return h('span', { class: 'num-cell', style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
               ]
             : [
-                { title: '静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
+                { title: 'T-1静态估值', key: 'static_val', width: 105, align: 'center', render(row: any) { return renderValWithChg(row.static_val, row.static_val_chg) } },
                 // [AI-2026-07-07] 修复同上：static_val为null时显示'-'
                 { title: '估值误差', key: 'val_error_pct', width: 85, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null) return h('span', { class: 'num-cell muted' }, '-'); const v = row.static_val - row.nav; return h('span', { style: { color: priceColor(v), fontWeight: 'bold' } }, v.toFixed(4)) } },
                 { title: '误差率', key: 'val_error_rate', width: 78, align: 'center', render(row: any) { if (row.static_val == null || row.nav == null || row.nav === 0) return '-'; const v = (row.static_val - row.nav) / row.nav * 100; return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(3) + '%') } },
-                { title: '静态溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium; if (v == null) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
+                { title: '溢价', key: 'static_premium', width: 85, align: 'center', render(row: any) { const v = row.static_premium; if (v == null) return '-'; return h('span', { style: { color: priceColor(v) } }, formatPremium(v)) } },
                 // [AI-2026-08-21] 白银：历史弹窗"对冲值"列改为"结算价"（仅白银显示，数据来自后端 ag0_settle）
                 ...(isSilver ? [{ title: '结算价', key: 'ag0_settle', width: 95, align: 'center', render(row: any) { return row.ag0_settle != null ? renderValWithChg(row.ag0_settle, row.ag0_settle_chg, 2) : '-' } }] : []),
               ],
@@ -773,73 +840,6 @@ const columns = computed<DataTableColumns<any>>(() => {
   const hideIndexTabs = ['黄金原油', 'QDII欧美', '白银']
   if (hideIndexTabs.includes(currentTab.value)) {
     return cols.filter(c => c.key !== 'related_index' && c.key !== 'index_close' && c.key !== 'index_pct' && c.key !== 'index_name')
-  }
-
-  // 现金管理TAB：隐藏份额/新增/换手率/指数价/指数涨跌幅/申购/赎回/测试价/溢价率
-  // 并重命名列 + 添加债券ETF专属列
-  if (currentTab.value === '现金管理') {
-    // 过滤掉不需要的列
-    cols = cols.filter(c => !['shares', 'shares_added', 'turnover_rate', 'index_close', 'index_pct', 'index_name', 'purchase_status', 'redemption_status', 'static_premium', 'rt_premium'].includes(c.key))
-    
-    // 重命名列
-    cols.forEach(col => {
-      if (col.key === 'nav') col.title = '最新净值'
-      if (col.key === 'rt_val_display') col.title = '估值'
-    })
-    
-    // [AI-2026-07-03] static_val_display（静态估值）移到净值日期右侧
-    const svIdx = cols.findIndex(c => c.key === 'static_val_display')
-    let staticValCol = null
-    if (svIdx >= 0) {
-      staticValCol = cols.splice(svIdx, 1)[0]
-      staticValCol.title = '静态估值'
-      staticValCol.width = 60
-    }
-    
-    // 估值列之后插入折价几根毛和溢价（基于估值计算，不用净值）
-    const rtValIndex = cols.findIndex(c => c.key === 'rt_val_display')
-    if (rtValIndex >= 0) {
-      cols.splice(rtValIndex + 1, 0,
-        { title: '折价几根毛', key: 'yield_per_wan', width: 80, align: 'center',
-          render(row: any) { const v = ((row.rt_val || 0) - (row.price || 0)) * 100; if (v === 0) return '-'; return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, v.toFixed(2)) }
-        },
-        { title: '溢价', key: 'rt_premium_calc', width: 80, align: 'center',
-          render(row: any) { const val = row.rt_val || 0; if (val === 0) return '-'; const v = ((row.price || 0) / val - 1); return h('span', { style: { color: priceColor(v), fontWeight: '500' } }, (v * 100).toFixed(3) + '%') }
-        }
-      )
-    }
-    
-    // 静态估值 + 日均增长 + 国债指数 + 国债期货 放在净值日期之后
-    const navDateIndex = cols.findIndex(c => c.key === 'nav_date')
-    if (navDateIndex >= 0) {
-      const insertAfter: any[] = []
-      if (staticValCol) insertAfter.push(staticValCol)
-      insertAfter.push(
-        { title: '日均增长', key: 'avg_daily_growth', width: 72, align: 'center',
-          render(row: any) {
-            const g = row.avg_daily_growth
-            if (g == null) return '-'
-            return h('span', { class: 'num-cell compact', style: { color: priceColor(g) } }, (g * 10000).toFixed(1) + '万')
-          }
-        },
-        { title: '国债指数', key: 'treasury_index_price', width: 80, align: 'center',
-          render(row: any) {
-            const p = row.treasury_index_price
-            if (p == null) return '-'
-            return h('span', { class: 'num-cell compact', style: { color: '#1f2937' } }, p.toFixed(2))
-          }
-        },
-        { title: '国债期货', key: 'futures_pct', width: 80, align: 'center',
-          render(row: any) {
-            const fp = row.futures_pct
-            if (fp == null) return '-'
-            return h('span', { class: 'num-cell compact', style: { color: priceColor(fp) } }, (fp > 0 ? '+' : '') + fp.toFixed(3) + '%')
-          }
-        }
-      )
-      cols.splice(navDateIndex + 1, 0, ...insertAfter)
-    }
-    return cols
   }
 
   return cols

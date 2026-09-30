@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-原油 LOF 实时估值(Model B) 分母采样器 —— CL(WTI) 合约月三时点冻结价。
+  原油 LOF 实时估值(Model B) 分母采样器 —— CL(WTI) 合约月多时点冻结价。
 
 背景：
-  Model B 实时估值分母取 5 只 ETF 确定自身净值的时点：
+  Model B 实时估值分母取各标的确定自身净值的时点：
     CRUD  -> CME WTI 14:30 EDT
     BRNT  -> ICE Brent 11:30 EDT  (本期按东哥口径统一用 CL，带 Brent 残差)
     US三  -> NYSE 16:00 EDT
+    1671 / 1699 -> TSE 收盘 15:30 JST = 02:30 EDT
+        [2026-09-26 东哥拍板新增] 501018 日本腿（东京 Simplex WTI + 野村原油多头指数，
+        合计 11.04%）的定盘时刻。此前被兜底归到 1600，分母锚点错位 13.5h，
+        实测系统性偏差 -1.74%（对估值 -0.18%，每天存在、不随日抵消）。
+        160723 / 161129 篮子无日本腿，多采此点不影响其估值（消费端不用）。
   本期(2026-09-15 起)改为"有效近月 ±1" 同时采样对比：
     - 有效近月 = 当月 + 2（USO 在每月初 5-8 个工作日滚仓，中下旬实际持有次次月；
       如 9 月 → 近月=11 月 CL2611）
@@ -17,9 +22,9 @@
   [2026-09-17 东哥拍板] 2610（主连）底层已滚过、估值对对冲无意义，停止采样；Brent 同月(2701)为跨品种对冲反算保留采样。
 
 部署：
-  - 由 systemd timer 在 America/New_York 时区 11:30/14:30/16:00 触发（冬夏令时自动切换）。
+  - 由 systemd timer 在 America/New_York 时区 02:30/11:30/14:30/16:00 触发（冬夏令时自动切换）。
   - 脚本按当前 NY 时间自动判定命中哪个时点（容错 +-10min），非交易时段跳过。
-  - 周末 + 2026 美股假日不采。
+  - 周末 + 2026 美股假日不采（0230 复用同一守卫，已知边界见 POINTS 上方注释）。
   - 落库 futures_freeze_prices(trade_date, point, symbol, price, src, fetched_at)，
     symbol 如 'CL2610'/'CL2611'/'CL2612'。
   - 落库后仅保留当天三个合约的采样，并清掉历史遗留的主力连续 symbol='CL'
@@ -29,6 +34,7 @@
 
 手动测试：
   python cl_freeze_sampler.py --point 1430          # 强制写今天 14:30 那一行（三合约）
+  python cl_freeze_sampler.py --point 0230          # 强制写今天 02:30 那一行（日本腿用）
   python cl_freeze_sampler.py --point 1430 --dry-run # 只打印不写库
   python cl_freeze_sampler.py --test-notify          # 只发一条测试 Telegram（不采样不写库）
   python cl_freeze_sampler.py --db /path/arb_master.db
@@ -51,9 +57,17 @@ LOG_FILE = os.path.join(LOG_DIR, "cl_freeze.log")
 SINA_BASE = "https://hq.sinajs.cn/list="
 SINA_REF = "https://finance.sina.com.cn"
 
-# 三个 NY 时点（小时, 分钟）
-POINTS = {"1130": (11, 30), "1430": (14, 30), "1600": (16, 0)}
-POINT_LABEL = {"1130": "11:30", "1430": "14:30", "1600": "16:00"}
+# NY 时点（小时, 分钟）
+# [2026-09-26 东哥拍板] 新增 0230 = 东京 TSE 收盘（15:30 JST = 06:30 UTC = 02:30 EDT），
+# 供 501018 日本腿（1671/1699）做 Model B 分母；其余三点仍是原口径，不动。
+# ⚠️ 两个已知边界（有意不修，理由见 docs/013_4a §6.25.9）：
+#   ① EST 冬令时：东京 15:30 JST 恒为 06:30 UTC，而本表按 ET 定点 ⇒ 冬令时实际落在
+#      01:30 EST（即采到东京收盘后 1h 的价）。残留量级 < 0.3%，且消费端只影响日本腿，
+#      故接受；若要严格对齐应把该条 OnCalendar 改走 UTC（会引入 point 标签语义不一致）。
+#   ② 交易日守卫：0230 复用 is_trading_day（美股假日表），周一恰逢美股假日当天会被跳过
+#      ⇒ 该日无 0230，消费端逐腿退 1600（等价改动前行为，无副作用；影响约 4 天/年）。
+POINTS = {"0230": (2, 30), "1130": (11, 30), "1430": (14, 30), "1600": (16, 0)}
+POINT_LABEL = {"0230": "02:30", "1130": "11:30", "1430": "14:30", "1600": "16:00"}
 
 # 有效近月 +1 两合约（YYMM），动态计算。
 # 规则：有效近月 = 当月 + 2（USO 在每月初 5-8 个工作日滚仓，中下旬实际持有次次月）。
@@ -119,7 +133,9 @@ def symbol_of(contract: str) -> str:
 # [2026-09-17] 采样成功 → 电报(Telegram)通知（复用 ARM 上 Hermes 的 hermes send）
 # 东哥已停微信 bot，通道统一走 Telegram（@dongge_inspect_bot，无主动消息频率限制）。
 HERMES_BIN = "/home/ubuntu/.local/bin/hermes"
-NOTIFY_TARGET = "telegram:8014502417"  # @dongge_inspect_bot
+# 账号标识一律走环境变量（本文件进公开仓库，禁止硬编码）。
+# ARM 运行时由 systemd unit 的 Environment=HERMES_NOTIFY_TARGET 提供，形如 telegram:<chat_id>
+NOTIFY_TARGET = os.environ.get("HERMES_NOTIFY_TARGET", "")
 
 # 2026 美股休市日（ equity holidays，作为采样守卫；期货略有差异但不影响快照语义）
 US_HOLIDAYS_2026 = {
@@ -294,6 +310,9 @@ def notify_telegram(trade_date: str, point: str, prices: dict[str, float]) -> No
         bj = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M:%S")
         parts = " ".join(f"{c}={prices[c]:.3f}" for c in sorted(prices))
         msg = f"{bj} 采样 {trade_date} point={point} {parts} → 落库成功 ✅"
+    if not NOTIFY_TARGET:
+        log.warning("未配置 HERMES_NOTIFY_TARGET，跳过 Telegram 通知（不影响落库）")
+        return
     env = dict(os.environ)
     env.setdefault("HOME", "/home/ubuntu")
     # Telegram 通道无主动消息频率限制；失败即等 60s 重试，最多 3 次；通知失败绝不影响采样主流程。
@@ -318,7 +337,7 @@ def notify_telegram(trade_date: str, point: str, prices: dict[str, float]) -> No
 
 # ---------- 主流程 ----------
 def main() -> int:
-    ap = argparse.ArgumentParser(description="CL 合约月三时点冻结采样器（有效近月±1 三合约）")
+    ap = argparse.ArgumentParser(description="CL 合约月多时点冻结采样器（02:30/11:30/14:30/16:00 ET，有效近月±1 三合约）")
     ap.add_argument("--point", choices=list(POINTS.keys()),
                     help="手动指定时点(测试用)，不指定则按当前 NY 时间自动判定")
     ap.add_argument("--db", default=DEFAULT_DB, help="目标 sqlite 路径")

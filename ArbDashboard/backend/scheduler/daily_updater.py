@@ -19,6 +19,10 @@ from arbcore.fetchers.historical import HistoricalDataManager
 from arbcore.fetchers.woody_web_crawler import WoodyWebCrawler
 from arbcore.fetchers.woody_api_service import WoodyAPIService
 from arbcore.calculators.static_valuation import StaticValuationCalculator
+# [AI-2026-09-28 东哥点名] A股交易日历（含中国法定假日，chinese_calendar + _HOLIDAYS_2026 兜底）。
+# 原 step4 内两处「上一交易日」只跳周末 ⇒ 9-25(中秋) 被当成交易日，预期净值日长期落后、
+# 每次跑都白抓一次东财（当日日志 501018 出现 498 次即此）；收盘价齐全判定同病。
+from arbcore.utils.market_calendar import is_trading_day
 # [AI-2026-08-16] 修复: account_private 为本地密钥文件(被 gitignore, 可能不存在),
 # WOODY/VPS 凭据缺失时必须容错(与项目其他模块一致), 否则后端 import 阶段直接崩溃起不来
 try:
@@ -795,9 +799,12 @@ class DailyUpdater(BaseApp):
         # [AI-2026-08-03] 无日K线基金跳过名单（持久化）：腾讯/新浪均无日K线的基金（债券/封闭LOF）
         # 首次探测到即写入 arbcore/config/no_kline_funds.json，后续启动直接跳过，不再刷 WARNING。
         no_kline = _load_no_kline_denylist()
+        # [AI-2026-09-28 东哥点名修复] 同 step4 净值预期日：原实现只跳周末 ⇒ 9-25(中秋)
+        # 被当成交易日，盘前（<15:10）会误判「近期收盘价未齐全」而重复爬腾讯日K线整轮
+        # 全量基金。改走 A股交易日历；周末补班日 A股不交易，本就该跳过。
         def _prev_trading_day(d):
             t = d - timedelta(days=1)
-            while t.weekday() >= 5:
+            while not is_trading_day('A_SHARE', t):
                 t -= timedelta(days=1)
             return t
 
@@ -935,9 +942,16 @@ class DailyUpdater(BaseApp):
         for code in all_codes:
             if not code: continue
             # 获取东财净值 ---
+            # [AI-2026-09-28 东哥点名修复] 原实现只跳周末、不认中国法定假日 ⇒ 9-25(中秋)
+            # 被当成交易日，expected_nav_date 落在「根本不存在的净值日」上 ⇒ 每次都判
+            # "落后于预期"、每次白抓一次东财（9-28 日志 501018 出现 498 次即此）。
+            # 改走 A股交易日历 is_trading_day('A_SHARE')（chinese_calendar 1.11 已能正确
+            # 判 2026-09-25 为假日；缺失时退 _HOLIDAYS_2026 硬编码）。保持原结构不变：
+            # 先退 n 个自然日，再回溯到最近一个交易日（周一 n=2 折叠到周五的既有语义保留）。
             def get_prev_trading_day(dt, n=1):
-                t = dt - timedelta(days=n)
-                while t.weekday() >= 5: t -= timedelta(days=1)
+                t = dt.date() - timedelta(days=n)
+                while not is_trading_day('A_SHARE', t):
+                    t -= timedelta(days=1)
                 return t
                 
             t_1_date = get_prev_trading_day(datetime.now())
@@ -996,8 +1010,15 @@ class DailyUpdater(BaseApp):
         数据链路: 东京VPS每日06:30爬东财→/root/ArbSiphon/data/purchase_status.json
         → 本步用 account_private.VPS_* 密钥 paramiko 拉回→导入本地 fund_purchase_status。
         失败仅告警(非致命), 次日重试; 与"本地黄金源→推ARM"架构一致(本地不再自爬)。
+
+        ⚠️ 易混点（2026-09-29 标注）：本步骤采的是**申赎状态**（暂停申购/赎回/限额等，
+        fund_purchase_status 表），**与步骤九的"场内份额(shares)"是两码事**：
+        - 步骤九（份额）：原东京VPS shares_*.json 通道自 09-22 起半死，已于 2026-09-28
+          改为**交易所直采**(复用 ETFarb core/share_direct_fetcher)，不再读 VPS。
+        - 本步骤（申赎状态）：走 VPS 另一个文件 purchase_status.json，通道健康、无
+          交易所直采替代源，故**保留 VPS 拉取**，不要因步骤九改直采而误删本步骤。
         """
-        self.logger.info("=== 步骤4.5：从东京VPS拉取基金申购赎回状态 ===")
+        self.logger.info("=== 步骤4.5：基金申赎状态同步（东京VPS；注意：与步骤九场内份额直采是两码事）===")
         try:
             import subprocess, sys, os
             from arbcore.config import account_private as ap
@@ -1494,49 +1515,88 @@ class DailyUpdater(BaseApp):
             self.logger.error("❌ [本地备用源] 获取期货数据失败。")
 
     def step9_fetch_jsl_shares_from_vps(self):
-        """步骤九：从VPS同步场内份额数据（含深交所+上交所）"""
-        self.logger.info("=== 步骤九：从VPS同步场内份额数据 ===")
+        """步骤九：场内份额采集（**交易所直采**，2026-09-28 起；不再读东京 VPS）。
+
+        背景：原实现从东京 VPS 拉 `shares_*.json` 入库；VPS 份额通道自 09-22 起半死
+        （ETF 0 只、LOF 停 09-18），且其源本就是「交易所官方 + 东财派生」。
+        现改为**复用 ETFarb 的份额直采模块**（`core/share_direct_fetcher.collect`），
+        单一真源、不再维护 arbTest 本地副本：
+          · 深 LOF 16xxxx / 深 ETF 159xxx → 深交所官方 scsj_fund_jjgm（带日期窗）
+          · 沪 LOF 501/502/506            → 上交所官方 LOFGMTJ（逐日全量）
+          · 沪 ETF 51/52/56/58            → 腾讯 qt.gtimg.cn 派生（交易所不公布）
+        采集范围 = `lof_config.yaml` 的 `funds[].code`。
+        """
+        self.logger.info("=== 步骤九：场内份额采集（交易所直采）===")
         today_str = datetime.now().strftime('%Y-%m-%d')
 
-        # [AI-2026-08-06] 防刷检查：今日已从 VPS 同步过则跳过，避免每次启动重复拉取 VPS
-        # 注意：原检查源 'jsl_shares_data' 因标记逻辑缺陷从未被成功写入，改用可靠标记的 'shares_vps_sync'
-        if self.db.is_access_synced_today(today_str, source='shares_vps_sync'):
-            self.logger.info("✅ 今日份额数据已同步(VPS)，跳过 VPS 拉取")
+        # 防刷：今日已直采过则跳过（避免每次启动重复抓交易所）
+        if self.db.is_access_synced_today(today_str, source='shares_direct_sync'):
+            self.logger.info("✅ 今日份额已直采，跳过")
             return
 
-        vps_shares_data = self._try_sync_all_from_vps('shares')
-        processed_count = 0
-        skipped_count = 0
-        
-        if vps_shares_data:
-            self.logger.info(f"🔄 [VPS] 发现 {len(vps_shares_data)} 份份额数据文件，正在逐日检查...")
-            for item in vps_shares_data:
-                file_date = item['date']
-                content = item['content']
-                
-                # 总是处理每个文件（save_unified_history 使用 UPSERT，安全幂等）
-                # 即使 DB 已有部分数据，VPS 文件可能包含更多基金（如扩展 symbols 后）
-                try:
-                    count = 0
-                    for fund_code_raw, shares in content.items():
-                        if shares is not None:
-                            # 去掉 sh/sz 前缀，保持 fund_code 统一的 6 位数字格式
-                            clean_code = fund_code_raw.lower().replace('sh', '').replace('sz', '')
-                            self.db.save_unified_history(date_str=file_date, fund_code=clean_code, shares=shares)
-                            count += 1
-                    
-                    self.logger.info(f"   ✅ [VPS] 入库份额数据: {file_date} ({count} 个品种)")
-                    processed_count += 1
-                except Exception as e:
-                    self.logger.error(f"   ❌ [VPS] 解析日期 {file_date} 份额数据时出错: {e}")
+        try:
+            S = self._import_share_fetcher()
+        except Exception as e:
+            self.logger.error(f"❌ [份额] 直采模块导入失败: {e}")
+            return
 
-            self.logger.info(f"✅ [VPS] 份额同步完成: 处理 {processed_count} 天, 跳过 {skipped_count} 天")
-            
-            # 标记今日已同步（防止其他入口重复触发）
-            if any(item['date'] >= today_str for item in vps_shares_data):
-                self.db.mark_access_synced(today_str, source='jsl_shares_data')
-        else:
-            self.logger.warning("⚠️ [VPS] 未获取到份额数据 (可能VPS采集失败或网络问题)")
+        codes = self._share_codes()
+        if not codes:
+            self.logger.warning("⚠️ [份额] 未取到标的清单，跳过")
+            return
+
+        try:
+            rows, failed = S.collect(codes, days=30, logger=self.logger)
+        except Exception as e:
+            self.logger.error(f"❌ [份额] 直采异常: {e}")
+            return
+
+        # 落库：unified_fund_history(date, fund_code, shares) —— UPSERT，只写 shares 列
+        ok = 0
+        for code, date_iso, shares, src in rows:
+            try:
+                self.db.save_unified_history(date_str=date_iso, fund_code=code, shares=shares)
+                ok += 1
+            except Exception as e:
+                self.logger.error(f"   ❌ [份额] 入库 {code} {date_iso} 失败: {e}")
+
+        self.logger.info(f"✅ [份额] 直采完成: 入库 {ok} 行 / 抓取 {len(rows)} 行，失败 {len(failed)} 条")
+        if failed[:5]:
+            self.logger.warning(f"   ⚠️ [份额] 失败样本: {failed[:5]}")
+        self.db.mark_access_synced(today_str, source='shares_direct_sync')
+
+    def _share_codes(self):
+        """份额采集标的清单：`lof_config.yaml` 的 `funds[].code`。"""
+        config_path = getattr(self, 'config_path', None)
+        if not config_path or not os.path.exists(config_path):
+            fallback = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))))),
+                "arbcore", "config", "lof_config.yaml")
+            config_path = fallback if os.path.exists(fallback) else None
+        if not config_path:
+            return []
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                cfg = yaml.safe_load(f)
+            return [str(x.get('code')).strip() for x in cfg.get('funds', []) if x.get('code')]
+        except Exception as e:
+            self.logger.error(f"❌ [份额] 读取 lof_config.yaml 失败: {e}")
+            return []
+
+    @staticmethod
+    def _import_share_fetcher():
+        """复用 ETFarb 的份额直采模块（单一真源，避免两份代码漂移）。
+    
+        候选路径：本机 `D:\\Study\\ETFarb\\core` / ARM `/home/ubuntu/etfarb/core`。
+        找到即注入 sys.path 并 import `share_direct_fetcher`（含 `collect()`）。
+        """
+        candidates = [r"D:\Study\ETFarb\core", "/home/ubuntu/etfarb/core"]
+        for d in candidates:
+            if os.path.isdir(d) and d not in sys.path:
+                sys.path.insert(0, d)
+        import share_direct_fetcher as S
+        return S
 
     def _step10_calculate_static_valuation(self):
         """步骤十：基于同步后的因子数据，计算所有基金的静态估值 (static_val)"""
