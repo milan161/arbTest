@@ -1338,17 +1338,22 @@ async def get_fund_holding_recalc(code: str, period: str = "2026H1", start: str 
 
 
 @app.get("/api/fund/{code}/holding-recalc-detail")
-async def get_fund_holding_recalc_detail(code: str, period: str = "2026H1", start: str = "2026-07-01"):
+def get_fund_holding_recalc_detail(code: str, period: str = "2026H1", start: str = "2026-07-01"):
     """[AI-2026-09-23 B方案] 持仓静态估值全量诊断（含 etf_prices/fill_warning/note）。
 
     本机运行→SSH 代理 ARM 现算（该端点只读、无写，符合"不新增公网写接口"红线）；
     ARM 运行→本地现算。仅供持仓静态估值弹窗按需展开诊断，不在页面加载时调用。
     """
     try:
+        # [AI-2026-09-30] 同步 `def` 端点 → FastAPI 自动丢线程池。本机分支 _arm_api_via_ssh 是同步
+        # ssh 子进程（默认 60s 超时），ARM 分支 get_recalc_history 是本地现算（读冻结价+算全期）。
+        # 写成 async 会焊死单 worker 事件循环 —— 与 /sync-oil-static 同款事故（客户端 30s 超时 → Network Error）。
         if _is_arm():
             data = holding_service.get_recalc_history(code, period, start)
             return {"status": "ok", "data": data}
-        return _arm_api_via_ssh("GET", f"/api/fund/{code}/holding-recalc-detail", query={"period": period, "start": start})
+        return _arm_api_via_ssh(
+            "GET", f"/api/fund/{code}/holding-recalc-detail",
+            query={"period": period, "start": start})
     except Exception as e:
         logger.error(f"holding-recalc-detail 失败: {e}")
         return {"status": "error", "message": str(e)}
@@ -1379,8 +1384,11 @@ async def sync_oil_static_api(code: str):
 # 见 docs/013_2 与 usa_etf_history_sampler.py。
 
 @app.get("/api/fund/{code}/holding-realtime")
-async def get_fund_holding_realtime(code: str):
+def get_fund_holding_realtime(code: str):
     """基金季报持仓分析：持仓实时估值（Model B，季报持仓法 + CL 期货实时价）。
+
+    [AI-2026-09-30] 刻意用同步 `def`：get_realtime_valuation 内部同步 urlopen 抓 CL 实时价
+    （timeout=8 × 最多 3 次重试），写成 async 会焊死单 worker 事件循环 → 交给 FastAPI 丢线程池。
 
     分母读本地 futures_freeze_prices（需先经 /api/fund/sync-freeze 从 ARM 拉取）；
     分子现抓 CL(WTI) 实时价。分母缺失返回 error/freeze_incomplete，不兜底。
@@ -1502,45 +1510,63 @@ def _fund_hedge_plan(fund_code: str) -> dict | None:
         return None
 
 
-@app.get("/api/oil_rt")
-async def get_oil_rt():
-    """H5 原油实时估值页（手机被动看板）：循环三只原油基金，ARM 自算，无定时任务。"""
-    try:
-        funds = []
-        overall_ok = True
-        names = _oil_fund_names(OIL_RT_FUNDS)  # [AI-2026-09-24] 名称读 DB 权威表
-        for code in OIL_RT_FUNDS:
-            try:
-                d = holding_service.get_realtime_valuation(code)
-                if d.get("status") == "ok":
-                    contracts = _simplify_oil_contracts(d.get("contracts", {}))
-                    hedge_plan = _fund_hedge_plan(code)
-                    simplified = {
-                        "fund_code": code,
-                        "fund_name": names.get(code) or code,
-                        "base_date": d.get("base_date"),
-                        "base_nav": d.get("base_nav"),
-                        "selected_contract": d.get("selected_contract"),
-                        "active_contracts": d.get("active_contracts"),
-                        "hedge_plan": hedge_plan,
-                        "mixed_valuation": _oil_mixed_valuation(contracts, hedge_plan),
-                        "status": "ok",
-                        "contracts": contracts,
-                    }
-                else:
-                    overall_ok = False
-                    simplified = {
-                        "fund_code": code, "fund_name": names.get(code) or code,
-                        "status": "error", "code": d.get("code"), "message": d.get("message"),
-                        "contracts": {},
-                    }
-                funds.append(simplified)
-            except Exception as e:
+def _collect_oil_rt_funds():
+    """[同步·阻塞] 逐只原油基金算 Model B，组装 H5 页精简结构；返回 (funds, overall_ok)。
+
+    ⚠️ 只允许被**同步 def** 端点 /api/oil_rt 调用：get_realtime_valuation 内部是**同步**
+    urlopen 抓 CL 实时价（timeout=8 × 最多 3 次重试 + 退避 0.9s ⇒ 单合约最坏 24.9s；
+    compute_contracts = WTI 近月±1 + Brent 书月份，最坏 4 个合约 ⇒ 单基金最坏 ≈100s，
+    三基金串行最坏 ≈300s）。若改回 async def 直接调用，这段阻塞会压在单 worker 事件循环上，
+    期间**所有接口全部无响应**（9-30 实测：主看板轮询 + 持仓静态估值全部排队，watchdog
+    卡顿 91→151→211s 单调递增直至死锁）。FastAPI 对非 async 端点自动丢线程池 ⇒ 一行治好。
+    """
+    names = _oil_fund_names(OIL_RT_FUNDS)  # [AI-2026-09-24] 名称读 DB 权威表
+    funds = []
+    overall_ok = True
+    for code in OIL_RT_FUNDS:
+        try:
+            d = holding_service.get_realtime_valuation(code)
+            if d.get("status") == "ok":
+                contracts = _simplify_oil_contracts(d.get("contracts", {}))
+                hedge_plan = _fund_hedge_plan(code)
+                simplified = {
+                    "fund_code": code,
+                    "fund_name": names.get(code) or code,
+                    "base_date": d.get("base_date"),
+                    "base_nav": d.get("base_nav"),
+                    "selected_contract": d.get("selected_contract"),
+                    "active_contracts": d.get("active_contracts"),
+                    "hedge_plan": hedge_plan,
+                    "mixed_valuation": _oil_mixed_valuation(contracts, hedge_plan),
+                    "status": "ok",
+                    "contracts": contracts,
+                }
+            else:
                 overall_ok = False
-                funds.append({
+                simplified = {
                     "fund_code": code, "fund_name": names.get(code) or code,
-                    "status": "error", "message": str(e)[:200], "contracts": {},
-                })
+                    "status": "error", "code": d.get("code"), "message": d.get("message"),
+                    "contracts": {},
+                }
+            funds.append(simplified)
+        except Exception as e:
+            overall_ok = False
+            funds.append({
+                "fund_code": code, "fund_name": names.get(code) or code,
+                "status": "error", "message": str(e)[:200], "contracts": {},
+            })
+    return funds, overall_ok
+
+
+@app.get("/api/oil_rt")
+def get_oil_rt():
+    """H5 原油实时估值页（手机被动看板）：循环三只原油基金，ARM 自算，无定时任务。
+
+    [AI-2026-09-30] 刻意声明为同步 `def`（**不是** `async def`）：让 FastAPI 把这段同步阻塞
+    流程丢进线程池执行。写成 async 会焊死单 worker 事件循环（根因见 _collect_oil_rt_funds 注释）。
+    """
+    try:
+        funds, overall_ok = _collect_oil_rt_funds()
         return {
             "status": "ok" if overall_ok else "partial",
             "data": {
@@ -3900,8 +3926,12 @@ H5WEB_DIR = os.path.join(arbcore_parent, "deploy", "H5web")
 
 
 @app.get("/api/tokyo/status")
-async def tokyo_status():
-    """东京 H5 当前对外提供的数据是什么、什么时候生成的、新不新鲜。"""
+def tokyo_status():
+    """东京 H5 当前对外提供的数据是什么、什么时候生成的、新不新鲜。
+
+    [AI-2026-09-30] 同步 `def`：_tokyo_fetch(fetch_tokyo_json, timeout=20s) 本函数调 2 次
+    （最坏 40s），写 async 会焊死单 worker 事件循环 → 交给 FastAPI 丢线程池。
+    """
     out = {
         "status": "ok",
         "tokyo_base": TOKYO_BASE,
@@ -3944,8 +3974,10 @@ async def tokyo_status():
 
 
 @app.get("/api/tokyo/diff")
-async def tokyo_diff(tol: float = 0.5):
+def tokyo_diff(tol: float = 0.5):
     """东京当前数据 vs 本机现算估值，逐只比对。
+
+    [AI-2026-09-30] 同步 `def`：_tokyo_fetch 为同步 HTTP（timeout=20s），同 /api/tokyo/status。
 
     tol: 静态估值相对偏差阈值(%)，超过则标记 deviate。
     """
